@@ -7,14 +7,17 @@ description: Convert files and URLs to Markdown. Supports PDF, DOCX, PPTX, XLSX,
 
 Convert anything to Markdown.
 
-## Usage
+## CLI
 
 ```bash
 # Convert a file
 npx markit-ai report.pdf -q
 
 # Convert a URL
-npx markit-ai https://example.com -q
+npx markit-ai https://en.wikipedia.org/wiki/Markdown -q
+
+# Write to file
+npx markit-ai document.docx -q -o output.md
 
 # See all options
 npx markit-ai --help
@@ -23,4 +26,15 @@ npx markit-ai --help
 npx markit-ai formats
 ```
 
-The `-q` flag gives raw markdown without decoration. Use `--json` for `{ markdown, title }` output.
+`-q` gives raw markdown. `--json` gives `{ markdown, title }`.
+
+## SDK
+
+```typescript
+import { Markit } from "markit-ai";
+
+const markit = new Markit();
+const { markdown } = await markit.convertFile("report.pdf");
+const { markdown } = await markit.convertUrl("https://example.com");
+const { markdown } = await markit.convert(buffer, { extension: ".docx" });
+```
