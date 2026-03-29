@@ -33,6 +33,7 @@ export class EpubConverter implements Converter {
       ignoreAttributes: false,
       attributeNamePrefix: "@_",
       textNodeName: "#text",
+      processEntities: { maxTotalExpansions: 1_000_000 },
     });
 
     // Find content.opf path from container.xml

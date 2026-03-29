@@ -30,6 +30,7 @@ export class PptxConverter implements Converter {
       ignoreAttributes: false,
       attributeNamePrefix: "@_",
       textNodeName: "#text",
+      processEntities: { maxTotalExpansions: 1_000_000 },
     });
 
     // Get slide order from presentation.xml
