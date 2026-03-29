@@ -33,6 +33,11 @@ const BUILTIN_FORMATS: Format[] = [
     extensions: [".mp3", ".wav", ".m4a", ".flac"],
     builtin: true,
   },
+  {
+    name: "GitHub",
+    extensions: ["github.com/*", "gist.github.com/*"],
+    builtin: true,
+  },
   { name: "ZIP", extensions: [".zip"], builtin: true },
   {
     name: "Plain text",

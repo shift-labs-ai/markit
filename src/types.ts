@@ -32,6 +32,13 @@ export interface Converter {
   /** Quick check: can this converter handle the given stream? */
   accepts(streamInfo: StreamInfo): boolean;
 
+  /**
+   * Optional URL-first hook. When present, called before the default fetch
+   * so the converter can handle URL fetching itself (e.g. rewrite to a raw
+   * content URL or call an API).
+   */
+  convertUrl?(url: string, options?: MarkitOptions): Promise<ConversionResult>;
+
   /** Convert the source to markdown */
   convert(
     input: Buffer,

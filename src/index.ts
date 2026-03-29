@@ -3,6 +3,7 @@ export { AudioConverter } from "./converters/audio.js";
 export { CsvConverter } from "./converters/csv.js";
 export { DocxConverter } from "./converters/docx.js";
 export { EpubConverter } from "./converters/epub.js";
+export { GitHubConverter } from "./converters/github.js";
 export { HtmlConverter } from "./converters/html.js";
 export { ImageConverter } from "./converters/image.js";
 export { IpynbConverter } from "./converters/ipynb.js";

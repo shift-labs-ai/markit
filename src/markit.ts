@@ -4,6 +4,7 @@ import { AudioConverter } from "./converters/audio.js";
 import { CsvConverter } from "./converters/csv.js";
 import { DocxConverter } from "./converters/docx.js";
 import { EpubConverter } from "./converters/epub.js";
+import { GitHubConverter } from "./converters/github.js";
 import { HtmlConverter } from "./converters/html.js";
 import { ImageConverter } from "./converters/image.js";
 import { IpynbConverter } from "./converters/ipynb.js";
@@ -43,6 +44,7 @@ export class Markit {
       new XlsxConverter(),
       new EpubConverter(),
       new IpynbConverter(),
+      new GitHubConverter(),
       new WikipediaConverter(),
       new RssConverter(),
       new CsvConverter(),
@@ -85,6 +87,17 @@ export class Markit {
    * Convert a URL to markdown.
    */
   async convertUrl(url: string): Promise<ConversionResult> {
+    // Let converters with a URL-specific hook handle it first
+    const streamInfo: StreamInfo = { url };
+    for (const converter of this.converters) {
+      if (!converter.convertUrl || !converter.accepts(streamInfo)) continue;
+      try {
+        return await converter.convertUrl(url, this.options);
+      } catch {
+        // Fall through to default fetch path
+      }
+    }
+
     const response = await fetch(url, {
       headers: {
         Accept: "text/markdown, text/html;q=0.9, text/plain;q=0.8, */*;q=0.1",
@@ -106,14 +119,14 @@ export class Markit {
     const ext = extname(urlPath).toLowerCase();
 
     const buffer = Buffer.from(await response.arrayBuffer());
-    const streamInfo: StreamInfo = {
+    const fetchedInfo: StreamInfo = {
       url,
       mimetype: mimetype.trim(),
       extension: ext || undefined,
       filename: basename(urlPath) || undefined,
     };
 
-    return this.convert(buffer, streamInfo);
+    return this.convert(buffer, fetchedInfo);
   }
 
   /**
