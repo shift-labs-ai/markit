@@ -34,6 +34,21 @@ const BUILTIN_FORMATS: Format[] = [
     builtin: true,
   },
   {
+    name: "Pages",
+    extensions: [".pages"],
+    builtin: true,
+  },
+  {
+    name: "Keynote",
+    extensions: [".key"],
+    builtin: true,
+  },
+  {
+    name: "Numbers",
+    extensions: [".numbers"],
+    builtin: true,
+  },
+  {
     name: "GitHub",
     extensions: ["github.com/*", "gist.github.com/*"],
     builtin: true,

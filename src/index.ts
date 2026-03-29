@@ -7,6 +7,7 @@ export { GitHubConverter } from "./converters/github.js";
 export { HtmlConverter } from "./converters/html.js";
 export { ImageConverter } from "./converters/image.js";
 export { IpynbConverter } from "./converters/ipynb.js";
+export { IWorkConverter } from "./converters/iwork.js";
 export { JsonConverter } from "./converters/json.js";
 export { PdfConverter } from "./converters/pdf/index.js";
 export { PlainTextConverter } from "./converters/plain-text.js";

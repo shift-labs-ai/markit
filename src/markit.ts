@@ -8,6 +8,7 @@ import { GitHubConverter } from "./converters/github.js";
 import { HtmlConverter } from "./converters/html.js";
 import { ImageConverter } from "./converters/image.js";
 import { IpynbConverter } from "./converters/ipynb.js";
+import { IWorkConverter } from "./converters/iwork.js";
 import { JsonConverter } from "./converters/json.js";
 import { PdfConverter } from "./converters/pdf/index.js";
 import { PlainTextConverter } from "./converters/plain-text.js";
@@ -44,6 +45,7 @@ export class Markit {
       new XlsxConverter(),
       new EpubConverter(),
       new IpynbConverter(),
+      new IWorkConverter(),
       new GitHubConverter(),
       new WikipediaConverter(),
       new RssConverter(),
