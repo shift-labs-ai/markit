@@ -1,3 +1,5 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { XMLParser } from "fast-xml-parser";
 import JSZip from "jszip";
 import type { ConversionResult, Converter, StreamInfo } from "../types.js";
@@ -23,7 +25,7 @@ export class PptxConverter implements Converter {
 
   async convert(
     input: Buffer,
-    _streamInfo: StreamInfo,
+    streamInfo: StreamInfo,
   ): Promise<ConversionResult> {
     const zip = await JSZip.loadAsync(input);
     const parser = new XMLParser({
@@ -81,7 +83,13 @@ export class PptxConverter implements Converter {
       slidePaths.push(...slideFiles);
     }
 
+    const imageDir = streamInfo.imageDir;
+    if (imageDir) {
+      mkdirSync(imageDir, { recursive: true });
+    }
+
     const sections: string[] = [];
+    let imageCount = 0;
 
     for (let i = 0; i < slidePaths.length; i++) {
       const slideXml = await zip.file(slidePaths[i])?.async("string");
@@ -90,6 +98,18 @@ export class PptxConverter implements Converter {
       const slide = parser.parse(slideXml);
       const spTree = slide["p:sld"]?.["p:cSld"]?.["p:spTree"];
       if (!spTree) continue;
+
+      // Parse slide-level rels for image references
+      const slideRelsPath = `${slidePaths[i].replace("slides/slide", "slides/_rels/slide")}.rels`;
+      const slideRelsXml = await zip.file(slideRelsPath)?.async("string");
+      const slideRelMap = new Map<string, string>();
+      if (slideRelsXml) {
+        const slideRels = parser.parse(slideRelsXml);
+        const relItems = toList(slideRels?.Relationships?.Relationship);
+        for (const r of relItems) {
+          slideRelMap.set(r["@_Id"], r["@_Target"]);
+        }
+      }
 
       const slideLines: string[] = [`<!-- Slide ${i + 1} -->`];
       const shapes = spTree["p:sp"];
@@ -105,6 +125,55 @@ export class PptxConverter implements Converter {
           isTitle = false;
         } else {
           slideLines.push(text);
+        }
+      }
+
+      // Extract embedded images
+      const pics = toList(spTree["p:pic"]);
+      for (const pic of pics) {
+        const blipFill = pic["p:blipFill"];
+        const rEmbed = blipFill?.["a:blip"]?.["@_r:embed"];
+        if (!rEmbed) continue;
+
+        const target = slideRelMap.get(rEmbed);
+        if (!target) continue;
+
+        // Resolve relative target against slide directory
+        const imagePath = target.startsWith("/")
+          ? target.slice(1)
+          : `ppt/slides/${target}`;
+        // Normalize path (e.g. ppt/slides/../media/image1.png → ppt/media/image1.png)
+        const normalizedPath = imagePath
+          .split("/")
+          .reduce<string[]>((parts, seg) => {
+            if (seg === "..") parts.pop();
+            else parts.push(seg);
+            return parts;
+          }, [])
+          .join("/");
+
+        const imageFile = zip.file(normalizedPath);
+        if (!imageFile) continue;
+
+        imageCount++;
+        const name =
+          pic["p:nvSpPr"]?.["p:cNvPr"]?.["@_name"] ||
+          pic["p:nvPicPr"]?.["p:cNvPr"]?.["@_name"] ||
+          `image_${imageCount}`;
+
+        if (imageDir) {
+          try {
+            const ext = normalizedPath.split(".").pop() || "png";
+            const filename = `slide${i + 1}_${imageCount}.${ext}`;
+            const filepath = join(imageDir, filename);
+            const buf = await imageFile.async("nodebuffer");
+            writeFileSync(filepath, buf);
+            slideLines.push(`![${name}](${filepath})`);
+          } catch {
+            slideLines.push(`<!-- image: ${name} (slide ${i + 1}) -->`);
+          }
+        } else {
+          slideLines.push(`<!-- image: ${name} (slide ${i + 1}) -->`);
         }
       }
 
@@ -236,4 +305,9 @@ export class PptxConverter implements Converter {
     }
     return lines.join("\n");
   }
+}
+
+function toList(val: any): any[] {
+  if (!val) return [];
+  return Array.isArray(val) ? val : [val];
 }
