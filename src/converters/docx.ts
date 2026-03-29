@@ -36,7 +36,7 @@ export class DocxConverter implements Converter {
 
     let imageCount = 0;
 
-    const convertImage: mammoth.Options["convertImage"] = imageDir
+    const convertImage = imageDir
       ? mammoth.images.imgElement((image) => {
           imageCount++;
           const ext = (image.contentType?.split("/")[1] || "png").replace(
