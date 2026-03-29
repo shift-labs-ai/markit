@@ -73,12 +73,16 @@ export class Markit {
   /**
    * Convert a local file to markdown.
    */
-  async convertFile(path: string): Promise<ConversionResult> {
+  async convertFile(
+    path: string,
+    extra?: Partial<StreamInfo>,
+  ): Promise<ConversionResult> {
     const buffer = readFileSync(path);
     const streamInfo: StreamInfo = {
       localPath: path,
       extension: extname(path).toLowerCase(),
       filename: basename(path),
+      ...extra,
     };
     return this.convert(buffer, streamInfo);
   }

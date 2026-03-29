@@ -22,6 +22,7 @@ program
   .option("-q, --quiet", "Raw markdown only, no decoration")
   .option("-p, --prompt <text>", "Extra instructions for image description")
   .option("-o, --output <file>", "Write to file instead of stdout")
+  .option("-i, --image-dir <dir>", "Extract images to this directory")
   .addHelpText(
     "after",
     `
@@ -50,7 +51,8 @@ program
       json: globals.json,
       quiet: globals.quiet,
       output: opts.output,
-      prompt: opts.prompt,
+      prompt: globals.prompt,
+      imageDir: globals.imageDir,
     });
   });
 
@@ -170,6 +172,7 @@ program.on("command:*", async (args) => {
     quiet: globals.quiet,
     output: globals.output,
     prompt: globals.prompt,
+    imageDir: globals.imageDir,
   });
 });
 

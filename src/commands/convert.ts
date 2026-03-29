@@ -1,4 +1,6 @@
-import { writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { loadConfig } from "../config.js";
 import { Markit } from "../markit.js";
 import { loadAllPlugins } from "../plugins/loader.js";
@@ -17,7 +19,11 @@ async function readStdin(): Promise<Buffer> {
 
 export async function convert(
   source: string,
-  options: OutputOptions & { output?: string; prompt?: string },
+  options: OutputOptions & {
+    output?: string;
+    prompt?: string;
+    imageDir?: string;
+  },
 ): Promise<void> {
   const config = loadConfig();
   const plugins = await loadAllPlugins();
@@ -31,6 +37,10 @@ export async function convert(
 
   const llmFunctions = createLlmFunctions(config, options.prompt);
   const markit = new Markit(llmFunctions, plugins);
+
+  // Auto-create a temp dir for images if not explicitly provided
+  const imageDir =
+    options.imageDir || mkdtempSync(join(tmpdir(), "markit-images-"));
 
   try {
     let result;
@@ -47,7 +57,7 @@ export async function convert(
         process.exit(EXIT_ERROR);
       }
       const buffer = await readStdin();
-      result = await markit.convert(buffer, {});
+      result = await markit.convert(buffer, { imageDir });
     } else if (isUrl) {
       // Progress hint for URL fetches (stderr so it doesn't pollute piped output)
       if (!options.json && !options.quiet) {
@@ -55,7 +65,7 @@ export async function convert(
       }
       result = await markit.convertUrl(source);
     } else {
-      result = await markit.convertFile(source);
+      result = await markit.convertFile(source, { imageDir });
     }
 
     const label = isStdin ? "stdin" : source;
