@@ -79,10 +79,13 @@ export class IWorkConverter implements Converter {
       const imgName = name.split("/").pop() || `image_${imageCount}`;
 
       if (imageDir) {
-        const buf = await zip.file(name)?.async("nodebuffer");
-        const filepath = join(imageDir, imgName);
-        writeFileSync(filepath, buf);
-        lines.push(`![${imgName}](${filepath})`);
+        const file = zip.file(name);
+        if (file) {
+          const buf = await file.async("nodebuffer");
+          const filepath = join(imageDir, imgName);
+          writeFileSync(filepath, buf);
+          lines.push(`![${imgName}](${filepath})`);
+        }
       } else {
         lines.push(`<!-- image: ${imgName} -->`);
       }
@@ -143,10 +146,13 @@ export class IWorkConverter implements Converter {
       const imgName = name.split("/").pop() || `image_${imageCount}`;
 
       if (imageDir) {
-        const buf = await zip.file(name)?.async("nodebuffer");
-        const filepath = join(imageDir, imgName);
-        writeFileSync(filepath, buf);
-        sections.push(`![${imgName}](${filepath})`);
+        const file = zip.file(name);
+        if (file) {
+          const buf = await file.async("nodebuffer");
+          const filepath = join(imageDir, imgName);
+          writeFileSync(filepath, buf);
+          sections.push(`![${imgName}](${filepath})`);
+        }
       } else {
         sections.push(`<!-- image: ${imgName} -->`);
       }
