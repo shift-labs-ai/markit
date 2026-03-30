@@ -59,10 +59,16 @@ export function createTurndown(): TurndownService {
  * - Strip <p> tags inside <td>/<th> cells
  */
 export function normalizeTablesHtml(html: string): string {
-  // Strip <p> tags inside table cells
+  // Strip <p> tags inside table cells, joining multiple paragraphs with <br>
   let result = html.replace(
-    /<(td|th)([^>]*)>\s*<p>([\s\S]*?)<\/p>\s*<\/(td|th)>/gi,
-    "<$1$2>$3</$4>",
+    /<(td|th)([^>]*)>([\s\S]*?)<\/(td|th)>/gi,
+    (_match, tag, attrs, inner, closeTag) => {
+      const stripped = inner
+        .replace(/^\s*<p>/i, "")
+        .replace(/<\/p>\s*$/i, "")
+        .replace(/<\/p>\s*<p>/gi, " ");
+      return `<${tag}${attrs}>${stripped}</${closeTag}>`;
+    },
   );
 
   // Add thead to tables that lack it
