@@ -28,6 +28,7 @@ bun.lock
 
 # Benchmark artifacts
 benchmark/corpus/
+!benchmark/corpus/*.pdf
 benchmark/results/
 
 # Charts
