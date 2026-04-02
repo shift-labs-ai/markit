@@ -33,8 +33,7 @@ benchmark/results/
 # Charts
 .charts/
 
-# Test fixture binaries (downloaded PDFs, rendered pages)
-test/fixtures/pdfs/*.pdf
+# Test fixture rendered pages
 test/fixtures/pdfs/*-pages/
 test/fixtures/.DS_Store
 .pi/
