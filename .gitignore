@@ -28,13 +28,12 @@ bun.lock
 
 # Benchmark artifacts
 benchmark/corpus/
-!benchmark/corpus/*.pdf
 benchmark/results/
 
 # Charts
 .charts/
 
-# Test fixture rendered pages
-test/fixtures/pdfs/*-pages/
+# Test fixtures (downloaded on demand via test/download-fixtures.sh)
+test/fixtures/pdfs/
 test/fixtures/.DS_Store
 .pi/
