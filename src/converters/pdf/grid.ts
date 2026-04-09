@@ -334,6 +334,133 @@ function expandSubRowsByYClusters(
 }
 
 // ---------------------------------------------------------------------------
+// Cross-column text box splitting
+// ---------------------------------------------------------------------------
+
+/**
+ * Find which column a horizontal position falls into.
+ * Returns -1 if outside the grid.
+ */
+function findCol(x: number, xLines: number[]): number {
+  for (let i = 0; i < xLines.length - 1; i++) {
+    if (x >= xLines[i] && x <= xLines[i + 1]) return i;
+  }
+  return -1;
+}
+
+/**
+ * When a text box spans across one or more vertical column boundaries,
+ * split it into multiple virtual text boxes — one per column — with the
+ * text divided proportionally by width.
+ *
+ * We split at word boundaries closest to the proportional split point
+ * so we don't chop words in half.
+ */
+function splitCrossColumnBoxes(
+  textBoxes: TextBox[],
+  xLines: number[],
+): TextBox[] {
+  const result: TextBox[] = [];
+  const MARGIN = 5; // allow small overlap before considering it cross-column
+
+  for (const tb of textBoxes) {
+    const leftCol = findCol(tb.bounds.left + MARGIN, xLines);
+    const rightCol = findCol(tb.bounds.right - MARGIN, xLines);
+
+    // Not spanning columns, or outside grid — keep as-is
+    if (leftCol < 0 || rightCol < 0 || leftCol === rightCol) {
+      result.push(tb);
+      continue;
+    }
+
+    // Text box spans from leftCol to rightCol — split it
+    const totalWidth = tb.bounds.right - tb.bounds.left;
+    if (totalWidth <= 0) {
+      result.push(tb);
+      continue;
+    }
+
+    const words = tb.text.split(/\s+/);
+    if (words.length <= 1) {
+      // Single word spanning columns — just assign to whichever col has more overlap
+      result.push(tb);
+      continue;
+    }
+
+    // For each column boundary crossing, find the best word-boundary split
+    let remainingWords = [...words];
+    let currentLeft = tb.bounds.left;
+
+    for (let col = leftCol; col <= rightCol && remainingWords.length > 0; col++) {
+      const colRight = col < xLines.length - 1 ? xLines[col + 1] : tb.bounds.right;
+      const segmentRight = Math.min(colRight, tb.bounds.right);
+
+      if (col === rightCol) {
+        // Last column — take all remaining words
+        result.push({
+          ...tb,
+          id: `${tb.id}-split${col}`,
+          text: remainingWords.join(" "),
+          bounds: {
+            ...tb.bounds,
+            left: currentLeft,
+            right: tb.bounds.right,
+          },
+        });
+        remainingWords = [];
+      } else {
+        // Find how many words fit in this column segment proportionally
+        const segmentWidth = segmentRight - currentLeft;
+        const fractionOfTotal = segmentWidth / totalWidth;
+        const approxChars = Math.round(fractionOfTotal * tb.text.length);
+
+        // Walk words to find the split closest to the proportional point
+        let charCount = 0;
+        let splitIdx = 0;
+        for (let w = 0; w < remainingWords.length; w++) {
+          const nextCount = charCount + remainingWords[w].length + (w > 0 ? 1 : 0);
+          if (nextCount > approxChars && splitIdx > 0) break;
+          charCount = nextCount;
+          splitIdx = w + 1;
+        }
+
+        if (splitIdx === 0) splitIdx = 1; // take at least one word
+        if (splitIdx >= remainingWords.length) {
+          // All remaining words fit here
+          result.push({
+            ...tb,
+            id: `${tb.id}-split${col}`,
+            text: remainingWords.join(" "),
+            bounds: {
+              ...tb.bounds,
+              left: currentLeft,
+              right: segmentRight,
+            },
+          });
+          remainingWords = [];
+        } else {
+          const partWords = remainingWords.slice(0, splitIdx);
+          result.push({
+            ...tb,
+            id: `${tb.id}-split${col}`,
+            text: partWords.join(" "),
+            bounds: {
+              ...tb.bounds,
+              left: currentLeft,
+              right: segmentRight,
+            },
+          });
+          remainingWords = remainingWords.slice(splitIdx);
+          currentLeft = segmentRight;
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Full grid table (H + V lines)
 // ---------------------------------------------------------------------------
 
@@ -364,11 +491,30 @@ function buildTableGrid(
   const xMin = xLines[0];
   const xMax = xLines[xLines.length - 1];
 
-  // Look for header text boxes just above the grid
+  // Split text boxes that span multiple columns before placement
+  const splitBoxes = splitCrossColumnBoxes(textBoxes, xLines);
+
+  // Track which split piece IDs get placed in cells, so we can consume
+  // the original (unsplit) text box IDs too.
+  const placedSplitIds = new Set<string>();
+
+  // Look for header text boxes just above the grid.
+  // Use the ORIGINAL (unsplit) text boxes for header detection so that
+  // wide paragraph text isn't falsely split into column-sized header chunks.
+  // Reject boxes wider than 1.5 columns — those are paragraph text, not headers.
+  const avgColWidth = (xMax - xMin) / cols;
+  const maxHeaderBoxWidth = avgColWidth * 1.5;
   const headerBoxes = textBoxes.filter((tb) => {
     const cy = (tb.bounds.top + tb.bounds.bottom) / 2;
     const cx = (tb.bounds.left + tb.bounds.right) / 2;
-    return cy > yMax && cy <= yMax + 20 && cx >= xMin && cx <= xMax;
+    const boxWidth = tb.bounds.right - tb.bounds.left;
+    return (
+      cy > yMax &&
+      cy <= yMax + 20 &&
+      cx >= xMin &&
+      cx <= xMax &&
+      boxWidth <= maxHeaderBoxWidth
+    );
   });
 
   if (headerBoxes.length > 0) {
@@ -396,7 +542,7 @@ function buildTableGrid(
 
   const cellBoxes = new Map<TableCell, TextBox[]>();
 
-  for (const tb of textBoxes) {
+  for (const tb of splitBoxes) {
     const cx = (tb.bounds.left + tb.bounds.right) / 2;
     const cy = (tb.bounds.top + tb.bounds.bottom) / 2;
 
@@ -426,6 +572,7 @@ function buildTableGrid(
     if (!cellBoxes.has(cell)) cellBoxes.set(cell, []);
     cellBoxes.get(cell)?.push(tb);
     consumedIds.push(tb.id);
+    if (tb.id.includes("-split")) placedSplitIds.add(tb.id);
   }
 
   rows = expandSubRowsByYClusters(rows, cols, cells, cellBoxes);
@@ -459,6 +606,16 @@ function buildTableGrid(
     topY: yLines[0],
     isBorderless: false,
   });
+
+  // Also consume the original (unsplit) text box IDs when any of their
+  // split pieces were placed in a cell.
+  for (const splitId of placedSplitIds) {
+    const origId = splitId.replace(/-split\d+$/, "");
+    if (!consumedIds.includes(origId)) {
+      consumedIds.push(origId);
+    }
+  }
+
   return { grid, consumedIds };
 }
 

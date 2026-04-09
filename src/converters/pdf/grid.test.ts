@@ -359,3 +359,171 @@ describe("resolveTableGrids: decorative lines ignored", () => {
     expect(grids).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Cross-column text box splitting
+// ---------------------------------------------------------------------------
+
+describe("resolveTableGrids: cross-column splitting", () => {
+  // 3-column grid: x=100..200..300..400, y=500..450
+  const xLines = [100, 200, 300, 400];
+  const yLines = [500, 450];
+
+  function makeSegs() {
+    return tableSegs(xLines, yLines);
+  }
+
+  /** Text box with explicit left/right bounds (not centered). */
+  function wideBox(
+    text: string,
+    left: number,
+    right: number,
+    cy: number,
+  ): TextBox {
+    return {
+      id: `t${_tid++}`,
+      text,
+      pageNumber: 1,
+      fontSize: 9,
+      isBold: false,
+      bounds: { left, right, bottom: cy - 5, top: cy + 5 },
+    };
+  }
+
+  it("splits a text box spanning two columns into separate cells", () => {
+    // "Alpha Beta" spans col 0 (100-200) and col 1 (200-300)
+    const boxes = [
+      wideBox("Alpha Beta", 110, 290, 475),
+      tb("C", 350, 475), // col 2
+    ];
+    const { grids } = resolveTableGrids(1, boxes, makeSegs());
+    expect(grids).toHaveLength(1);
+    const g = grids[0];
+    const cell = (r: number, c: number) =>
+      g.cells.find((cl) => cl.row === r && cl.col === c)?.text ?? "";
+
+    // "Alpha" should land in col 0, "Beta" in col 1
+    expect(cell(0, 0)).toBe("Alpha");
+    expect(cell(0, 1)).toBe("Beta");
+    expect(cell(0, 2)).toBe("C");
+  });
+
+  it("splits a text box spanning three columns", () => {
+    // "Aaa Bbb Ccc" spans all 3 columns
+    const boxes = [wideBox("Aaa Bbb Ccc", 110, 390, 475)];
+    const { grids } = resolveTableGrids(1, boxes, makeSegs());
+    expect(grids).toHaveLength(1);
+    const g = grids[0];
+    const texts = g.cells
+      .filter((c) => c.text.trim().length > 0)
+      .map((c) => c.text);
+    // All three words should end up in separate cells
+    expect(texts).toHaveLength(3);
+  });
+
+  it("does not split a text box within one column", () => {
+    // "Hello World" fits entirely in col 0 (100-200)
+    const boxes = [
+      wideBox("Hello World", 110, 190, 475),
+      tb("X", 250, 475),
+      tb("Y", 350, 475),
+    ];
+    const { grids } = resolveTableGrids(1, boxes, makeSegs());
+    expect(grids).toHaveLength(1);
+    const g = grids[0];
+    const cell = (r: number, c: number) =>
+      g.cells.find((cl) => cl.row === r && cl.col === c)?.text ?? "";
+    expect(cell(0, 0)).toBe("Hello World");
+  });
+
+  it("keeps single-word boxes intact even if spanning columns", () => {
+    // One word spanning col 0 and col 1 — can't split, assign by center
+    const boxes = [
+      wideBox("Superlongword", 110, 290, 475),
+      tb("Z", 350, 475),
+    ];
+    const { grids } = resolveTableGrids(1, boxes, makeSegs());
+    expect(grids).toHaveLength(1);
+    // Should land in one cell, not be lost
+    const allText = grids[0].cells.map((c) => c.text).filter(Boolean);
+    expect(allText).toContain("Superlongword");
+  });
+
+  it("consumes original text box IDs when splitting", () => {
+    const box = wideBox("Alpha Beta", 110, 290, 475);
+    const originalId = box.id;
+    const { consumedIds } = resolveTableGrids(1, [box], makeSegs());
+    // The original ID must be consumed so it doesn't appear as free text
+    expect(consumedIds).toContain(originalId);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Header detection rejects wide paragraph text above grid
+// ---------------------------------------------------------------------------
+
+describe("resolveTableGrids: header detection", () => {
+  // 2-column grid: x=100..300..500, y=400..350
+  const xLines = [100, 300, 500];
+  const yLines = [400, 350];
+
+  function makeSegs() {
+    return tableSegs(xLines, yLines);
+  }
+
+  function wideBox(
+    text: string,
+    left: number,
+    right: number,
+    cy: number,
+  ): TextBox {
+    return {
+      id: `t${_tid++}`,
+      text,
+      pageNumber: 1,
+      fontSize: 9,
+      isBold: false,
+      bounds: { left, right, bottom: cy - 5, top: cy + 5 },
+    };
+  }
+
+  it("does not absorb wide paragraph text as a header row", () => {
+    // A long sentence sitting 15pt above the grid — wider than 1.5 columns
+    const paragraph = wideBox(
+      "include only the results for the tasks that have an unbounded score:",
+      100,
+      420,
+      412, // center Y = 412, yMax = 400, gap = 12pt (within 20pt threshold)
+    );
+    const boxes = [
+      paragraph,
+      tb("A", 200, 375),
+      tb("B", 400, 375),
+    ];
+    const { grids, consumedIds } = resolveTableGrids(1, boxes, makeSegs());
+    expect(grids).toHaveLength(1);
+    // The paragraph should NOT be consumed by the table
+    expect(consumedIds).not.toContain(paragraph.id);
+    // The grid should have 1 row, not 2
+    expect(grids[0].rows).toBe(1);
+  });
+
+  it("absorbs narrow column headers above the grid", () => {
+    // Two short labels sitting just above the grid, one per column
+    const h1 = wideBox("Name", 150, 250, 412);
+    const h2 = wideBox("Role", 350, 450, 412);
+    const boxes = [
+      h1,
+      h2,
+      tb("Alice", 200, 375),
+      tb("CEO", 400, 375),
+    ];
+    const { grids, consumedIds } = resolveTableGrids(1, boxes, makeSegs());
+    expect(grids).toHaveLength(1);
+    // Both headers should be consumed
+    expect(consumedIds).toContain(h1.id);
+    expect(consumedIds).toContain(h2.id);
+    // Grid should have 2 rows (header + data)
+    expect(grids[0].rows).toBe(2);
+  });
+});

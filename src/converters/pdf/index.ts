@@ -107,8 +107,34 @@ export class PdfConverter implements Converter {
         }
       }
 
-      // Detect column layout
+      // Detect column layout.
+      // If the page has vertical segments (tables), suppress column detection
+      // when one detected column is very narrow — that's a table's first column,
+      // not a page layout column.
       const layout = detectColumns(page.textBoxes);
+      if (
+        layout.columnCount > 1 &&
+        page.segments.some((s) => Math.abs(s.x1 - s.x2) <= 0.8)
+      ) {
+        const pageXMin = Math.min(
+          ...page.textBoxes.map((tb) => tb.bounds.left),
+        );
+        const pageXMax = Math.max(
+          ...page.textBoxes.map((tb) => tb.bounds.right),
+        );
+        const pageWidth = pageXMax - pageXMin;
+        const minColFraction = 0.3;
+        const tooNarrow = layout.columns.some((col) => {
+          const colXMin = Math.min(...col.map((tb) => tb.bounds.left));
+          const colXMax = Math.max(...col.map((tb) => tb.bounds.right));
+          return (colXMax - colXMin) / pageWidth < minColFraction;
+        });
+        if (tooNarrow) {
+          layout.columnCount = 1;
+          layout.columns = [page.textBoxes];
+          layout.boundaries = [];
+        }
+      }
 
       if (layout.columnCount === 1) {
         // Single column — process normally
