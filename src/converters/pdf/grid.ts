@@ -391,8 +391,13 @@ function splitCrossColumnBoxes(
     let remainingWords = [...words];
     let currentLeft = tb.bounds.left;
 
-    for (let col = leftCol; col <= rightCol && remainingWords.length > 0; col++) {
-      const colRight = col < xLines.length - 1 ? xLines[col + 1] : tb.bounds.right;
+    for (
+      let col = leftCol;
+      col <= rightCol && remainingWords.length > 0;
+      col++
+    ) {
+      const colRight =
+        col < xLines.length - 1 ? xLines[col + 1] : tb.bounds.right;
       const segmentRight = Math.min(colRight, tb.bounds.right);
 
       if (col === rightCol) {
@@ -418,7 +423,8 @@ function splitCrossColumnBoxes(
         let charCount = 0;
         let splitIdx = 0;
         for (let w = 0; w < remainingWords.length; w++) {
-          const nextCount = charCount + remainingWords[w].length + (w > 0 ? 1 : 0);
+          const nextCount =
+            charCount + remainingWords[w].length + (w > 0 ? 1 : 0);
           if (nextCount > approxChars && splitIdx > 0) break;
           charCount = nextCount;
           splitIdx = w + 1;

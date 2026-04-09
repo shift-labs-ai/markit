@@ -438,10 +438,7 @@ describe("resolveTableGrids: cross-column splitting", () => {
 
   it("keeps single-word boxes intact even if spanning columns", () => {
     // One word spanning col 0 and col 1 — can't split, assign by center
-    const boxes = [
-      wideBox("Superlongword", 110, 290, 475),
-      tb("Z", 350, 475),
-    ];
+    const boxes = [wideBox("Superlongword", 110, 290, 475), tb("Z", 350, 475)];
     const { grids } = resolveTableGrids(1, boxes, makeSegs());
     expect(grids).toHaveLength(1);
     // Should land in one cell, not be lost
@@ -495,11 +492,7 @@ describe("resolveTableGrids: header detection", () => {
       420,
       412, // center Y = 412, yMax = 400, gap = 12pt (within 20pt threshold)
     );
-    const boxes = [
-      paragraph,
-      tb("A", 200, 375),
-      tb("B", 400, 375),
-    ];
+    const boxes = [paragraph, tb("A", 200, 375), tb("B", 400, 375)];
     const { grids, consumedIds } = resolveTableGrids(1, boxes, makeSegs());
     expect(grids).toHaveLength(1);
     // The paragraph should NOT be consumed by the table
@@ -512,12 +505,7 @@ describe("resolveTableGrids: header detection", () => {
     // Two short labels sitting just above the grid, one per column
     const h1 = wideBox("Name", 150, 250, 412);
     const h2 = wideBox("Role", 350, 450, 412);
-    const boxes = [
-      h1,
-      h2,
-      tb("Alice", 200, 375),
-      tb("CEO", 400, 375),
-    ];
+    const boxes = [h1, h2, tb("Alice", 200, 375), tb("CEO", 400, 375)];
     const { grids, consumedIds } = resolveTableGrids(1, boxes, makeSegs());
     expect(grids).toHaveLength(1);
     // Both headers should be consumed
