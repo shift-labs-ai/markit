@@ -27,6 +27,8 @@ import type {
   StreamInfo,
 } from "./types.js";
 
+const USER_AGENT = "markit/0.1.0";
+
 export class Markit {
   private converters: Converter[] = [];
   private options: MarkitOptions;
@@ -107,7 +109,7 @@ export class Markit {
     const response = await fetch(url, {
       headers: {
         Accept: "text/markdown, text/html;q=0.9, text/plain;q=0.8, */*;q=0.1",
-        "User-Agent": "mill/0.1.0",
+        "User-Agent": USER_AGENT,
       },
     });
 
@@ -118,21 +120,74 @@ export class Markit {
     }
 
     const contentType = response.headers.get("content-type") || "";
-    const [mimetype] = contentType.split(";");
-
-    // Derive extension from URL path
+    const mimetype = contentType.split(";")[0].trim();
     const urlPath = new URL(url).pathname;
     const ext = extname(urlPath).toLowerCase();
 
+    // Content negotiation worked — server returned markdown directly
+    if (mimetype === "text/markdown") {
+      const buffer = Buffer.from(await response.arrayBuffer());
+      return this.convert(buffer, {
+        url,
+        mimetype: "text/markdown",
+        extension: ".md",
+        filename: basename(urlPath) || undefined,
+      });
+    }
+
     const buffer = Buffer.from(await response.arrayBuffer());
-    const fetchedInfo: StreamInfo = {
+
+    // For HTML responses, try to discover a raw markdown source.
+    // Patterns: <link rel="alternate">, VitePress .md files, llms.txt convention.
+    if (mimetype === "text/html") {
+      const result = await this.tryMarkdownSource(buffer, url, ext);
+      if (result) return result;
+    }
+
+    return this.convert(buffer, {
       url,
-      mimetype: mimetype.trim(),
+      mimetype,
       extension: ext || undefined,
       filename: basename(urlPath) || undefined,
-    };
+    });
+  }
 
-    return this.convert(buffer, fetchedInfo);
+  /**
+   * Inspect an HTML response for a discoverable markdown source URL.
+   * If found, fetch and convert the raw markdown instead.
+   */
+  private async tryMarkdownSource(
+    htmlBuffer: Buffer,
+    url: string,
+    ext: string,
+  ): Promise<ConversionResult | null> {
+    const html = htmlBuffer.toString(
+      "utf-8",
+      0,
+      Math.min(htmlBuffer.length, 50_000),
+    );
+    const mdSourceUrl = discoverMarkdownSource(html, url, ext);
+    if (!mdSourceUrl) return null;
+
+    try {
+      const response = await fetch(mdSourceUrl, {
+        headers: { "User-Agent": USER_AGENT },
+      });
+      if (!response.ok) return null;
+
+      const ct = (response.headers.get("content-type") || "").split(";")[0].trim();
+      if (!ct.includes("markdown") && !ct.includes("text/plain")) return null;
+
+      const mdBuffer = Buffer.from(await response.arrayBuffer());
+      return this.convert(mdBuffer, {
+        url: mdSourceUrl,
+        mimetype: "text/markdown",
+        extension: ".md",
+        filename: basename(new URL(mdSourceUrl).pathname),
+      });
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -168,4 +223,50 @@ export class Markit {
       `Unsupported format: ${streamInfo.extension || streamInfo.mimetype || "unknown"}`,
     );
   }
+}
+
+/**
+ * Try to discover a raw markdown source URL from an HTML response.
+ * Checks multiple patterns:
+ *   1. <link rel="alternate" type="text/markdown" href="..."> tag
+ *   2. VitePress markers → append .md to the URL
+ *   3. llms.txt convention → try url.md or url.html.md
+ *
+ * @internal Exported for testing.
+ */
+export function discoverMarkdownSource(
+  html: string,
+  url: string,
+  ext: string,
+): string | null {
+  // 1. Look for <link rel="alternate" type="text/markdown" href="...">
+  const linkMatch = html.match(
+    /<link[^>]+rel=["']alternate["'][^>]+type=["']text\/markdown["'][^>]+href=["']([^"']+)["']/i,
+  ) ?? html.match(
+    /<link[^>]+type=["']text\/markdown["'][^>]+rel=["']alternate["'][^>]+href=["']([^"']+)["']/i,
+  );
+  if (linkMatch?.[1]) {
+    try {
+      return new URL(linkMatch[1], url).href;
+    } catch { /* ignore malformed URLs */ }
+  }
+
+  // 2. VitePress detection — serves .md alongside HTML
+  const isVitePress =
+    html.includes("__VP_HASH_MAP__") ||
+    html.includes("VPContent") ||
+    html.includes("vitepress");
+
+  // 3. llms.txt convention: try url.md for extensionless URLs
+  const hasLlmsTxt = html.includes("llms.txt");
+
+  if (!ext && (isVitePress || hasLlmsTxt)) {
+    return appendMdExtension(url);
+  }
+
+  return null;
+}
+
+function appendMdExtension(url: string): string {
+  return url.endsWith("/") ? `${url.slice(0, -1)}.md` : `${url}.md`;
 }
