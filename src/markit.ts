@@ -175,7 +175,9 @@ export class Markit {
       });
       if (!response.ok) return null;
 
-      const ct = (response.headers.get("content-type") || "").split(";")[0].trim();
+      const ct = (response.headers.get("content-type") || "")
+        .split(";")[0]
+        .trim();
       if (!ct.includes("markdown") && !ct.includes("text/plain")) return null;
 
       const mdBuffer = Buffer.from(await response.arrayBuffer());
@@ -240,15 +242,19 @@ export function discoverMarkdownSource(
   ext: string,
 ): string | null {
   // 1. Look for <link rel="alternate" type="text/markdown" href="...">
-  const linkMatch = html.match(
-    /<link[^>]+rel=["']alternate["'][^>]+type=["']text\/markdown["'][^>]+href=["']([^"']+)["']/i,
-  ) ?? html.match(
-    /<link[^>]+type=["']text\/markdown["'][^>]+rel=["']alternate["'][^>]+href=["']([^"']+)["']/i,
-  );
+  const linkMatch =
+    html.match(
+      /<link[^>]+rel=["']alternate["'][^>]+type=["']text\/markdown["'][^>]+href=["']([^"']+)["']/i,
+    ) ??
+    html.match(
+      /<link[^>]+type=["']text\/markdown["'][^>]+rel=["']alternate["'][^>]+href=["']([^"']+)["']/i,
+    );
   if (linkMatch?.[1]) {
     try {
       return new URL(linkMatch[1], url).href;
-    } catch { /* ignore malformed URLs */ }
+    } catch {
+      /* ignore malformed URLs */
+    }
   }
 
   // 2. VitePress detection — serves .md alongside HTML

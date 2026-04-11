@@ -34,9 +34,9 @@ describe("discoverMarkdownSource", () => {
 
   test("handles single quotes in link tag", () => {
     const html = `<link rel='alternate' type='text/markdown' href='/page.md'>`;
-    expect(
-      discoverMarkdownSource(html, "https://example.com/page", ""),
-    ).toBe("https://example.com/page.md");
+    expect(discoverMarkdownSource(html, "https://example.com/page", "")).toBe(
+      "https://example.com/page.md",
+    );
   });
 
   test("link alternate takes priority over VitePress markers", () => {
@@ -87,22 +87,14 @@ describe("discoverMarkdownSource", () => {
   test("strips trailing slash before appending .md for VitePress", () => {
     const html = `<div id="VPContent"></div>`;
     expect(
-      discoverMarkdownSource(
-        html,
-        "https://docs.example.com/guide/intro/",
-        "",
-      ),
+      discoverMarkdownSource(html, "https://docs.example.com/guide/intro/", ""),
     ).toBe("https://docs.example.com/guide/intro.md");
   });
 
   test("does NOT detect VitePress when URL has an extension", () => {
     const html = `<div id="VPContent"></div>`;
     expect(
-      discoverMarkdownSource(
-        html,
-        "https://example.com/page.html",
-        ".html",
-      ),
+      discoverMarkdownSource(html, "https://example.com/page.html", ".html"),
     ).toBeNull();
   });
 
@@ -190,15 +182,15 @@ describe("discoverMarkdownSource", () => {
       <link rel="alternate" type="text/markdown" href="/first.md">
       <link rel="alternate" type="text/markdown" href="/second.md">
     `;
-    expect(
-      discoverMarkdownSource(html, "https://example.com/page", ""),
-    ).toBe("https://example.com/first.md");
+    expect(discoverMarkdownSource(html, "https://example.com/page", "")).toBe(
+      "https://example.com/first.md",
+    );
   });
 
   test("case-insensitive matching for link tag", () => {
     const html = `<LINK REL="alternate" TYPE="text/markdown" HREF="/page.md">`;
-    expect(
-      discoverMarkdownSource(html, "https://example.com/page", ""),
-    ).toBe("https://example.com/page.md");
+    expect(discoverMarkdownSource(html, "https://example.com/page", "")).toBe(
+      "https://example.com/page.md",
+    );
   });
 });
