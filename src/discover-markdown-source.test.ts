@@ -98,29 +98,6 @@ describe("discoverMarkdownSource", () => {
     ).toBeNull();
   });
 
-  // ── llms.txt convention ───────────────────────────────────────────
-
-  test("detects llms.txt hint in HTML", () => {
-    const html = `<a href="/llms.txt">LLM Context</a>`;
-    expect(
-      discoverMarkdownSource(html, "https://example.com/docs/page", ""),
-    ).toBe("https://example.com/docs/page.md");
-  });
-
-  test("strips trailing slash before appending .md for llms.txt", () => {
-    const html = `<a href="/llms.txt">llms.txt</a>`;
-    expect(
-      discoverMarkdownSource(html, "https://example.com/docs/page/", ""),
-    ).toBe("https://example.com/docs/page.md");
-  });
-
-  test("does NOT trigger llms.txt when URL has an extension", () => {
-    const html = `<a href="/llms.txt">LLM</a>`;
-    expect(
-      discoverMarkdownSource(html, "https://example.com/page.html", ".html"),
-    ).toBeNull();
-  });
-
   // ── No match ──────────────────────────────────────────────────────
 
   test("returns null for plain HTML with no markers", () => {

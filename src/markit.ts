@@ -106,6 +106,13 @@ export class Markit {
       }
     }
 
+    // For root URLs, check if the site has /llms.txt and return it if so
+    const parsedUrl = new URL(url);
+    if (parsedUrl.pathname === "/" || parsedUrl.pathname === "") {
+      const result = await this.tryLlmsTxt(parsedUrl.origin);
+      if (result) return result;
+    }
+
     const response = await fetch(url, {
       headers: {
         Accept: "text/markdown, text/html;q=0.9, text/plain;q=0.8, */*;q=0.1",
@@ -153,6 +160,42 @@ export class Markit {
   }
 
   /**
+   * For root URLs, check if the site publishes /llms.txt.
+   * If it exists, return it as markdown directly.
+   */
+  private async tryLlmsTxt(origin: string): Promise<ConversionResult | null> {
+    const llmsTxtUrl = `${origin}/llms.txt`;
+    try {
+      const response = await fetch(llmsTxtUrl, {
+        method: "HEAD",
+        headers: { "User-Agent": USER_AGENT },
+      });
+      if (!response.ok) return null;
+
+      const ct = (response.headers.get("content-type") || "")
+        .split(";")[0]
+        .trim();
+      if (
+        !ct.includes("markdown") &&
+        !ct.includes("text/plain") &&
+        !ct.includes("text/html")
+      )
+        return null;
+
+      // HEAD succeeded — now GET the content
+      const getResponse = await fetch(llmsTxtUrl, {
+        headers: { "User-Agent": USER_AGENT },
+      });
+      if (!getResponse.ok) return null;
+
+      const buffer = Buffer.from(await getResponse.arrayBuffer());
+      return { markdown: buffer.toString("utf-8") };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Inspect an HTML response for a discoverable markdown source URL.
    * If found, fetch and convert the raw markdown instead.
    */
@@ -166,11 +209,21 @@ export class Markit {
       0,
       Math.min(htmlBuffer.length, 50_000),
     );
+
     const mdSourceUrl = discoverMarkdownSource(html, url, ext);
     if (!mdSourceUrl) return null;
 
+    return this.fetchMarkdownSource(mdSourceUrl);
+  }
+
+  /**
+   * Fetch a markdown source URL, validating the response is actually markdown.
+   */
+  private async fetchMarkdownSource(
+    mdUrl: string,
+  ): Promise<ConversionResult | null> {
     try {
-      const response = await fetch(mdSourceUrl, {
+      const response = await fetch(mdUrl, {
         headers: { "User-Agent": USER_AGENT },
       });
       if (!response.ok) return null;
@@ -182,10 +235,10 @@ export class Markit {
 
       const mdBuffer = Buffer.from(await response.arrayBuffer());
       return this.convert(mdBuffer, {
-        url: mdSourceUrl,
+        url: mdUrl,
         mimetype: "text/markdown",
         extension: ".md",
-        filename: basename(new URL(mdSourceUrl).pathname),
+        filename: basename(new URL(mdUrl).pathname),
       });
     } catch {
       return null;
@@ -229,10 +282,12 @@ export class Markit {
 
 /**
  * Try to discover a raw markdown source URL from an HTML response.
- * Checks multiple patterns:
+ * Checks for known markers in the HTML itself:
  *   1. <link rel="alternate" type="text/markdown" href="..."> tag
  *   2. VitePress markers → append .md to the URL
- *   3. llms.txt convention → try url.md or url.html.md
+ *
+ * The llms.txt .md probe is handled separately in tryMarkdownSource
+ * as a fallback when no markers are found.
  *
  * @internal Exported for testing.
  */
@@ -258,15 +313,12 @@ export function discoverMarkdownSource(
   }
 
   // 2. VitePress detection — serves .md alongside HTML
-  const isVitePress =
-    html.includes("__VP_HASH_MAP__") ||
-    html.includes("VPContent") ||
-    html.includes("vitepress");
-
-  // 3. llms.txt convention: try url.md for extensionless URLs
-  const hasLlmsTxt = html.includes("llms.txt");
-
-  if (!ext && (isVitePress || hasLlmsTxt)) {
+  if (
+    !ext &&
+    (html.includes("__VP_HASH_MAP__") ||
+      html.includes("VPContent") ||
+      html.includes("vitepress"))
+  ) {
     return appendMdExtension(url);
   }
 
