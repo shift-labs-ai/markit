@@ -19,6 +19,7 @@ const BUILTIN_FORMATS: Format[] = [
   { name: "EPUB", extensions: [".epub"], builtin: true },
   { name: "Jupyter", extensions: [".ipynb"], builtin: true },
   { name: "RSS/Atom", extensions: [".rss", ".atom", ".xml"], builtin: true },
+  { name: "WebVTT", extensions: [".vtt"], builtin: true },
   { name: "CSV", extensions: [".csv", ".tsv"], builtin: true },
   { name: "JSON", extensions: [".json"], builtin: true },
   { name: "YAML", extensions: [".yaml", ".yml"], builtin: true },
