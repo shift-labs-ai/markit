@@ -14,6 +14,7 @@ import { PdfConverter } from "./converters/pdf/index.js";
 import { PlainTextConverter } from "./converters/plain-text.js";
 import { PptxConverter } from "./converters/pptx.js";
 import { RssConverter } from "./converters/rss.js";
+import { VttConverter } from "./converters/vtt.js";
 import { WikipediaConverter } from "./converters/wikipedia.js";
 import { XlsxConverter } from "./converters/xlsx.js";
 import { XmlConverter } from "./converters/xml.js";
@@ -51,6 +52,7 @@ export class Markit {
       new GitHubConverter(),
       new WikipediaConverter(),
       new RssConverter(),
+      new VttConverter(),
       new CsvConverter(),
       new JsonConverter(),
       new YamlConverter(),
