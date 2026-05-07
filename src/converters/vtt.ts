@@ -2,6 +2,18 @@ import type { ConversionResult, Converter, StreamInfo } from "../types.js";
 
 const EXTENSIONS = [".vtt"];
 const MIMETYPES = ["text/vtt", "text/webvtt"];
+const SKIPPED_BLOCK_PREFIXES = ["WEBVTT", "NOTE", "STYLE", "REGION"];
+const TIMESTAMP_TAG = /<\d{2}:\d{2}(?::\d{2})?\.\d{3}>/g;
+
+const HTML_ENTITIES: Record<string, string> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  "#39": "'",
+  "#x27": "'",
+};
 
 interface Cue {
   start: string;
@@ -12,13 +24,13 @@ export class VttConverter implements Converter {
   name = "vtt";
 
   accepts(streamInfo: StreamInfo): boolean {
-    if (streamInfo.extension && EXTENSIONS.includes(streamInfo.extension)) {
+    const extension = streamInfo.extension?.toLowerCase();
+    const mimetype = streamInfo.mimetype?.toLowerCase();
+
+    if (extension && EXTENSIONS.includes(extension)) {
       return true;
     }
-    if (
-      streamInfo.mimetype &&
-      MIMETYPES.some((m) => streamInfo.mimetype?.startsWith(m))
-    ) {
+    if (mimetype && MIMETYPES.some((m) => mimetype.startsWith(m))) {
       return true;
     }
     return false;
@@ -63,12 +75,9 @@ function parseVtt(input: string): Cue[] {
       .filter(Boolean);
 
     if (lines.length === 0) continue;
-    if (lines[0] === "WEBVTT" || lines[0].startsWith("WEBVTT ")) continue;
-    if (lines[0].startsWith("NOTE")) continue;
-    if (lines[0].startsWith("STYLE")) continue;
-    if (lines[0].startsWith("REGION")) continue;
-    if (lines[0].startsWith("Kind:")) continue;
-    if (lines[0].startsWith("Language:")) continue;
+    if (SKIPPED_BLOCK_PREFIXES.some((prefix) => lines[0].startsWith(prefix))) {
+      continue;
+    }
 
     const timingIndex = lines.findIndex((line) => line.includes("-->"));
     if (timingIndex === -1) continue;
@@ -86,16 +95,37 @@ function parseVtt(input: string): Cue[] {
 
 function cleanCueText(input: string): string {
   return input
-    .replace(/<\d{2}:\d{2}:\d{2}\.\d{3}>/g, "")
-    .replace(/<\d{2}:\d{2}\.\d{3}>/g, "")
+    .replace(TIMESTAMP_TAG, "")
     .replace(/<[^>]+>/g, "")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
+    .replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (entity, name: string) =>
+      decodeHtmlEntity(entity, name),
+    )
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function decodeHtmlEntity(entity: string, name: string): string {
+  const normalized = name.toLowerCase();
+  const named = HTML_ENTITIES[normalized];
+  if (named) return named;
+
+  if (normalized.startsWith("#x")) {
+    return decodeCodePoint(entity, Number.parseInt(normalized.slice(2), 16));
+  }
+  if (normalized.startsWith("#")) {
+    return decodeCodePoint(entity, Number.parseInt(normalized.slice(1), 10));
+  }
+
+  return entity;
+}
+
+function decodeCodePoint(fallback: string, codePoint: number): string {
+  if (!Number.isFinite(codePoint)) return fallback;
+  try {
+    return String.fromCodePoint(codePoint);
+  } catch {
+    return fallback;
+  }
 }
 
 function buildIncrementalTranscript(cues: Cue[]): {

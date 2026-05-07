@@ -6,10 +6,11 @@ const converter = new VttConverter();
 describe("VttConverter", () => {
   test("accepts .vtt files and WebVTT mimetypes", () => {
     expect(converter.accepts({ extension: ".vtt" })).toBe(true);
+    expect(converter.accepts({ extension: ".VTT" })).toBe(true);
     expect(converter.accepts({ mimetype: "text/vtt; charset=utf-8" })).toBe(
       true,
     );
-    expect(converter.accepts({ mimetype: "text/webvtt" })).toBe(true);
+    expect(converter.accepts({ mimetype: "TEXT/WEBVTT" })).toBe(true);
     expect(converter.accepts({ extension: ".txt" })).toBe(false);
   });
 
@@ -61,12 +62,12 @@ at<00:00:02.760><c> 2:00</c><00:00:02.960><c> a.m.</c>
 NOTE this should be ignored
 
 00:00:00.000 --> 00:00:01.000
-<v Speaker>Fish &amp; chips</v>
+<v Speaker>Fish &amp; chips &#x1F41F;</v>
 `);
 
     const result = await converter.convert(input, { extension: ".vtt" });
 
-    expect(result.markdown).toContain("Fish & chips");
+    expect(result.markdown).toContain("Fish & chips 🐟");
     expect(result.markdown).not.toContain("NOTE this should be ignored");
   });
 });
