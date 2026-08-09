@@ -124,12 +124,31 @@ fn handle_text(text: &str, ctx: &mut Ctx) {
     if collapsed.is_empty() {
         return;
     }
-    let escaped = escape_markdown(&collapsed);
+    // Strip leading space at block boundaries or when previous output already ends with space
+    // (mirrors turndown's collapseWhitespace: strip when prevText ends with space or is null)
+    let collapsed = if collapsed.starts_with(' ')
+        && (ctx.out.is_empty() || ctx.out.ends_with('\n') || ctx.out.ends_with(' '))
+    {
+        &collapsed[1..]
+    } else {
+        &collapsed
+    };
+    if collapsed.is_empty() {
+        return;
+    }
+    let escaped = escape_markdown(collapsed);
     ctx.out.push_str(&escaped);
 }
 
 fn handle_element(el: ElementRef, ctx: &mut Ctx) {
     let tag = el.value().name().to_lowercase();
+    // Strip trailing space before block elements and <br>
+    // (mirrors turndown's collapseWhitespace: strip trailing space from prevText at block boundary)
+    if is_block_or_br(&tag) && !ctx.in_cell {
+        let trimmed = ctx.out.trim_end_matches(' ');
+        let new_len = trimmed.len();
+        ctx.out.truncate(new_len);
+    }
     match tag.as_str() {
         "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => handle_heading(el, ctx, &tag),
         "p" => handle_paragraph(el, ctx),
@@ -403,7 +422,7 @@ fn handle_li(el: ElementRef, ctx: &mut Ctx) {
     let content = inner_markdown(el, ctx);
     let content = content
         .trim_start_matches('\n')
-        .trim_end_matches('\n');
+        .trim_end();
 
     // Indent continuation lines by 2 spaces (like turndown)
     let indented = content.replace('\n', "\n  ");
@@ -567,7 +586,7 @@ fn escape_markdown(text: &str) -> String {
 }
 
 fn ensure_blank_line(out: &mut String) {
-    let trimmed_len = out.trim_end().len();
+    let trimmed_len = out.trim_end_matches(|c: char| c.is_ascii_whitespace()).len();
     if trimmed_len == 0 {
         out.clear();
         return;
@@ -583,6 +602,14 @@ fn collapse_blank_lines(s: String) -> String {
 
 fn escape_url_parens(url: &str) -> String {
     url.replace('(', r"\(").replace(')', r"\)")
+}
+
+fn is_block_or_br(tag: &str) -> bool {
+    tag == "br" || matches!(tag,
+        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "p" | "pre" | "blockquote" |
+        "table" | "thead" | "tbody" | "tfoot" | "tr" | "td" | "th" |
+        "ul" | "ol" | "li" | "hr"
+    ) || is_block_element(tag)
 }
 
 fn is_block_element(tag: &str) -> bool {
