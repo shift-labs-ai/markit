@@ -1,6 +1,7 @@
 mod converters;
 mod markit;
 mod types;
+mod utils;
 
 use std::io::Read;
 use std::process::ExitCode;

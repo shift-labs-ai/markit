@@ -1,13 +1,21 @@
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 
 use crate::converters::csv::CsvConverter;
+use crate::converters::docx::DocxConverter;
+use crate::converters::epub::EpubConverter;
+use crate::converters::html::HtmlConverter;
+use crate::converters::iwork::IWorkConverter;
 use crate::converters::json::JsonConverter;
 use crate::converters::plain_text::PlainTextConverter;
+use crate::converters::pptx::PptxConverter;
+use crate::converters::xlsx::XlsxConverter;
 use crate::converters::xml::XmlConverter;
 use crate::converters::yaml::YamlConverter;
+use crate::converters::zip::ZipConverter;
 use crate::types::{ConversionResult, Converter, MarkitOptions, StreamInfo};
 
 pub struct Markit {
@@ -18,13 +26,37 @@ pub struct Markit {
 impl Markit {
     pub fn new(options: MarkitOptions) -> Self {
         // Specific formats first, generic last, plain text as catch-all.
-        let converters: Vec<Box<dyn Converter>> = vec![
+        // Mirrors the ordering in src/markit.ts.
+        let specific_and_generic: Arc<Vec<Box<dyn Converter>>> = Arc::new(vec![
+            Box::new(DocxConverter),
+            Box::new(PptxConverter),
+            Box::new(XlsxConverter),
+            Box::new(EpubConverter),
+            Box::new(IWorkConverter),
             Box::new(CsvConverter),
             Box::new(JsonConverter),
             Box::new(YamlConverter),
             Box::new(XmlConverter),
-            Box::new(PlainTextConverter),
+            Box::new(HtmlConverter),
+        ]);
+
+        // ZIP gets the other converters for recursive extraction.
+        let zip = ZipConverter::new(Arc::clone(&specific_and_generic));
+
+        let mut converters: Vec<Box<dyn Converter>> = vec![
+            Box::new(DocxConverter),
+            Box::new(PptxConverter),
+            Box::new(XlsxConverter),
+            Box::new(EpubConverter),
+            Box::new(IWorkConverter),
+            Box::new(CsvConverter),
+            Box::new(JsonConverter),
+            Box::new(YamlConverter),
+            Box::new(zip),
+            Box::new(XmlConverter),
+            Box::new(HtmlConverter),
         ];
+        converters.push(Box::new(PlainTextConverter));
         Self { converters, options }
     }
 
