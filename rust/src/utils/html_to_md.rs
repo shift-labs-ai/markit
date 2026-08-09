@@ -12,7 +12,14 @@ use scraper::{ElementRef, Html, Node};
 
 /// Convert an HTML fragment or document to GFM markdown.
 pub fn html_to_markdown(html: &str) -> String {
-    let doc = Html::parse_fragment(html);
+    // Use parse_document for full HTML pages (handles <head>/<body> correctly),
+    // fallback to parse_fragment for HTML fragments.
+    let has_html_tag = html.contains("<html") || html.contains("<!DOCTYPE") || html.contains("<!doctype");
+    let doc = if has_html_tag {
+        Html::parse_document(html)
+    } else {
+        Html::parse_fragment(html)
+    };
     let root = doc.root_element();
     let mut ctx = Ctx::default();
     walk_children(root, &mut ctx);
@@ -60,6 +67,7 @@ struct Ctx {
     out: String,
     list_stack: Vec<ListCtx>,
     in_pre: bool,
+    pre_no_code: bool,
     in_table: bool,
     table_rows: Vec<Vec<String>>,
     table_cells: Vec<String>,
@@ -103,7 +111,13 @@ fn handle_text(text: &str, ctx: &mut Ctx) {
         return;
     }
     if ctx.in_pre {
-        ctx.out.push_str(text);
+        if ctx.pre_no_code {
+            // <pre> without <code>: preserve whitespace but escape markdown
+            let escaped = escape_markdown(text);
+            ctx.out.push_str(&escaped);
+        } else {
+            ctx.out.push_str(text);
+        }
         return;
     }
     let collapsed = collapse_whitespace(text);
@@ -138,7 +152,13 @@ fn handle_element(el: ElementRef, ctx: &mut Ctx) {
         "td" | "th" => handle_td(el, ctx),
         // turndown keeps <title> text (default rule) — replicate that quirk
         "script" | "style" => {}
-        _ => walk_children(el, ctx),
+        _ => {
+            if is_block_element(&tag) {
+                handle_block_default(el, ctx);
+            } else {
+                walk_children(el, ctx);
+            }
+        }
     }
 }
 
@@ -186,6 +206,19 @@ fn handle_hr(ctx: &mut Ctx) {
     ctx.out.push_str("* * *\n\n");
 }
 
+fn handle_block_default(el: ElementRef, ctx: &mut Ctx) {
+    let content = inner_markdown(el, ctx);
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        // Empty block still produces a boundary
+        ensure_blank_line(&mut ctx.out);
+        return;
+    }
+    ensure_blank_line(&mut ctx.out);
+    ctx.out.push_str(trimmed);
+    ctx.out.push_str("\n\n");
+}
+
 fn handle_wrap(el: ElementRef, ctx: &mut Ctx, marker: &str) {
     if ctx.in_cell {
         let content = inner_markdown(el, ctx);
@@ -206,9 +239,19 @@ fn handle_wrap(el: ElementRef, ctx: &mut Ctx, marker: &str) {
 }
 
 fn handle_link(el: ElementRef, ctx: &mut Ctx) {
-    let href = el.value().attr("href").unwrap_or("");
-    let content = inner_markdown(el, ctx);
-    let result = format!("[{content}]({href})");
+    let raw_href = el.value().attr("href").unwrap_or("");
+    let href = escape_url_parens(raw_href);
+    let title = el.value().attr("title");
+    let raw_content = inner_markdown(el, ctx);
+    let content = raw_content.trim();
+    let title_part = match title {
+        Some(t) if !t.is_empty() => {
+            let escaped = t.replace('"', r#"\""#);
+            format!(r#" "{escaped}""#)
+        }
+        _ => String::new(),
+    };
+    let result = format!("[{content}]({href}{title_part})");
     if ctx.in_cell {
         ctx.cell_buf.push_str(&result);
     } else {
@@ -218,8 +261,17 @@ fn handle_link(el: ElementRef, ctx: &mut Ctx) {
 
 fn handle_img(el: ElementRef, ctx: &mut Ctx) {
     let alt = el.value().attr("alt").unwrap_or("");
-    let src = el.value().attr("src").unwrap_or("");
-    let result = format!("![{alt}]({src})");
+    let raw_src = el.value().attr("src").unwrap_or("");
+    let src = escape_url_parens(raw_src);
+    let title = el.value().attr("title");
+    let title_part = match title {
+        Some(t) if !t.is_empty() => {
+            let escaped = t.replace('"', r#"\""#);
+            format!(r#" "{escaped}""#)
+        }
+        _ => String::new(),
+    };
+    let result = format!("![{alt}]({src}{title_part})");
     if ctx.in_cell {
         ctx.cell_buf.push_str(&result);
     } else {
@@ -269,10 +321,12 @@ fn handle_pre(el: ElementRef, ctx: &mut Ctx) {
         }
         ctx.out.push_str("```\n\n");
     } else {
-        // <pre> without <code>
+        // <pre> without <code> — escape markdown but preserve whitespace
         ctx.in_pre = true;
+        ctx.pre_no_code = true;
         walk_children(el, ctx);
         ctx.in_pre = false;
+        ctx.pre_no_code = false;
         ctx.out.push_str("\n\n");
     }
 }
@@ -316,7 +370,12 @@ fn handle_list(el: ElementRef, ctx: &mut Ctx, ordered: bool) {
         item_index: 0,
     });
 
-    walk_children(el, ctx);
+    // Only process element children (skip whitespace text nodes between <li>s)
+    for child in el.children() {
+        if let Some(child_el) = ElementRef::wrap(child) {
+            handle_element(child_el, ctx);
+        }
+    }
 
     ctx.list_stack.pop();
 
@@ -425,16 +484,24 @@ fn handle_td(el: ElementRef, ctx: &mut Ctx) {
 // ============================== Helpers ==============================
 
 fn inner_markdown(el: ElementRef, ctx: &mut Ctx) -> String {
-    let saved = std::mem::take(&mut ctx.out);
+    let saved_out = std::mem::take(&mut ctx.out);
+    let saved_in_cell = ctx.in_cell;
+    let saved_in_table = ctx.in_table;
+    let saved_cell_buf = std::mem::take(&mut ctx.cell_buf);
+    ctx.in_cell = false;
+    ctx.in_table = false;
     walk_children(el, ctx);
-    std::mem::replace(&mut ctx.out, saved)
+    ctx.in_cell = saved_in_cell;
+    ctx.in_table = saved_in_table;
+    ctx.cell_buf = saved_cell_buf;
+    std::mem::replace(&mut ctx.out, saved_out)
 }
 
 fn collapse_whitespace(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
     let mut last_was_ws = false;
     for ch in text.chars() {
-        if ch.is_whitespace() {
+        if ch.is_ascii_whitespace() {
             if !last_was_ws {
                 result.push(' ');
                 last_was_ws = true;
@@ -448,17 +515,54 @@ fn collapse_whitespace(text: &str) -> String {
 }
 
 fn escape_markdown(text: &str) -> String {
-    let mut result = String::with_capacity(text.len() + 8);
-    for ch in text.chars() {
+    // Match turndown's escape order:
+    // 1. Escape existing backslashes
+    // 2. Escape special inline chars
+    // 3. Escape start-of-text patterns
+
+    // Step 1: escape backslashes first
+    let s = text.replace('\\', "\\\\");
+
+    // Step 2: per-character inline escapes
+    let mut result = String::with_capacity(s.len() + 8);
+    for ch in s.chars() {
         match ch {
-            '\\' => result.push_str("\\\\" ),
-            '[' | ']' | '*' | '_' | '~' => {
+            '[' | ']' | '*' | '_' | '~' | '`' | '|' => {
                 result.push('\\');
                 result.push(ch);
             }
             _ => result.push(ch),
         }
     }
+
+    // Step 3: start-of-text escapes (turndown uses ^ anchor per text node)
+    if result.starts_with('-') {
+        result = format!("\\-{}", &result[1..]);
+    } else if result.starts_with("+ ") {
+        result = format!("\\+ {}", &result[2..]);
+    } else if result.starts_with('>') {
+        result = format!("\\>{}", &result[1..]);
+    } else if result.starts_with("\\~\\~\\~") {
+        // ~~~ after step 2 is \~\~\~ — match the escaped version
+        result = format!("\\{}", &result);
+    } else {
+        let eq_count = result.chars().take_while(|&c| c == '=').count();
+        if eq_count > 0 {
+            result = format!("\\{}", &result);
+        } else {
+            let hash_count = result.chars().take_while(|&c| c == '#').count();
+            if (1..=6).contains(&hash_count) && result.as_bytes().get(hash_count) == Some(&b' ') {
+                result = format!("\\{}", &result);
+            } else {
+                let digit_count = result.chars().take_while(|c| c.is_ascii_digit()).count();
+                if digit_count > 0 && result[digit_count..].starts_with(". ") {
+                    let digits = &result[..digit_count];
+                    result = format!("{}\\. {}", digits, &result[digit_count + 2..]);
+                }
+            }
+        }
+    }
+
     result
 }
 
@@ -475,6 +579,41 @@ fn ensure_blank_line(out: &mut String) {
 fn collapse_blank_lines(s: String) -> String {
     let re = Regex::new(r"\n{3,}").unwrap();
     re.replace_all(&s, "\n\n").into_owned()
+}
+
+fn escape_url_parens(url: &str) -> String {
+    url.replace('(', r"\(").replace(')', r"\)")
+}
+
+fn is_block_element(tag: &str) -> bool {
+    matches!(
+        tag,
+        "address"
+            | "article"
+            | "aside"
+            | "center"
+            | "dd"
+            | "details"
+            | "dialog"
+            | "dir"
+            | "div"
+            | "dl"
+            | "dt"
+            | "fieldset"
+            | "figcaption"
+            | "figure"
+            | "footer"
+            | "form"
+            | "header"
+            | "hgroup"
+            | "main"
+            | "nav"
+            | "ol"
+            | "output"
+            | "section"
+            | "summary"
+            | "ul"
+    )
 }
 
 fn strip_p_in_cell(inner: &str) -> String {
@@ -667,4 +806,90 @@ console.log(x);</code></pre>"#;
         assert!(result.contains("<th>Name</th>"), "got: {result}");
         assert!(!result.contains("<p>"), "got: {result}");
     }
+
+    #[test]
+    fn test_link_with_title() {
+        assert_eq!(
+            html_to_markdown(r#"<a href="https://example.com" title="Example Site">link</a>"#),
+            r#"[link](https://example.com "Example Site")"#
+        );
+    }
+
+    #[test]
+    fn test_link_title_with_quotes() {
+        assert_eq!(
+            html_to_markdown(r#"<a href="/page" title='Say "hi"'>text</a>"#),
+            "[text](/page \"Say \\\"hi\\\"\")"
+        );
+    }
+
+    #[test]
+    fn test_img_with_title() {
+        assert_eq!(
+            html_to_markdown(r#"<img src="photo.jpg" alt="pic" title="My Photo">"#),
+            r#"![pic](photo.jpg "My Photo")"#
+        );
+    }
+
+    #[test]
+    fn test_url_parens_escaped() {
+        assert_eq!(
+            html_to_markdown(r#"<a href="https://en.wikipedia.org/wiki/Rust_(language)">Rust</a>"#),
+            r##"[Rust](https://en.wikipedia.org/wiki/Rust_\(language\))"##
+        );
+    }
+
+    #[test]
+    fn test_block_elements_produce_blank_lines() {
+        assert_eq!(
+            html_to_markdown("<div>Block 1</div><div>Block 2</div>"),
+            "Block 1
+
+Block 2"
+        );
+    }
+
+    #[test]
+    fn test_nav_section_are_blocks() {
+        assert_eq!(
+            html_to_markdown("<nav>Navigation</nav><section>Content</section>"),
+            "Navigation
+
+Content"
+        );
+    }
+
+    #[test]
+    fn test_link_in_table_cell() {
+        let html = normalize_tables_html(
+            r#"<table><tr><td><a href="https://example.com" title="Ex">Paradigms</a></td><td>val</td></tr></table>"#
+        );
+        let result = html_to_markdown(&html);
+        assert!(result.contains(r#"[Paradigms](https://example.com "Ex")"#), "got: {result}");
+    }
+
+    #[test]
+    fn test_escape_pipe() {
+        assert_eq!(
+            html_to_markdown("<p>a | b</p>"),
+            "a \\| b"
+        );
+    }
+
+    #[test]
+    fn test_footnote_brackets_escaped() {
+        let html = r##"<a href="#cite"><span class="cite-bracket">[</span>1<span class="cite-bracket">]</span></a>"##;
+        assert_eq!(
+            html_to_markdown(html),
+            "[\\[1\\]](#cite)"
+        );
+    }
+
+    #[test]
+    fn test_pre_without_code_escapes() {
+        let html = r#"<pre><span>let x = 10;</span></pre>"#;
+        let result = html_to_markdown(html);
+        assert!(result.contains(r"="), "Expected escaped = in pre without code, got: {result}");
+    }
+
 }

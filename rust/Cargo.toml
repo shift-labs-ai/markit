@@ -7,12 +7,16 @@ license = "MIT"
 
 [dependencies]
 anyhow = "1"
+base64 = "0.23.1"
 clap = { version = "4", features = ["derive"] }
+kamadak-exif = "0.6.1"
+lofty = "0.25.0"
 regex = "1.13.1"
 roxmltree = "0.21.1"
 scraper = "0.27.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+mupdf = "0.8.0"
 ureq = "3.4.0"
 zip = "8.6.0"
 

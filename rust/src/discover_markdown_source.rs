@@ -93,7 +93,6 @@ fn append_md_extension(url: &str) -> String {
 /// no discoverable source is found.
 ///
 /// Mirrors `discoverMarkdownSource` exported from src/markit.ts.
-#[allow(dead_code)]
 pub fn discover_markdown_source(html: &str, url: &str, ext: &str) -> Option<String> {
     // 1. Look for <link rel="alternate" type="text/markdown" href="...">
     //    Two regex forms handle attribute order variations.

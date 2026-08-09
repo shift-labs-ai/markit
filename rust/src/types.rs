@@ -25,9 +25,17 @@ impl ConversionResult {
     }
 }
 
+/// Describe an image / transcribe audio: receives raw bytes and mimetype,
+/// returns markdown/text.
+pub type MediaFn = Box<dyn Fn(&[u8], &str) -> Result<String> + Send + Sync>;
+
 /// Options threaded through every conversion.
 #[derive(Default)]
 pub struct MarkitOptions {
+    /// Describe an image, return markdown.
+    pub describe: Option<MediaFn>,
+    /// Transcribe audio, return text.
+    pub transcribe: Option<MediaFn>,
     /// Extra instructions appended to the image description prompt.
     pub prompt: Option<String>,
 }
