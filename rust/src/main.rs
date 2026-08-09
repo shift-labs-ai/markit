@@ -1,4 +1,5 @@
 mod converters;
+mod discover_markdown_source;
 mod markit;
 mod types;
 mod utils;

@@ -1,5 +1,7 @@
 pub mod csv;
 pub mod docx;
+pub mod github;
+pub mod pdf;
 pub mod epub;
 pub mod html;
 pub mod iwork;
