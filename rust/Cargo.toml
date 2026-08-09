@@ -1,0 +1,16 @@
+[package]
+name = "markit"
+version = "0.5.3"
+edition = "2021"
+description = "Convert anything to markdown."
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[[bin]]
+name = "markit"
+path = "src/main.rs"
