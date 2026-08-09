@@ -1,9 +1,9 @@
 //! HTML → Markdown engine. Rust equivalent of src/utils/turndown.ts.
 //!
-//! Uses scraper (html5ever) to parse HTML and walks the DOM to produce GFM
-//! markdown: atx headings, fenced code blocks, "-" bullets, ordered lists
-//! (respecting start), GFM tables, ~~strikethrough~~, **bold**, _italic_,
-//! [links](href), ![images](src), blockquotes, horizontal rules, etc.
+//! Architecture follows turndown's process/join composition model:
+//! - process(node) reduces over children, each producing a replacement string
+//! - join(output, replacement) trims trailing/leading newlines, inserts separator
+//! - replacementForNode applies rule.replacement(content, node) with flanking whitespace
 
 use regex::Regex;
 use scraper::{ElementRef, Html, Node};
@@ -12,9 +12,8 @@ use scraper::{ElementRef, Html, Node};
 
 /// Convert an HTML fragment or document to GFM markdown.
 pub fn html_to_markdown(html: &str) -> String {
-    // Use parse_document for full HTML pages (handles <head>/<body> correctly),
-    // fallback to parse_fragment for HTML fragments.
-    let has_html_tag = html.contains("<html") || html.contains("<!DOCTYPE") || html.contains("<!doctype");
+    let has_html_tag =
+        html.contains("<html") || html.contains("<!DOCTYPE") || html.contains("<!doctype");
     let doc = if has_html_tag {
         Html::parse_document(html)
     } else {
@@ -22,9 +21,10 @@ pub fn html_to_markdown(html: &str) -> String {
     };
     let root = doc.root_element();
     let mut ctx = Ctx::default();
-    walk_children(root, &mut ctx);
-    collapse_blank_lines(ctx.out.trim().to_string())
+    let output = process(root, &mut ctx);
+    post_process(&output)
 }
+
 
 /// Normalize HTML tables so the table converter can handle them:
 /// - Strip <p> tags inside <td>/<th> cells (join multiple paragraphs with space)
@@ -60,19 +60,19 @@ pub fn normalize_tables_html(html: &str) -> String {
     step2.into_owned()
 }
 
+
 // ============================== Internal types ==============================
 
 #[derive(Default)]
 struct Ctx {
-    out: String,
     list_stack: Vec<ListCtx>,
     in_pre: bool,
+    in_code: bool,
     pre_no_code: bool,
     in_table: bool,
     table_rows: Vec<Vec<String>>,
     table_cells: Vec<String>,
     in_cell: bool,
-    cell_buf: String,
     in_heading: bool,
 }
 
@@ -82,187 +82,485 @@ struct ListCtx {
     item_index: usize,
 }
 
-// ============================== DOM walker ==============================
+// ============================== Core: process / join / replacementForNode ==============================
 
-fn walk_children(el: ElementRef, ctx: &mut Ctx) {
-    for child in el.children() {
+/// Reduces a DOM node to its Markdown string equivalent by reducing over children.
+fn process(parent: ElementRef, ctx: &mut Ctx) -> String {
+    let mut output = String::new();
+    let mut prev_text_ends_with_space = true;
+
+    for child in parent.children() {
         match child.value() {
-            Node::Text(text) => handle_text(&text.text, ctx),
+            Node::Text(text) => {
+                if ctx.in_table && !ctx.in_cell {
+                    continue;
+                }
+                let replacement =
+                    text_replacement(&text.text, ctx, &output, prev_text_ends_with_space);
+                if !replacement.is_empty() {
+                    output = join_str(&output, &replacement);
+                    prev_text_ends_with_space = replacement.ends_with(' ');
+                }
+            }
             Node::Element(_) => {
                 if let Some(child_el) = ElementRef::wrap(child) {
-                    handle_element(child_el, ctx);
+                    let tag = child_el.value().name().to_lowercase();
+
+                    // Strip trailing space before block elements and <br>
+                    if is_block_or_br(&tag) {
+                        let trimmed = output.trim_end_matches(' ');
+                        output.truncate(trimmed.len());
+                        prev_text_ends_with_space = true;
+                    }
+
+                    if tag == "script" || tag == "style" {
+                        continue;
+                    }
+
+                    let replacement = replacement_for_node(child_el, ctx);
+                    if !replacement.is_empty() {
+                        output = join_str(&output, &replacement);
+                        if is_block_or_br(&tag) {
+                            prev_text_ends_with_space = true;
+                        } else {
+                            prev_text_ends_with_space = output.ends_with(' ');
+                        }
+                    }
                 }
             }
             _ => {}
         }
     }
+    // Strip trailing space (mirrors turndown's collapseWhitespace final cleanup)
+    // Don't strip in preformatted blocks - spaces are significant
+    if !ctx.in_pre {
+        let trimmed = output.trim_end_matches(' ');
+        output.truncate(trimmed.len());
+    }
+    output
 }
 
-fn handle_text(text: &str, ctx: &mut Ctx) {
-    if ctx.in_table && !ctx.in_cell {
-        return;
-    }
-    if ctx.in_cell {
-        if ctx.in_pre {
-            ctx.cell_buf.push_str(text);
-        } else {
-            ctx.cell_buf.push_str(&collapse_whitespace(text));
-        }
-        return;
-    }
+/// Produce the replacement string for a text node.
+fn text_replacement(
+    text: &str,
+    ctx: &Ctx,
+    current_output: &str,
+    prev_ends_space: bool,
+) -> String {
     if ctx.in_pre {
         if ctx.pre_no_code {
-            // <pre> without <code>: preserve whitespace but escape markdown
-            let escaped = escape_markdown(text);
-            ctx.out.push_str(&escaped);
-        } else {
-            ctx.out.push_str(text);
+            return escape_markdown(text);
         }
-        return;
+        return text.to_string();
+    }
+    if ctx.in_code {
+        return text.to_string();
     }
     let collapsed = collapse_whitespace(text);
     if collapsed.is_empty() {
-        return;
+        return String::new();
     }
-    // Strip leading space at block boundaries or when previous output already ends with space
-    // (mirrors turndown's collapseWhitespace: strip when prevText ends with space or is null)
     let collapsed = if collapsed.starts_with(' ')
-        && (ctx.out.is_empty() || ctx.out.ends_with('\n') || ctx.out.ends_with(' '))
+        && (current_output.is_empty() || current_output.ends_with('\n') || prev_ends_space)
     {
         &collapsed[1..]
     } else {
         &collapsed
     };
     if collapsed.is_empty() {
-        return;
+        return String::new();
     }
-    let escaped = escape_markdown(collapsed);
-    ctx.out.push_str(&escaped);
+    escape_markdown(collapsed)
 }
 
-fn handle_element(el: ElementRef, ctx: &mut Ctx) {
+/// Convert an element node to its Markdown replacement string.
+fn replacement_for_node(el: ElementRef, ctx: &mut Ctx) -> String {
     let tag = el.value().name().to_lowercase();
-    // Strip trailing space before block elements and <br>
-    // (mirrors turndown's collapseWhitespace: strip trailing space from prevText at block boundary)
-    if is_block_or_br(&tag) && !ctx.in_cell {
-        let trimmed = ctx.out.trim_end_matches(' ');
-        let new_len = trimmed.len();
-        ctx.out.truncate(new_len);
+
+    // Check if blank (turndown's isBlank)
+    if !ctx.in_pre && is_blank_node(el) {
+        return if is_block_tag(&tag) || is_block_or_br(&tag) {
+            "\n\n".to_string()
+        } else {
+            String::new()
+        };
     }
+
     match tag.as_str() {
-        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => handle_heading(el, ctx, &tag),
-        "p" => handle_paragraph(el, ctx),
-        "br" => handle_br(ctx),
-        "hr" => handle_hr(ctx),
-        "strong" | "b" => handle_wrap(el, ctx, "**"),
-        "em" | "i" => handle_wrap(el, ctx, "_"),
-        "del" | "s" | "strike" => handle_wrap(el, ctx, "~~"),
-        "a" => handle_link(el, ctx),
-        "img" => handle_img(el, ctx),
-        "code" => handle_code(el, ctx),
-        "pre" => handle_pre(el, ctx),
-        "blockquote" => handle_blockquote(el, ctx),
-        "ul" => handle_list(el, ctx, false),
-        "ol" => handle_list(el, ctx, true),
-        "li" => handle_li(el, ctx),
-        "table" => handle_table(el, ctx),
-        "thead" | "tbody" | "tfoot" => walk_children(el, ctx),
-        "tr" => handle_tr(el, ctx),
-        "td" | "th" => handle_td(el, ctx),
-        // turndown keeps <title> text (default rule) — replicate that quirk
-        "script" | "style" => {}
+        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => rule_heading(el, ctx, &tag),
+        "p" => rule_paragraph(el, ctx),
+        "br" => rule_br(),
+        "hr" => rule_hr(),
+        "strong" | "b" => rule_wrap(el, ctx, "**"),
+        "em" | "i" => rule_wrap(el, ctx, "_"),
+        "del" | "s" | "strike" => rule_wrap(el, ctx, "~~"),
+        "a" => rule_link(el, ctx),
+        "img" => rule_img(el),
+        "code" => rule_code(el, ctx),
+        "pre" => rule_pre(el, ctx),
+        "blockquote" => rule_blockquote(el, ctx),
+        "ul" => rule_list(el, ctx, false),
+        "ol" => rule_list(el, ctx, true),
+        "li" => rule_li(el, ctx),
+        "table" => rule_table(el, ctx),
+        "thead" | "tbody" | "tfoot" => process(el, ctx),
+        "tr" => rule_tr(el, ctx),
+        "td" | "th" => rule_td(el, ctx),
         _ => {
-            if is_block_element(&tag) {
-                handle_block_default(el, ctx);
+            let content = process(el, ctx);
+            if is_block_tag(&tag) {
+                format!("\n\n{}\n\n", content)
             } else {
-                walk_children(el, ctx);
+                content
             }
         }
     }
 }
 
-// ============================== Element handlers ==============================
+/// Turndown's join()
+fn join_str(left: &str, right: &str) -> String {
+    let s1 = trim_trailing_newlines(left);
+    let s2 = trim_leading_newlines(right);
+    let left_trailing = left.len() - s1.len();
+    let right_leading = right.len() - s2.len();
+    let nls = std::cmp::max(left_trailing, right_leading);
+    let nls = std::cmp::min(nls, 2);
+    let separator = &"\n\n"[..nls];
+    format!("{}{}{}", s1, separator, s2)
+}
 
-fn handle_heading(el: ElementRef, ctx: &mut Ctx, tag: &str) {
+fn trim_trailing_newlines(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    let mut end = bytes.len();
+    while end > 0 && bytes[end - 1] == b'\n' {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+fn trim_leading_newlines(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    let mut start = 0;
+    while start < bytes.len() && bytes[start] == b'\n' {
+        start += 1;
+    }
+    &s[start..]
+}
+
+fn post_process(output: &str) -> String {
+    let s = output
+        .trim_start_matches(|c: char| c == '\t' || c == '\r' || c == '\n')
+        .trim_end_matches(|c: char| c == '\t' || c == '\r' || c == '\n' || c == ' ');
+    s.to_string()
+}
+
+// ============================== isBlank ==============================
+
+fn is_blank_node(el: ElementRef) -> bool {
+    let tag = el.value().name().to_lowercase();
+    if is_void_tag(&tag) {
+        return false;
+    }
+    if is_meaningful_when_blank(&tag) {
+        return false;
+    }
+    let text: String = el.text().collect();
+    if !text.trim().is_empty() {
+        return false;
+    }
+    if has_void_descendant(el) || has_meaningful_descendant(el) {
+        return false;
+    }
+    true
+}
+
+fn is_void_tag(tag: &str) -> bool {
+    matches!(
+        tag,
+        "area" | "base" | "br" | "col" | "command" | "embed" | "hr" | "img"
+            | "input" | "keygen" | "link" | "meta" | "param" | "source" | "track" | "wbr"
+    )
+}
+
+fn is_meaningful_when_blank(tag: &str) -> bool {
+    matches!(
+        tag,
+        "a" | "table" | "thead" | "tbody" | "tfoot" | "th" | "td"
+            | "iframe" | "script" | "audio" | "video"
+    )
+}
+
+fn has_void_descendant(el: ElementRef) -> bool {
+    for desc in el.descendants() {
+        if let Node::Element(e) = desc.value() {
+            if is_void_tag(&e.name().to_lowercase()) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn has_meaningful_descendant(el: ElementRef) -> bool {
+    for desc in el.descendants() {
+        if let Node::Element(e) = desc.value() {
+            if is_meaningful_when_blank(&e.name().to_lowercase()) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// ============================== Flanking whitespace ==============================
+
+fn flanking_whitespace(el: ElementRef) -> (String, String) {
+    let tag = el.value().name().to_lowercase();
+    if is_block_tag(&tag) || is_block_or_br(&tag) {
+        return (String::new(), String::new());
+    }
+
+    // If element contains block descendants, skip flanking ws 
+    // (turndown's collapseWhitespace would have stripped inter-block whitespace)
+    if has_block_descendant(el) {
+        return (String::new(), String::new());
+    }
+    // Use collapsed text content to detect edges
+    let raw_text: String = el.text().collect();
+    let text_content = collapse_whitespace(&raw_text);
+    // Only detect flanking ws if text content actually starts/ends with whitespace
+    if !text_content.starts_with(' ') && !text_content.ends_with(' ') {
+        return (String::new(), String::new());
+    }
+    let edges = edge_whitespace(&text_content);
+
+    let mut leading = edges.leading;
+    let mut trailing = edges.trailing;
+
+    if !edges.leading_ascii.is_empty() && is_flanked_by_whitespace_left(el) {
+        leading = edges.leading_non_ascii.to_string();
+    }
+
+    if !edges.trailing_ascii.is_empty() && is_flanked_by_whitespace_right(el) {
+        trailing = edges.trailing_non_ascii.to_string();
+    }
+
+    (leading, trailing)
+}
+
+struct EdgeWhitespace {
+    leading: String,
+    leading_ascii: String,
+    leading_non_ascii: String,
+    trailing: String,
+    trailing_ascii: String,
+    trailing_non_ascii: String,
+}
+
+fn edge_whitespace(s: &str) -> EdgeWhitespace {
+    let chars: Vec<char> = s.chars().collect();
+    let len = chars.len();
+
+    let mut i = 0;
+    while i < len && is_ascii_ws(chars[i]) {
+        i += 1;
+    }
+    let leading_ascii_end = i;
+
+    while i < len && chars[i].is_whitespace() && !is_ascii_ws(chars[i]) {
+        i += 1;
+    }
+    let leading_end = i;
+
+    let mut last_non_ws = None;
+    for j in (0..len).rev() {
+        if !chars[j].is_whitespace() {
+            last_non_ws = Some(j);
+            break;
+        }
+    }
+
+    let (trailing, trailing_non_ascii, trailing_ascii) = if let Some(last) = last_non_ws {
+        let trail_start = last + 1;
+        let mut k = len;
+        while k > trail_start && is_ascii_ws(chars[k - 1]) {
+            k -= 1;
+        }
+        let trailing_ascii_start = k;
+        let trailing_str: String = chars[trail_start..].iter().collect();
+        let trailing_non_ascii_str: String =
+            chars[trail_start..trailing_ascii_start].iter().collect();
+        let trailing_ascii_str: String = chars[trailing_ascii_start..].iter().collect();
+        (trailing_str, trailing_non_ascii_str, trailing_ascii_str)
+    } else {
+        (String::new(), String::new(), String::new())
+    };
+
+    let leading: String = chars[..leading_end].iter().collect();
+    let leading_ascii: String = chars[..leading_ascii_end].iter().collect();
+    let leading_non_ascii: String = chars[leading_ascii_end..leading_end].iter().collect();
+
+    if last_non_ws.is_none() {
+        return EdgeWhitespace {
+            leading: s.to_string(),
+            leading_ascii,
+            leading_non_ascii,
+            trailing: String::new(),
+            trailing_ascii: String::new(),
+            trailing_non_ascii: String::new(),
+        };
+    }
+
+    EdgeWhitespace {
+        leading,
+        leading_ascii,
+        leading_non_ascii,
+        trailing,
+        trailing_ascii,
+        trailing_non_ascii,
+    }
+}
+
+fn has_block_descendant(el: ElementRef) -> bool {
+    for desc in el.descendants() {
+        if let Node::Element(e) = desc.value() {
+            if is_block_tag(&e.name().to_lowercase()) || is_block_or_br(&e.name().to_lowercase()) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn is_ascii_ws(c: char) -> bool {
+    c == ' ' || c == '\t' || c == '\r' || c == '\n'
+}
+
+fn is_flanked_by_whitespace_left(el: ElementRef) -> bool {
+    if let Some(sibling) = el.prev_sibling() {
+        match sibling.value() {
+            Node::Text(t) => t.text.ends_with(' '),
+            Node::Element(_) => {
+                if let Some(sib_el) = ElementRef::wrap(sibling) {
+                    if !is_block_tag(&sib_el.value().name().to_lowercase()) {
+                        let text: String = sib_el.text().collect();
+                        text.ends_with(' ')
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    } else {
+        false
+    }
+}
+
+fn is_flanked_by_whitespace_right(el: ElementRef) -> bool {
+    if let Some(sibling) = el.next_sibling() {
+        match sibling.value() {
+            Node::Text(t) => {
+                let s = &t.text;
+                s.starts_with(' ') || s.starts_with('\n') || s.starts_with('\t')
+            }
+            Node::Element(_) => {
+                if let Some(sib_el) = ElementRef::wrap(sibling) {
+                    if !is_block_tag(&sib_el.value().name().to_lowercase()) {
+                        let text: String = sib_el.text().collect();
+                        text.starts_with(' ')
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    } else {
+        false
+    }
+}
+
+// ============================== Rule implementations ==============================
+
+fn rule_heading(el: ElementRef, ctx: &mut Ctx, tag: &str) -> String {
     let level: usize = tag[1..].parse().unwrap_or(1);
     let prefix = "#".repeat(level);
-
     let was = ctx.in_heading;
     ctx.in_heading = true;
-    let content = inner_markdown(el, ctx);
+    let content = process(el, ctx);
     ctx.in_heading = was;
-
-    // Unescape "\." in heading text (custom rule from turndown.ts)
     let cleaned = content.replace(r"\.", ".").trim().to_string();
-
-    ensure_blank_line(&mut ctx.out);
-    ctx.out.push_str(&prefix);
-    ctx.out.push(' ');
-    ctx.out.push_str(&cleaned);
-    ctx.out.push_str("\n\n");
+    format!("\n\n{prefix} {cleaned}\n\n")
 }
 
-fn handle_paragraph(el: ElementRef, ctx: &mut Ctx) {
+fn rule_paragraph(el: ElementRef, ctx: &mut Ctx) -> String {
     if ctx.in_cell {
-        walk_children(el, ctx);
-        return;
+        return process(el, ctx);
     }
-    ensure_blank_line(&mut ctx.out);
-    walk_children(el, ctx);
-    ctx.out.push_str("\n\n");
+    let content = process(el, ctx);
+    format!("\n\n{}\n\n", content)
 }
 
-fn handle_br(ctx: &mut Ctx) {
-    if ctx.in_cell {
-        ctx.cell_buf.push_str("  \n");
+fn rule_br() -> String {
+    "  \n".to_string()
+}
+
+fn rule_hr() -> String {
+    "\n\n* * *\n\n".to_string()
+}
+
+fn rule_wrap(el: ElementRef, ctx: &mut Ctx, marker: &str) -> String {
+    let content = process(el, ctx);
+    if content.trim().is_empty() {
+        return String::new();
+    }
+
+    // Only apply flanking whitespace if content actually has leading/trailing space
+    let has_leading_space = content.starts_with(' ');
+    let has_trailing_space = content.ends_with(' ');
+    let (leading, trailing) = if has_leading_space || has_trailing_space {
+        flanking_whitespace(el)
     } else {
-        ctx.out.push_str("  \n");
-    }
+        (String::new(), String::new())
+    };
+    let inner = if !leading.is_empty() || !trailing.is_empty() {
+        content.trim().to_string()
+    } else {
+        content
+    };
+
+    format!("{leading}{marker}{inner}{marker}{trailing}")
 }
 
-fn handle_hr(ctx: &mut Ctx) {
-    ensure_blank_line(&mut ctx.out);
-    ctx.out.push_str("* * *\n\n");
-}
-
-fn handle_block_default(el: ElementRef, ctx: &mut Ctx) {
-    let content = inner_markdown(el, ctx);
-    let trimmed = content.trim();
-    if trimmed.is_empty() {
-        // Empty block still produces a boundary
-        ensure_blank_line(&mut ctx.out);
-        return;
-    }
-    ensure_blank_line(&mut ctx.out);
-    ctx.out.push_str(trimmed);
-    ctx.out.push_str("\n\n");
-}
-
-fn handle_wrap(el: ElementRef, ctx: &mut Ctx, marker: &str) {
-    if ctx.in_cell {
-        let content = inner_markdown(el, ctx);
-        if !content.is_empty() {
-            ctx.cell_buf.push_str(marker);
-            ctx.cell_buf.push_str(&content);
-            ctx.cell_buf.push_str(marker);
-        }
-        return;
-    }
-    let content = inner_markdown(el, ctx);
-    if content.is_empty() {
-        return;
-    }
-    ctx.out.push_str(marker);
-    ctx.out.push_str(&content);
-    ctx.out.push_str(marker);
-}
-
-fn handle_link(el: ElementRef, ctx: &mut Ctx) {
+fn rule_link(el: ElementRef, ctx: &mut Ctx) -> String {
     let raw_href = el.value().attr("href").unwrap_or("");
+    if raw_href.is_empty() {
+        return process(el, ctx);
+    }
+
     let href = escape_url_parens(raw_href);
     let title = el.value().attr("title");
-    let raw_content = inner_markdown(el, ctx);
-    let content = raw_content.trim();
+    let content = process(el, ctx);
+
+    // Only apply flanking whitespace if content actually has leading/trailing space
+    let has_leading_space = content.starts_with(' ');
+    let has_trailing_space = content.ends_with(' ');
+    let (leading, trailing) = if has_leading_space || has_trailing_space {
+        flanking_whitespace(el)
+    } else {
+        (String::new(), String::new())
+    };
+    let inner = if !leading.is_empty() || !trailing.is_empty() {
+        content.trim().to_string()
+    } else {
+        content
+    };
+
     let title_part = match title {
         Some(t) if !t.is_empty() => {
             let escaped = t.replace('"', r#"\""#);
@@ -270,17 +568,15 @@ fn handle_link(el: ElementRef, ctx: &mut Ctx) {
         }
         _ => String::new(),
     };
-    let result = format!("[{content}]({href}{title_part})");
-    if ctx.in_cell {
-        ctx.cell_buf.push_str(&result);
-    } else {
-        ctx.out.push_str(&result);
-    }
+    format!("{leading}[{inner}]({href}{title_part}){trailing}")
 }
 
-fn handle_img(el: ElementRef, ctx: &mut Ctx) {
+fn rule_img(el: ElementRef) -> String {
     let alt = el.value().attr("alt").unwrap_or("");
     let raw_src = el.value().attr("src").unwrap_or("");
+    if raw_src.is_empty() {
+        return String::new();
+    }
     let src = escape_url_parens(raw_src);
     let title = el.value().attr("title");
     let title_part = match title {
@@ -290,29 +586,45 @@ fn handle_img(el: ElementRef, ctx: &mut Ctx) {
         }
         _ => String::new(),
     };
-    let result = format!("![{alt}]({src}{title_part})");
-    if ctx.in_cell {
-        ctx.cell_buf.push_str(&result);
-    } else {
-        ctx.out.push_str(&result);
-    }
+    format!("![{alt}]({src}{title_part})")
 }
 
-fn handle_code(el: ElementRef, ctx: &mut Ctx) {
+fn rule_code(el: ElementRef, ctx: &mut Ctx) -> String {
     if ctx.in_pre {
-        walk_children(el, ctx);
-        return;
+        let was_code = ctx.in_code;
+        ctx.in_code = true;
+        let result = process(el, ctx);
+        ctx.in_code = was_code;
+        return result;
     }
     let text = el.text().collect::<String>();
-    let result = format!("`{text}`");
-    if ctx.in_cell {
-        ctx.cell_buf.push_str(&result);
-    } else {
-        ctx.out.push_str(&result);
+    if text.is_empty() {
+        return String::new();
     }
+    let content = text.replace(|c: char| c == '\r' || c == '\n', " ");
+    let extra_space =
+        if content.starts_with('`') || content.ends_with('`')
+            || (content.starts_with(' ')
+                && content.ends_with(' ')
+                && content.chars().any(|c| c != ' '))
+        {
+            " "
+        } else {
+            ""
+        };
+    let mut delimiter = "`".to_string();
+    let backtick_re = Regex::new(r"`+").unwrap();
+    let matches: Vec<String> = backtick_re
+        .find_iter(&content)
+        .map(|m| m.as_str().to_string())
+        .collect();
+    while matches.contains(&delimiter) {
+        delimiter.push('`');
+    }
+    format!("{delimiter}{extra_space}{content}{extra_space}{delimiter}")
 }
 
-fn handle_pre(el: ElementRef, ctx: &mut Ctx) {
+fn rule_pre(el: ElementRef, ctx: &mut Ctx) -> String {
     let code_child = el
         .children()
         .filter_map(|c| ElementRef::wrap(c))
@@ -325,48 +637,55 @@ fn handle_pre(el: ElementRef, ctx: &mut Ctx) {
         })
     });
 
-    if code_child.is_some() {
-        ensure_blank_line(&mut ctx.out);
-        ctx.out.push_str("```");
-        if let Some(ref l) = lang {
-            ctx.out.push_str(l);
-        }
-        ctx.out.push('\n');
+    if let Some(_code_el) = code_child {
+        let mut fence_size: usize = 3;
         ctx.in_pre = true;
-        walk_children(el, ctx);
+        ctx.in_code = true;
+        let code_text = process(el, ctx);
         ctx.in_pre = false;
-        if !ctx.out.ends_with('\n') {
-            ctx.out.push('\n');
+        ctx.in_code = false;
+
+        let fence_re = Regex::new(r"(?m)^`{3,}").unwrap();
+        for m in fence_re.find_iter(&code_text) {
+            if m.as_str().len() >= fence_size {
+                fence_size = m.as_str().len() + 1;
+            }
         }
-        ctx.out.push_str("```\n\n");
+
+        let fence: String = std::iter::repeat('`').take(fence_size).collect();
+        let lang_str = lang.as_deref().unwrap_or("");
+        let code_trimmed = code_text.trim_end_matches('\n');
+        format!("\n\n{fence}{lang_str}\n{code_trimmed}\n{fence}\n\n")
     } else {
-        // <pre> without <code> — escape markdown but preserve whitespace
         ctx.in_pre = true;
         ctx.pre_no_code = true;
-        walk_children(el, ctx);
+        let content = process(el, ctx);
         ctx.in_pre = false;
         ctx.pre_no_code = false;
-        ctx.out.push_str("\n\n");
+        format!("\n\n{}\n\n", content)
     }
 }
 
-fn handle_blockquote(el: ElementRef, ctx: &mut Ctx) {
-    let content = inner_markdown(el, ctx);
-    let content = content.trim();
-    ensure_blank_line(&mut ctx.out);
-    for line in content.split('\n') {
-        if line.is_empty() {
-            ctx.out.push_str(">\n");
-        } else {
-            ctx.out.push_str("> ");
-            ctx.out.push_str(line);
-            ctx.out.push('\n');
-        }
-    }
-    ctx.out.push('\n');
+fn rule_blockquote(el: ElementRef, ctx: &mut Ctx) -> String {
+    let content = process(el, ctx);
+    let trimmed = content
+        .trim_start_matches('\n')
+        .trim_end_matches('\n');
+    let quoted = trimmed
+        .split('\n')
+        .map(|line| {
+            if line.is_empty() {
+                ">".to_string()
+            } else {
+                format!("> {}", line)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("\n\n{}\n\n", quoted)
 }
 
-fn handle_list(el: ElementRef, ctx: &mut Ctx, ordered: bool) {
+fn rule_list(el: ElementRef, ctx: &mut Ctx, ordered: bool) -> String {
     let start: usize = if ordered {
         el.value()
             .attr("start")
@@ -376,38 +695,54 @@ fn handle_list(el: ElementRef, ctx: &mut Ctx, ordered: bool) {
         1
     };
 
-    let is_top_level = ctx.list_stack.is_empty();
-    if is_top_level {
-        ensure_blank_line(&mut ctx.out);
-    } else if !ctx.out.ends_with('\n') {
-        ctx.out.push('\n');
-    }
-
     ctx.list_stack.push(ListCtx {
         ordered,
         start,
         item_index: 0,
     });
 
-    // Only process element children (skip whitespace text nodes between <li>s)
+    let mut output = String::new();
     for child in el.children() {
         if let Some(child_el) = ElementRef::wrap(child) {
-            handle_element(child_el, ctx);
+            let replacement = replacement_for_node(child_el, ctx);
+            if !replacement.is_empty() {
+                output = join_str(&output, &replacement);
+            }
         }
     }
 
     ctx.list_stack.pop();
 
-    if is_top_level {
-        ctx.out.push('\n');
+    let parent_is_li = el
+        .parent()
+        .and_then(|p| p.value().as_element().map(|e| e.name().eq_ignore_ascii_case("li")))
+        .unwrap_or(false);
+
+    let is_last_child = if parent_is_li {
+        el.parent()
+            .map(|p| {
+                p.children()
+                    .filter_map(|c| ElementRef::wrap(c))
+                    .last()
+                    .map(|last| last.id() == el.id())
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
+    if parent_is_li && is_last_child {
+        format!("\n{}", output)
+    } else {
+        format!("\n\n{}\n\n", output)
     }
 }
 
-fn handle_li(el: ElementRef, ctx: &mut Ctx) {
+fn rule_li(el: ElementRef, ctx: &mut Ctx) -> String {
     let depth = ctx.list_stack.len();
     if depth == 0 {
-        walk_children(el, ctx);
-        return;
+        return process(el, ctx);
     }
 
     let list_ctx = ctx.list_stack.last_mut().unwrap();
@@ -419,102 +754,98 @@ fn handle_li(el: ElementRef, ctx: &mut Ctx) {
     };
     list_ctx.item_index += 1;
 
-    let content = inner_markdown(el, ctx);
-    let content = content
+    let content = process(el, ctx);
+
+    let is_paragraph = content.ends_with('\n');
+    let trimmed = content
         .trim_start_matches('\n')
-        .trim_end();
+        .trim_end_matches('\n');
+    let with_trailing = if is_paragraph {
+        format!("{}\n", trimmed)
+    } else {
+        trimmed.to_string()
+    };
+    let indented = with_trailing.replace('\n', "\n  ");
 
-    // Indent continuation lines by 2 spaces (like turndown)
-    let indented = content.replace('\n', "\n  ");
-
-    ctx.out.push_str(&prefix);
-    ctx.out.push_str(&indented);
-    if el.next_sibling().is_some() {
-        ctx.out.push('\n');
-    }
+    let has_next = el.next_sibling().is_some();
+    format!(
+        "{}{}{}",
+        prefix,
+        indented,
+        if has_next { "\n" } else { "" }
+    )
 }
 
 // ============================== Table handling ==============================
 
-fn handle_table(el: ElementRef, ctx: &mut Ctx) {
+fn rule_table(el: ElementRef, ctx: &mut Ctx) -> String {
     let was_in_table = ctx.in_table;
     let saved_rows = std::mem::take(&mut ctx.table_rows);
     let saved_cells = std::mem::take(&mut ctx.table_cells);
     ctx.in_table = true;
 
-    walk_children(el, ctx);
+    process(el, ctx);
 
     ctx.in_table = was_in_table;
 
     if ctx.table_rows.is_empty() {
         ctx.table_rows = saved_rows;
         ctx.table_cells = saved_cells;
-        return;
+        return String::new();
     }
 
-    ensure_blank_line(&mut ctx.out);
-
+    let mut result = String::new();
     let header = &ctx.table_rows[0];
     let col_count = header.len();
 
-    ctx.out.push_str("| ");
-    ctx.out.push_str(&header.join(" | "));
-    ctx.out.push_str(" |\n");
+    result.push_str("| ");
+    result.push_str(&header.join(" | "));
+    result.push_str(" |\n");
 
-    ctx.out.push_str("| ");
-    ctx.out.push_str(&vec!["---"; col_count].join(" | "));
-    ctx.out.push_str(" |\n");
+    result.push_str("| ");
+    result.push_str(&vec!["---"; col_count].join(" | "));
+    result.push_str(" |\n");
 
     for row in &ctx.table_rows[1..] {
-        ctx.out.push_str("| ");
+        result.push_str("| ");
         let mut padded = row.clone();
         while padded.len() < col_count {
             padded.push(String::new());
         }
-        ctx.out.push_str(&padded.join(" | "));
-        ctx.out.push_str(" |\n");
+        result.push_str(&padded.join(" | "));
+        result.push_str(" |\n");
     }
 
-    ctx.out.push('\n');
     ctx.table_rows = saved_rows;
     ctx.table_cells = saved_cells;
+
+    format!("\n\n{}\n", result)
 }
 
-fn handle_tr(el: ElementRef, ctx: &mut Ctx) {
+fn rule_tr(el: ElementRef, ctx: &mut Ctx) -> String {
     ctx.table_cells.clear();
-    walk_children(el, ctx);
+    for child in el.children() {
+        if let Some(child_el) = ElementRef::wrap(child) {
+            replacement_for_node(child_el, ctx);
+        }
+    }
     let row = std::mem::take(&mut ctx.table_cells);
     if !row.is_empty() {
         ctx.table_rows.push(row);
     }
+    String::new()
 }
 
-fn handle_td(el: ElementRef, ctx: &mut Ctx) {
+fn rule_td(el: ElementRef, ctx: &mut Ctx) -> String {
     let was_in_cell = ctx.in_cell;
-    let saved_buf = std::mem::take(&mut ctx.cell_buf);
     ctx.in_cell = true;
-    walk_children(el, ctx);
-    let cell = ctx.cell_buf.trim().to_string();
-    ctx.cell_buf = saved_buf;
+    let content = process(el, ctx);
     ctx.in_cell = was_in_cell;
-    ctx.table_cells.push(cell);
+    ctx.table_cells.push(content.trim().to_string());
+    String::new()
 }
 
 // ============================== Helpers ==============================
-
-fn inner_markdown(el: ElementRef, ctx: &mut Ctx) -> String {
-    let saved_out = std::mem::take(&mut ctx.out);
-    let saved_in_cell = ctx.in_cell;
-    let saved_in_table = ctx.in_table;
-    let saved_cell_buf = std::mem::take(&mut ctx.cell_buf);
-    ctx.in_cell = false;
-    ctx.in_table = false;
-    walk_children(el, ctx);
-    ctx.in_cell = saved_in_cell;
-    ctx.in_table = saved_in_table;
-    ctx.cell_buf = saved_cell_buf;
-    std::mem::replace(&mut ctx.out, saved_out)
-}
 
 fn collapse_whitespace(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
@@ -534,15 +865,7 @@ fn collapse_whitespace(text: &str) -> String {
 }
 
 fn escape_markdown(text: &str) -> String {
-    // Match turndown's escape order:
-    // 1. Escape existing backslashes
-    // 2. Escape special inline chars
-    // 3. Escape start-of-text patterns
-
-    // Step 1: escape backslashes first
     let s = text.replace('\\', "\\\\");
-
-    // Step 2: per-character inline escapes
     let mut result = String::with_capacity(s.len() + 8);
     for ch in s.chars() {
         match ch {
@@ -554,7 +877,6 @@ fn escape_markdown(text: &str) -> String {
         }
     }
 
-    // Step 3: start-of-text escapes (turndown uses ^ anchor per text node)
     if result.starts_with('-') {
         result = format!("\\-{}", &result[1..]);
     } else if result.starts_with("+ ") {
@@ -562,7 +884,6 @@ fn escape_markdown(text: &str) -> String {
     } else if result.starts_with('>') {
         result = format!("\\>{}", &result[1..]);
     } else if result.starts_with("\\~\\~\\~") {
-        // ~~~ after step 2 is \~\~\~ — match the escaped version
         result = format!("\\{}", &result);
     } else {
         let eq_count = result.chars().take_while(|&c| c == '=').count();
@@ -570,10 +891,14 @@ fn escape_markdown(text: &str) -> String {
             result = format!("\\{}", &result);
         } else {
             let hash_count = result.chars().take_while(|&c| c == '#').count();
-            if (1..=6).contains(&hash_count) && result.as_bytes().get(hash_count) == Some(&b' ') {
+            if (1..=6).contains(&hash_count) && result.as_bytes().get(hash_count) == Some(&b' ')
+            {
                 result = format!("\\{}", &result);
             } else {
-                let digit_count = result.chars().take_while(|c| c.is_ascii_digit()).count();
+                let digit_count = result
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .count();
                 if digit_count > 0 && result[digit_count..].starts_with(". ") {
                     let digits = &result[..digit_count];
                     result = format!("{}\\. {}", digits, &result[digit_count + 2..]);
@@ -585,34 +910,38 @@ fn escape_markdown(text: &str) -> String {
     result
 }
 
-fn ensure_blank_line(out: &mut String) {
-    let trimmed_len = out.trim_end_matches(|c: char| c.is_ascii_whitespace()).len();
-    if trimmed_len == 0 {
-        out.clear();
-        return;
-    }
-    out.truncate(trimmed_len);
-    out.push_str("\n\n");
-}
-
-fn collapse_blank_lines(s: String) -> String {
-    let re = Regex::new(r"\n{3,}").unwrap();
-    re.replace_all(&s, "\n\n").into_owned()
-}
-
 fn escape_url_parens(url: &str) -> String {
     url.replace('(', r"\(").replace(')', r"\)")
 }
 
 fn is_block_or_br(tag: &str) -> bool {
-    tag == "br" || matches!(tag,
-        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "p" | "pre" | "blockquote" |
-        "table" | "thead" | "tbody" | "tfoot" | "tr" | "td" | "th" |
-        "ul" | "ol" | "li" | "hr"
-    ) || is_block_element(tag)
+    tag == "br"
+        || matches!(
+            tag,
+            "h1" | "h2"
+                | "h3"
+                | "h4"
+                | "h5"
+                | "h6"
+                | "p"
+                | "pre"
+                | "blockquote"
+                | "table"
+                | "thead"
+                | "tbody"
+                | "tfoot"
+                | "tr"
+                | "td"
+                | "th"
+                | "ul"
+                | "ol"
+                | "li"
+                | "hr"
+        )
+        || is_block_tag(tag)
 }
 
-fn is_block_element(tag: &str) -> bool {
+fn is_block_tag(tag: &str) -> bool {
     matches!(
         tag,
         "address"
@@ -652,6 +981,7 @@ fn strip_p_in_cell(inner: &str) -> String {
     let s = re_p_mid.replace_all(&s, " ");
     s.into_owned()
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -910,6 +1240,14 @@ Content"
             html_to_markdown(html),
             "[\\[1\\]](#cite)"
         );
+    }
+
+    #[test]
+    fn test_div_inside_link() {
+        let html = r##"<a href="#"><div>Top</div></a>"##;
+        let result = html_to_markdown(html);
+        assert!(!result.contains("\t"), "Output should not contain tabs: {:?}", result);
+        assert!(result.contains("["), "Should contain link: {:?}", result);
     }
 
     #[test]
