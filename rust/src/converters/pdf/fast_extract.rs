@@ -84,6 +84,9 @@ pub(crate) struct FontInfo {
     /// Unsupported predefined CMap: text through this font cannot be
     /// decoded — the page must go to the fallback engine.
     unsupported_cmap: bool,
+    /// Predefined CJK CMap (GBK-EUC-H and friends): variable-length
+    /// codes to CIDs, with the ordering's CID->Unicode table.
+    cjk: Option<std::sync::Arc<super::cjk_cmap::CjkCmap>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -107,6 +110,7 @@ impl Default for FontInfo {
             symbol_font: SymbolFont::None,
             ucs2_codes: false,
             unsupported_cmap: false,
+            cjk: None,
             size_hint_monospace: false,
         }
     }
@@ -140,11 +144,18 @@ fn build_font(pdf: &Pdf, dict: &Dict) -> FontInfo {
             // same text; assembly treats them as horizontal runs.
             Some(Val::Name(b"Identity-H")) | Some(Val::Name(b"Identity-V")) | None => {}
             Some(Val::Name(n)) => {
-                if n.ends_with(b"UCS2-H") || n.ends_with(b"UCS2-V") {
+                if n.ends_with(b"UCS2-H")
+                    || n.ends_with(b"UCS2-V")
+                    || n.ends_with(b"UTF16-H")
+                    || n.ends_with(b"UTF16-V")
+                {
+                    // Codes are UCS-2/UTF-16 code units directly.
                     info.ucs2_codes = true;
+                } else if let Some(cm) = super::cjk_cmap::lookup(n) {
+                    info.cjk = Some(cm);
                 } else {
-                    // GBK-EUC-H and friends need Adobe's CMap tables;
-                    // refuse rather than emit garbage.
+                    // Not in Adobe's published set: refuse rather than
+                    // emit garbage.
                     info.unsupported_cmap = true;
                 }
             }
@@ -1471,7 +1482,15 @@ impl<'a> Interp<'a> {
         let mut text = String::new();
         let mut advance = 0.0f64; // text-space units (pre-scale)
 
-        let codes: Vec<(u32, bool)> = if font.two_byte {
+        // (code-or-cid, is-space-byte, resolved unicode override)
+        let codes: Vec<(u32, bool, Option<char>)> = if let Some(cjk) = &font.cjk {
+            // Variable-length codes; unicode comes straight from the
+            // ordering's CID->Unicode table.
+            cjk.decode(bytes)
+                .into_iter()
+                .map(|(cid, uni)| (cid, false, uni))
+                .collect()
+        } else if font.two_byte {
             bytes
                 .chunks(2)
                 .map(|c| {
@@ -1480,15 +1499,15 @@ impl<'a> Interp<'a> {
                     } else {
                         c[0] as u32
                     };
-                    (v, false)
+                    (v, false, None)
                 })
                 .collect()
         } else {
-            bytes.iter().map(|&b| (b as u32, b == 32)).collect()
+            bytes.iter().map(|&b| (b as u32, b == 32, None)).collect()
         };
 
-        for (code, is_space_byte) in codes {
-            let w = if font.two_byte {
+        for (code, is_space_byte, uni_override) in codes {
+            let w = if font.two_byte || font.cjk.is_some() {
                 *font.cid_widths.get(&code).unwrap_or(&font.default_width)
             } else {
                 let w = font.widths[code as usize & 0xff];
@@ -1509,7 +1528,12 @@ impl<'a> Interp<'a> {
                 })
                 * self.ts.h_scale;
 
-            if font.two_byte {
+            if let Some(c) = uni_override {
+                text.push(c);
+            } else if font.cjk.is_some() {
+                // CID had no unicode mapping: emit nothing rather than
+                // garbage (matches the notdef behavior).
+            } else if font.two_byte {
                 if font.ucs2_codes {
                     // Codes are UCS-2 code units directly.
                     if let Some(c) = char::from_u32(code) {
@@ -2075,6 +2099,26 @@ mod tests {
 
     /// Password-protected fixtures decrypt with either the user or the
     /// owner password and refuse a wrong one. Env-var scoped in a single
+    /// A predefined CJK CMap (GBK-EUC-H) decodes both the multi-byte
+    /// hanzi codespace and 1-byte ASCII through Adobe's tables.
+    #[test]
+    fn predefined_cjk_cmap_decodes() {
+        let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 6 0 R >> endobj
+4 0 obj << /Type /Font /Subtype /Type0 /BaseFont /STSong-Light /Encoding /GBK-EUC-H /DescendantFonts [5 0 R] >> endobj
+5 0 obj << /Type /Font /Subtype /CIDFontType0 /BaseFont /STSong-Light /CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 2 >> /DW 1000 >> endobj
+6 0 obj << /Length 52 >> stream
+BT /F1 12 Tf 72 720 Td <C4E3BAC3> Tj (Hi) Tj ET
+endstream endobj
+trailer << /Root 1 0 R >>";
+        let pages = extract_pages_fast(pdf).expect("cjk cmap");
+        let text = text_of(&pages);
+        assert!(text.contains("\u{4F60}\u{597D}"), "got: {text}");
+        assert!(text.contains("Hi"), "got: {text}");
+    }
+
     /// A wrong /Length must not corrupt the stream: the parser verifies
     /// the endstream delimiter and recovers by scanning.
     #[test]
