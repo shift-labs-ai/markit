@@ -73,3 +73,7 @@ crate-type = ["cdylib", "rlib"]
 name = "markit"
 path = "src/main.rs"
 required-features = ["cli"]
+
+[[bench]]
+name = "engine"
+harness = false
