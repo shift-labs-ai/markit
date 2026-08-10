@@ -3,8 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../config.js";
 import { Markit } from "../markit.js";
-import { loadAllPlugins } from "../plugins/loader.js";
-import { createLlmFunctions, registerProvider } from "../providers/index.js";
+import { createLlmFunctions } from "../providers/index.js";
 import { EXIT_ERROR, EXIT_UNSUPPORTED } from "../utils/exit-codes.js";
 import type { OutputOptions } from "../utils/output.js";
 import { dim, error, output, success } from "../utils/output.js";
@@ -26,17 +25,8 @@ export async function convert(
   },
 ): Promise<void> {
   const config = loadConfig();
-  const plugins = await loadAllPlugins();
-
-  // Register any providers from plugins
-  for (const plugin of plugins) {
-    for (const provider of plugin.providers) {
-      registerProvider(provider);
-    }
-  }
-
   const llmFunctions = createLlmFunctions(config, options.prompt);
-  const markit = new Markit(llmFunctions, plugins);
+  const markit = new Markit(llmFunctions);
 
   // Auto-create a temp dir for images if not explicitly provided
   const imageDir =

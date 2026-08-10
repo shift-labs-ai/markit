@@ -18,7 +18,6 @@ pub struct ConvertOptions {
 
 pub fn convert(source: &str, opts: &ConvertOptions) -> u8 {
     let config = crate::config::load_config();
-    let plugins = crate::plugins::loader::load_all_plugins().unwrap_or_default();
 
     // LLM describe/transcribe closures from config (mirrors createLlmFunctions).
     let mut options = match crate::providers::create_llm_functions(&config, opts.prompt.clone()) {
@@ -29,7 +28,7 @@ pub fn convert(source: &str, opts: &ConvertOptions) -> u8 {
         }
     };
     options.prompt = opts.prompt.clone();
-    let markit = Markit::new(options, plugins);
+    let markit = Markit::new(options);
 
     // Auto-create a temp dir for images if not explicitly provided
     let image_dir = opts.image_dir.clone().unwrap_or_else(|| {

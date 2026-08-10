@@ -5,6 +5,9 @@ use anyhow::Result;
 pub struct StreamInfo {
     pub mimetype: Option<String>,
     pub extension: Option<String>,
+    /// Struct-shape parity with TS StreamInfo; the Rust converters decode
+    /// lossy UTF-8 (the TS CLI never sets a non-UTF-8 charset either).
+    #[allow(dead_code)]
     pub charset: Option<String>,
     pub filename: Option<String>,
     pub local_path: Option<String>,

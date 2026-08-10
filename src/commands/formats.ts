@@ -1,4 +1,3 @@
-import { loadAllPlugins } from "../plugins/loader.js";
 import type { OutputOptions } from "../utils/output.js";
 import { bold, dim, output } from "../utils/output.js";
 
@@ -6,7 +5,6 @@ interface Format {
   name: string;
   extensions: string[];
   builtin: boolean;
-  plugin?: string;
   dep?: string;
 }
 
@@ -72,20 +70,8 @@ export async function formats(
   _args: string[],
   options: OutputOptions,
 ): Promise<void> {
-  const plugins = await loadAllPlugins();
-  const pluginFormats: Format[] = plugins.flatMap((p) =>
-    p.formats.map((f) => ({
-      name: f.name,
-      extensions: f.extensions,
-      builtin: false,
-      plugin: p.name,
-    })),
-  );
-
-  const allFormats = [...BUILTIN_FORMATS, ...pluginFormats];
-
   output(options, {
-    json: () => ({ formats: allFormats }),
+    json: () => ({ formats: BUILTIN_FORMATS }),
     human: () => {
       console.log();
       console.log(bold("Supported formats"));
@@ -94,17 +80,6 @@ export async function formats(
         const exts = fmt.extensions.join(", ");
         const note = fmt.dep ? dim(` (requires: npm i ${fmt.dep})`) : "";
         console.log(`  ${fmt.name.padEnd(14)} ${dim(exts)}${note}`);
-      }
-      if (pluginFormats.length > 0) {
-        console.log();
-        console.log(bold("Plugin formats"));
-        console.log();
-        for (const fmt of pluginFormats) {
-          const exts = fmt.extensions.join(", ");
-          console.log(
-            `  ${fmt.name.padEnd(14)} ${dim(exts)} ${dim(`(${fmt.plugin})`)}`,
-          );
-        }
       }
       console.log();
     },

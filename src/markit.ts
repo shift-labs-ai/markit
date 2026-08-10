@@ -19,7 +19,6 @@ import { XlsxConverter } from "./converters/xlsx.js";
 import { XmlConverter } from "./converters/xml.js";
 import { YamlConverter } from "./converters/yaml.js";
 import { ZipConverter } from "./converters/zip.js";
-import type { PluginDef } from "./plugins/types.js";
 import type {
   ConversionResult,
   Converter,
@@ -33,11 +32,8 @@ export class Markit {
   private converters: Converter[] = [];
   private options: MarkitOptions;
 
-  constructor(options: MarkitOptions = {}, plugins: PluginDef[] = []) {
+  constructor(options: MarkitOptions = {}) {
     this.options = options;
-
-    // Plugin converters go first — they override builtins for the same format
-    const pluginConverters = plugins.flatMap((p) => p.converters);
 
     // Built-in converters: specific formats first, generic last.
     const specific: Converter[] = [
@@ -60,13 +56,11 @@ export class Markit {
 
     const generic: Converter[] = [new XmlConverter(), new HtmlConverter()];
 
-    // ZIP gets all converters (plugin + builtin) for recursive extraction
-    const allNonZip = [...pluginConverters, ...specific, ...generic];
+    // ZIP gets all converters for recursive extraction
+    const allNonZip = [...specific, ...generic];
     const zipConverter = new ZipConverter(allNonZip);
 
-    // Plugin converters first, then builtins, plain text last
     this.converters = [
-      ...pluginConverters,
       ...specific,
       zipConverter,
       ...generic,

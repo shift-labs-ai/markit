@@ -3,7 +3,6 @@ mod config;
 mod converters;
 mod discover_markdown_source;
 mod markit;
-mod plugins;
 mod providers;
 mod types;
 mod utils;
@@ -89,11 +88,6 @@ enum Commands {
         #[command(subcommand)]
         action: ConfigAction,
     },
-    /// Manage plugins
-    Plugin {
-        #[command(subcommand)]
-        action: PluginAction,
-    },
     /// Add markit instructions to CLAUDE.md or AGENTS.md
     Onboard,
 }
@@ -116,22 +110,6 @@ enum ConfigAction {
     },
 }
 
-#[derive(Subcommand)]
-enum PluginAction {
-    /// Install a plugin (npm:pkg, git:url, or local path)
-    Install {
-        /// Plugin source
-        source: String,
-    },
-    /// Remove an installed plugin
-    Remove {
-        /// Plugin name
-        name: String,
-    },
-    /// List installed plugins
-    List,
-}
-
 const NO_ARGS_HELP: &str = "markit — convert anything to markdown
 
 Usage:  markit <file-or-url> [options]
@@ -150,9 +128,7 @@ Commands:
 Run markit --help for all options.
 Docs: https://github.com/Michaelliv/markit";
 
-const KNOWN_COMMANDS: &[&str] = &[
-    "convert", "formats", "onboard", "help", "init", "config", "plugin",
-];
+const KNOWN_COMMANDS: &[&str] = &["convert", "formats", "onboard", "help", "init", "config"];
 
 fn levenshtein(a: &str, b: &str) -> usize {
     let m = a.len();
@@ -197,7 +173,7 @@ fn main() -> ExitCode {
             // Check if it's NOT a known command/alias — if so check for typos
             let is_known = matches!(
                 first_arg.as_str(),
-                "convert" | "c" | "formats" | "init" | "config" | "plugin" | "onboard" | "help"
+                "convert" | "c" | "formats" | "init" | "config" | "onboard" | "help"
             );
             if !is_known {
                 let close: Vec<&&str> = KNOWN_COMMANDS
@@ -245,24 +221,6 @@ fn main() -> ExitCode {
                 ConfigAction::Set { key, value } => config_set(&key, value.as_deref(), &opts),
             }
             ExitCode::SUCCESS
-        }
-        Some(Commands::Plugin { action }) => {
-            let result = match action {
-                PluginAction::Install { source } => {
-                    crate::commands::plugin::install(&source, cli.json, cli.quiet)
-                }
-                PluginAction::Remove { name } => {
-                    crate::commands::plugin::remove(&name, cli.json, cli.quiet)
-                }
-                PluginAction::List => crate::commands::plugin::list(cli.json, cli.quiet),
-            };
-            match result {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(e) => {
-                    error(&e.to_string());
-                    ExitCode::from(1)
-                }
-            }
         }
         Some(Commands::Onboard) => {
             let opts = OutputOptions {
@@ -377,7 +335,7 @@ mod tests {
     fn known_commands_match_ts() {
         assert_eq!(
             KNOWN_COMMANDS,
-            &["convert", "formats", "onboard", "help", "init", "config", "plugin"]
+            &["convert", "formats", "onboard", "help", "init", "config"]
         );
     }
 

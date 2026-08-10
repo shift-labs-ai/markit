@@ -93,16 +93,12 @@ pub struct Markit {
 }
 
 impl Markit {
-    pub fn new(options: MarkitOptions, plugins: Vec<Box<dyn Converter>>) -> Self {
-        Self::with_http(options, plugins, Box::new(UreqFetcher))
+    pub fn new(options: MarkitOptions) -> Self {
+        Self::with_http(options, Box::new(UreqFetcher))
     }
 
     /// Constructor with injectable HTTP for testing.
-    pub fn with_http(
-        options: MarkitOptions,
-        plugins: Vec<Box<dyn Converter>>,
-        http: Box<dyn HttpFetch>,
-    ) -> Self {
+    pub fn with_http(options: MarkitOptions, http: Box<dyn HttpFetch>) -> Self {
         // Built-in converters: specific formats first, generic last.
         // Mirrors the ordering in src/markit.ts constructor.
         let specific: Vec<Box<dyn Converter>> = vec![
@@ -127,7 +123,6 @@ impl Markit {
             vec![Box::new(XmlConverter), Box::new(HtmlConverter)];
 
         // Build zip parent list from fresh builtin instances
-        // (plugins would need a factory pattern to duplicate into zip's list)
         #[allow(clippy::arc_with_non_send_sync)] // single-threaded; Arc only for shared ownership
         let zip_parent_converters: Arc<Vec<Box<dyn Converter>>> = Arc::new(vec![
             Box::new(PdfConverter),
@@ -151,9 +146,8 @@ impl Markit {
 
         let zip = ZipConverter::new(Arc::clone(&zip_parent_converters));
 
-        // Plugin converters first, then builtins, plain text last
+        // Builtins first, plain text last
         let mut converters: Vec<Box<dyn Converter>> = Vec::new();
-        converters.extend(plugins);
         converters.extend(specific);
         converters.push(Box::new(zip));
         converters.extend(generic);
@@ -544,7 +538,13 @@ mod tests {
     }
 
     fn make_markit(mock: MockHttp) -> Markit {
-        Markit::with_http(MarkitOptions::default(), vec![], Box::new(mock))
+        Markit::with_http(MarkitOptions::default(), Box::new(mock))
+    }
+
+    /// Prepend a converter to the registry (test-only) to exercise
+    /// convert_url hook dispatch with a mock converter.
+    fn prepend_converter(markit: &mut Markit, converter: Box<dyn Converter>) {
+        markit.converters.insert(0, converter);
     }
 
     // ── Test: converter convert_url hooks ────────────────────────────
@@ -590,7 +590,7 @@ mod tests {
 
     #[test]
     fn convert_url_dispatches_to_converter_hook() {
-        // Use a mock converter with convert_url hook as a plugin.
+        // Use a mock converter with a convert_url hook.
         // This verifies that Markit::convert_url delegates to converter hooks
         // before falling through to the generic fetch path.
         let mock_converter = MockUrlConverter {
@@ -604,11 +604,8 @@ Handled by converter hook."
         let mock_http = MockHttp::new();
         // No HTTP mocks needed — the converter hook handles it directly.
 
-        let markit = Markit::with_http(
-            MarkitOptions::default(),
-            vec![Box::new(mock_converter)],
-            Box::new(mock_http),
-        );
+        let mut markit = Markit::with_http(MarkitOptions::default(), Box::new(mock_http));
+        prepend_converter(&mut markit, Box::new(mock_converter));
         let result = markit
             .convert_url("https://custom.example.com/page")
             .unwrap();

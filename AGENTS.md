@@ -10,8 +10,6 @@ bun run dev -- convert <file-or-url>   # Explicit convert command
 bun run dev -- formats                 # List supported formats
 bun run dev -- init                    # Create .markit/ config directory
 bun run dev -- config show             # Show configuration
-bun run dev -- plugin install <src>    # Install a plugin (npm:, git:, or path)
-bun run dev -- plugin list             # List installed plugins
 bun test                               # Tests (TS)
 bun run check                          # Biome lint + format (TS)
 cd rust && cargo test                  # Tests (Rust port)
@@ -30,8 +28,7 @@ are intentionally allowed to keep the ports auditable against their sources).
 - `src/markit.ts` — `Markit` class: converter registry. Tries converters in priority order.
 - `src/types.ts` — StreamInfo, ConversionResult, Converter, MarkitOptions interfaces
 - `src/converters/` — One file per format (20 converters: pdf, docx, pptx, xlsx, html, epub, ipynb, rss, image, audio, csv, json, xml, yaml, zip, github, wikipedia, iwork, plain-text)
-- `src/commands/` — CLI commands (convert, formats, onboard, init, config, plugin)
-- `src/plugins/` — Plugin system (install from npm/git/local, loader, API)
+- `src/commands/` — CLI commands (convert, formats, onboard, init, config)
 - `src/utils/output.ts` — Chalk output helpers, triple output (json/quiet/human)
 
 ## Key Patterns
@@ -41,7 +38,6 @@ are intentionally allowed to keep the ports auditable against their sources).
 - **Output triple**: Every command supports `--json`, `--quiet`, and human-readable output
 - **URL support**: `markit https://example.com` fetches and converts. Converters with `convertUrl()` can handle fetching themselves.
 - **LLM providers**: `MarkitOptions.describe` for image description, `MarkitOptions.transcribe` for audio transcription. Passed through via `--prompt`.
-- **Plugin system**: Extend with custom converters via `markit plugin install npm:pkg` / `git:url` / local path
 - **Optional deps**: xlsx is a dynamic import — fails gracefully with install instructions
 
 ## Adding a New Converter

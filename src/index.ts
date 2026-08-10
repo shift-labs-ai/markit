@@ -19,18 +19,6 @@ export { XmlConverter } from "./converters/xml.js";
 export { YamlConverter } from "./converters/yaml.js";
 export { ZipConverter } from "./converters/zip.js";
 export { Markit } from "./markit.js";
-export { createPluginAPI, resolvePluginExport } from "./plugins/api.js";
-export {
-  installPlugin,
-  listInstalled,
-  removePlugin,
-} from "./plugins/installer.js";
-export { loadAllPlugins, loadPluginFromPath } from "./plugins/loader.js";
-export type {
-  MarkitPluginAPI,
-  PluginDef,
-  PluginFunction,
-} from "./plugins/types.js";
 export { anthropic } from "./providers/anthropic.js";
 export {
   createLlmFunctions,

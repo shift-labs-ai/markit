@@ -64,7 +64,6 @@ markit data.xlsx -q | napkin create "Imported Data"
 | Code | `.py` `.ts` `.go` `.rs` ... | Fenced code block |
 | Plain text | `.txt` `.md` `.rst` `.log` | Pass-through |
 
-Need more? [Write a plugin.](#plugins)
 
 ---
 
@@ -92,81 +91,6 @@ Focus the AI on what matters:
 markit receipt.jpg -p "List all line items with prices as a table"
 markit diagram.png -p "Describe the architecture and data flow"
 markit whiteboard.jpg -p "Extract all text verbatim"
-```
-
----
-
-## Plugins
-
-Extend markit with new formats, override builtins, or add LLM providers.
-
-### Install
-
-```bash
-markit plugin install npm:markit-plugin-dwg
-markit plugin install git:github.com/user/markit-plugin-ocr
-markit plugin install ./my-plugin.ts
-markit plugin list
-markit plugin remove dwg
-```
-
-### Write a Plugin
-
-A plugin is a function that receives an API and registers converters and/or providers:
-
-```typescript
-import type { MarkitPluginAPI } from "markit-ai";
-
-export default function(api: MarkitPluginAPI) {
-  api.setName("cad");
-  api.setVersion("1.0.0");
-
-  // Register a converter for a new format
-  api.registerConverter(
-    {
-      name: "dwg",
-      accepts: (info) => [".dwg", ".dxf"].includes(info.extension || ""),
-      convert: async (input, info) => {
-        // Your conversion logic
-        return { markdown: "..." };
-      },
-    },
-    // Optional: declare the format so it shows in `markit formats`
-    { name: "AutoCAD", extensions: [".dwg", ".dxf"] },
-  );
-}
-```
-
-Plugin converters run **before** builtins. so you can override any format:
-
-```typescript
-export default function(api: MarkitPluginAPI) {
-  api.setName("better-pdf");
-
-  // This replaces the built-in PDF converter
-  api.registerConverter({
-    name: "pdf",
-    accepts: (info) => info.extension === ".pdf",
-    convert: async (input, info) => {
-      // Your superior PDF extraction
-      return { markdown: "..." };
-    },
-  });
-}
-```
-
-Plugins can also register LLM providers:
-
-```typescript
-api.registerProvider({
-  name: "gemini",
-  envKeys: ["GOOGLE_API_KEY"],
-  defaultBase: "https://generativelanguage.googleapis.com/v1beta",
-  defaultModel: "gemini-2.0-flash",
-  create: (config, prompt) => ({
-    describe: async (image, mime) => { /* ... */ },
-  }),
-});
 ```
 
 ---
@@ -252,16 +176,6 @@ const config = loadConfig(); // reads .markit/config.json + env vars
 const markit = new Markit(createLlmFunctions(config));
 ```
 
-With plugins:
-
-```typescript
-import { Markit, createLlmFunctions, loadConfig, loadAllPlugins } from "markit-ai";
-
-const config = loadConfig();
-const plugins = await loadAllPlugins();
-const markit = new Markit(createLlmFunctions(config), plugins);
-```
-
 ---
 
 ## Configuration
@@ -311,9 +225,6 @@ markit init                              # Create .markit/ config
 markit config show                       # Show settings
 markit config get <key>                  # Get config value
 markit config set <key> <value>          # Set config value
-markit plugin install <source>           # Install plugin
-markit plugin list                       # List plugins
-markit plugin remove <name>              # Remove plugin
 markit onboard                           # Add to CLAUDE.md
 ```
 

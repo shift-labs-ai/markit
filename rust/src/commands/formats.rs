@@ -148,7 +148,6 @@ pub fn formats(options: &OutputOptions) {
         let exts = fmt.extensions.join(", ");
         println!("  {:<14} {}", fmt.name, dim(&exts));
     }
-    // TODO(plugins): show plugin formats here
     println!();
 }
 
