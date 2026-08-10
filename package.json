@@ -24,10 +24,6 @@
     "build": "tsc",
     "prepublishOnly": "npm run build && napi prepublish -t npm --skip-gh-release",
     "dev": "bun run src/main.ts",
-    "build:bun": "bun build --compile src/main.ts --outfile mill",
-    "build:bun-linux": "bun build --compile --target=bun-linux-x64 src/main.ts --outfile mill-linux-x64",
-    "build:bun-mac-arm": "bun build --compile --target=bun-darwin-arm64 src/main.ts --outfile mill-darwin-arm64",
-    "build:bun-mac-x64": "bun build --compile --target=bun-darwin-x64 src/main.ts --outfile mill-darwin-x64",
     "test": "bun test",
     "format": "bunx biome format --write src/",
     "format:rust": "cd rust && cargo fmt",
@@ -36,7 +32,7 @@
     "check": "bunx biome check src/",
     "check:rust": "cd rust && cargo fmt --check && cargo clippy --all-targets -- -D warnings",
     "check:all": "npm run check && npm run check:rust",
-    "build:native": "napi build --release --strip --platform",
+    "build:native": "napi build --release --strip --platform --features napi --cargo-flags=--no-default-features --cargo-cwd rust",
     "artifacts": "napi artifacts"
   },
   "repository": {
@@ -53,8 +49,7 @@
     "docx",
     "html",
     "converter",
-    "ai",
-    "llm",
+    "rust",
     "agents"
   ],
   "license": "MIT",

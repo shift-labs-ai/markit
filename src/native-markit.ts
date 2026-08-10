@@ -7,6 +7,26 @@
  */
 
 import { createRequire } from "node:module";
+import { AudioConverter as TsAudioConverter } from "./converters/audio.js";
+import { CsvConverter as TsCsvConverter } from "./converters/csv.js";
+import { DocxConverter as TsDocxConverter } from "./converters/docx.js";
+import { EpubConverter as TsEpubConverter } from "./converters/epub.js";
+import { GitHubConverter as TsGitHubConverter } from "./converters/github.js";
+import { HtmlConverter as TsHtmlConverter } from "./converters/html.js";
+import { ImageConverter as TsImageConverter } from "./converters/image.js";
+import { IpynbConverter as TsIpynbConverter } from "./converters/ipynb.js";
+import { IWorkConverter as TsIWorkConverter } from "./converters/iwork.js";
+import { JsonConverter as TsJsonConverter } from "./converters/json.js";
+import { PdfConverter as TsPdfConverter } from "./converters/pdf/index.js";
+import { PlainTextConverter as TsPlainTextConverter } from "./converters/plain-text.js";
+import { PptxConverter as TsPptxConverter } from "./converters/pptx.js";
+import { RssConverter as TsRssConverter } from "./converters/rss.js";
+import { WikipediaConverter as TsWikipediaConverter } from "./converters/wikipedia.js";
+import { XlsxConverter as TsXlsxConverter } from "./converters/xlsx.js";
+import { XmlConverter as TsXmlConverter } from "./converters/xml.js";
+import { YamlConverter as TsYamlConverter } from "./converters/yaml.js";
+import { ZipConverter as TsZipConverter } from "./converters/zip.js";
+import { Markit as TsMarkit } from "./markit.js";
 import type { ConversionResult, Converter, StreamInfo } from "./types.js";
 
 // Re-export types so consumers can import everything from one place
@@ -16,38 +36,25 @@ export type { ConversionResult, Converter, StreamInfo } from "./types.js";
 
 interface NativeBinding {
   Markit: new () => NativeMarkitInstance;
-  converterNames(): string[];
-  converterAccepts(name: string, info: JsStreamInfo): boolean;
+  converterAccepts(name: string, info: StreamInfo): boolean;
   converterConvert(
     name: string,
     input: Buffer,
-    info: JsStreamInfo,
-  ): Promise<JsConversionResult>;
+    info: StreamInfo,
+  ): Promise<ConversionResult>;
   converterConvertUrl(
     name: string,
     url: string,
-  ): Promise<JsConversionResult | null>;
+  ): Promise<ConversionResult | null>;
 }
 
 interface NativeMarkitInstance {
-  convert(input: Buffer, info?: JsStreamInfo): Promise<JsConversionResult>;
-  convertFile(path: string, extra?: JsStreamInfo): Promise<JsConversionResult>;
-  convertUrl(url: string): Promise<JsConversionResult>;
-}
-
-interface JsStreamInfo {
-  mimetype?: string;
-  extension?: string;
-  charset?: string;
-  filename?: string;
-  localPath?: string;
-  url?: string;
-  imageDir?: string;
-}
-
-interface JsConversionResult {
-  markdown: string;
-  title?: string;
+  convert(input: Buffer, info?: StreamInfo): Promise<ConversionResult>;
+  convertFile(
+    path: string,
+    extra?: Partial<StreamInfo>,
+  ): Promise<ConversionResult>;
+  convertUrl(url: string): Promise<ConversionResult>;
 }
 
 let native: NativeBinding | null = null;
@@ -64,39 +71,22 @@ if (!process.env.MARKIT_FORCE_TS) {
 /** Whether the native addon is loaded. */
 export const isNative: boolean = native !== null;
 
-// ---------- TS fallback imports (lazy) ----------
-
-let _tsMarkit: typeof import("./markit.js") | null = null;
-
-async function getTsMarkit() {
-  if (!_tsMarkit) {
-    _tsMarkit = await import("./markit.js");
-  }
-  return _tsMarkit;
-}
-
 // ---------- Markit class ----------
 
 /**
  * Drop-in replacement for the TS Markit class.
- * Uses native addon when available, falls back to TS.
+ * Uses the native addon when available, falls back to TS.
  */
 export class Markit {
   private _native: NativeMarkitInstance | null = null;
-  private _ts: InstanceType<typeof import("./markit.js").Markit> | null = null;
+  private _ts: TsMarkit | null = null;
 
   constructor() {
     if (native) {
       this._native = new native.Markit();
+    } else {
+      this._ts = new TsMarkit();
     }
-  }
-
-  private async ts() {
-    if (!this._ts) {
-      const mod = await getTsMarkit();
-      this._ts = new mod.Markit();
-    }
-    return this._ts;
   }
 
   async convert(
@@ -106,7 +96,7 @@ export class Markit {
     if (this._native) {
       return this._native.convert(input, streamInfo);
     }
-    return (await this.ts()).convert(input, streamInfo);
+    return (this._ts as TsMarkit).convert(input, streamInfo);
   }
 
   async convertFile(
@@ -114,57 +104,35 @@ export class Markit {
     extra?: Partial<StreamInfo>,
   ): Promise<ConversionResult> {
     if (this._native) {
-      return this._native.convertFile(path, extra as JsStreamInfo | undefined);
+      return this._native.convertFile(path, extra);
     }
-    return (await this.ts()).convertFile(path, extra);
+    return (this._ts as TsMarkit).convertFile(path, extra);
   }
 
   async convertUrl(url: string): Promise<ConversionResult> {
     if (this._native) {
       return this._native.convertUrl(url);
     }
-    return (await this.ts()).convertUrl(url);
+    return (this._ts as TsMarkit).convertUrl(url);
   }
 }
 
 // ---------- Converter wrappers ----------
 
 /**
- * A converter class that delegates to the native addon by name,
- * falling back to the TS implementation when native is unavailable.
+ * Build a converter class with the same shape as the TS original:
+ * native-by-name when the addon is loaded, TS instance otherwise.
  */
-function makeNativeConverter(
-  converterName: string,
-  getTsFallback: () => Promise<Converter>,
-): Converter {
-  let tsFallback: Converter | null = null;
-
-  const getFallback = async (): Promise<Converter> => {
-    if (!tsFallback) {
-      tsFallback = await getTsFallback();
-    }
-    return tsFallback;
-  };
-
-  // For accepts(), we need synchronous access — always have TS fallback ready
-  // if native is not available
-  const converter: Converter = {
-    name: converterName,
+function makeConverterClass(converterName: string, tsFallback: Converter) {
+  return class implements Converter {
+    name = converterName;
 
     accepts(streamInfo: StreamInfo): boolean {
       if (native) {
         return native.converterAccepts(converterName, streamInfo);
       }
-      // Synchronous fallback: if TS converter not loaded yet, load it sync-style
-      // This is fine because accepts() is always called in a context where
-      // the converter was previously loaded or we can load it.
-      if (!tsFallback) {
-        // Return false if we can't check synchronously — the Markit class
-        // handles routing anyway
-        return false;
-      }
       return tsFallback.accepts(streamInfo);
-    },
+    }
 
     async convert(
       input: Buffer,
@@ -173,10 +141,10 @@ function makeNativeConverter(
       if (native) {
         return native.converterConvert(converterName, input, streamInfo);
       }
-      return (await getFallback()).convert(input, streamInfo);
-    },
+      return tsFallback.convert(input, streamInfo);
+    }
 
-    convertUrl: async (url: string): Promise<ConversionResult> => {
+    async convertUrl(url: string): Promise<ConversionResult> {
       if (native) {
         const result = await native.converterConvertUrl(converterName, url);
         if (result === null) {
@@ -186,126 +154,87 @@ function makeNativeConverter(
         }
         return result;
       }
-      const fb = await getFallback();
-      if (!fb.convertUrl) {
+      if (!tsFallback.convertUrl) {
         throw new Error(
           `Converter '${converterName}' does not support URL conversion`,
         );
       }
-      return fb.convertUrl(url);
-    },
-  };
-
-  return converter;
-}
-
-// ---------- Individual converter classes ----------
-// These maintain the same class-based export shape as the TS originals.
-
-function makeConverterClass(
-  converterName: string,
-  importFn: () => Promise<Converter>,
-) {
-  const inner = makeNativeConverter(converterName, importFn);
-
-  return class implements Converter {
-    name = converterName;
-
-    accepts(streamInfo: StreamInfo): boolean {
-      return inner.accepts(streamInfo);
-    }
-
-    async convert(
-      input: Buffer,
-      streamInfo: StreamInfo,
-    ): Promise<ConversionResult> {
-      return inner.convert(input, streamInfo);
-    }
-
-    async convertUrl(url: string): Promise<ConversionResult> {
-      if (!inner.convertUrl) {
-        throw new Error(`${converterName}: no convertUrl hook`);
-      }
-      return inner.convertUrl(url);
+      return tsFallback.convertUrl(url);
     }
   };
 }
 
 export const AudioConverter = makeConverterClass(
   "audio",
-  async () => new (await import("./converters/audio.js")).AudioConverter(),
+  new TsAudioConverter(),
 );
-export const CsvConverter = makeConverterClass(
-  "csv",
-  async () => new (await import("./converters/csv.js")).CsvConverter(),
-);
-export const DocxConverter = makeConverterClass(
-  "docx",
-  async () => new (await import("./converters/docx.js")).DocxConverter(),
-);
-export const EpubConverter = makeConverterClass(
-  "epub",
-  async () => new (await import("./converters/epub.js")).EpubConverter(),
-);
+export const CsvConverter = makeConverterClass("csv", new TsCsvConverter());
+export const DocxConverter = makeConverterClass("docx", new TsDocxConverter());
+export const EpubConverter = makeConverterClass("epub", new TsEpubConverter());
 export const GitHubConverter = makeConverterClass(
   "github",
-  async () => new (await import("./converters/github.js")).GitHubConverter(),
+  new TsGitHubConverter(),
 );
-export const HtmlConverter = makeConverterClass(
-  "html",
-  async () => new (await import("./converters/html.js")).HtmlConverter(),
-);
+export const HtmlConverter = makeConverterClass("html", new TsHtmlConverter());
 export const ImageConverter = makeConverterClass(
   "image",
-  async () => new (await import("./converters/image.js")).ImageConverter(),
+  new TsImageConverter(),
 );
 export const IpynbConverter = makeConverterClass(
   "ipynb",
-  async () => new (await import("./converters/ipynb.js")).IpynbConverter(),
+  new TsIpynbConverter(),
 );
 export const IWorkConverter = makeConverterClass(
   "iwork",
-  async () => new (await import("./converters/iwork.js")).IWorkConverter(),
+  new TsIWorkConverter(),
 );
-export const JsonConverter = makeConverterClass(
-  "json",
-  async () => new (await import("./converters/json.js")).JsonConverter(),
-);
-export const PdfConverter = makeConverterClass(
-  "pdf",
-  async () => new (await import("./converters/pdf/index.js")).PdfConverter(),
-);
+export const JsonConverter = makeConverterClass("json", new TsJsonConverter());
+export const PdfConverter = makeConverterClass("pdf", new TsPdfConverter());
 export const PlainTextConverter = makeConverterClass(
   "plain-text",
-  async () =>
-    new (await import("./converters/plain-text.js")).PlainTextConverter(),
+  new TsPlainTextConverter(),
 );
-export const PptxConverter = makeConverterClass(
-  "pptx",
-  async () => new (await import("./converters/pptx.js")).PptxConverter(),
-);
-export const RssConverter = makeConverterClass(
-  "rss",
-  async () => new (await import("./converters/rss.js")).RssConverter(),
-);
+export const PptxConverter = makeConverterClass("pptx", new TsPptxConverter());
+export const RssConverter = makeConverterClass("rss", new TsRssConverter());
 export const WikipediaConverter = makeConverterClass(
   "wikipedia",
-  async () =>
-    new (await import("./converters/wikipedia.js")).WikipediaConverter(),
+  new TsWikipediaConverter(),
 );
-export const XlsxConverter = makeConverterClass(
-  "xlsx",
-  async () => new (await import("./converters/xlsx.js")).XlsxConverter(),
-);
-export const XmlConverter = makeConverterClass(
-  "xml",
-  async () => new (await import("./converters/xml.js")).XmlConverter(),
-);
-export const YamlConverter = makeConverterClass(
-  "yaml",
-  async () => new (await import("./converters/yaml.js")).YamlConverter(),
-);
-export const ZipConverter = makeConverterClass(
-  "zip",
-  async () => new (await import("./converters/zip.js")).ZipConverter([]),
-);
+export const XlsxConverter = makeConverterClass("xlsx", new TsXlsxConverter());
+export const XmlConverter = makeConverterClass("xml", new TsXmlConverter());
+export const YamlConverter = makeConverterClass("yaml", new TsYamlConverter());
+
+/**
+ * ZipConverter keeps the original constructor signature
+ * `new ZipConverter(parentConverters)`. When a custom parent list is
+ * supplied, conversion always uses the TS implementation (the native
+ * registry only knows the builtins); with no argument, the native path
+ * uses the builtin parent set.
+ */
+export class ZipConverter implements Converter {
+  name = "zip";
+  private readonly ts: TsZipConverter;
+  private readonly custom: boolean;
+
+  constructor(parentConverters: Converter[] = []) {
+    this.custom = parentConverters.length > 0;
+    this.ts = new TsZipConverter(parentConverters);
+  }
+
+  accepts(streamInfo: StreamInfo): boolean {
+    if (native && !this.custom) {
+      return native.converterAccepts("zip", streamInfo);
+    }
+    return this.ts.accepts(streamInfo);
+  }
+
+  async convert(
+    input: Buffer,
+    streamInfo: StreamInfo,
+  ): Promise<ConversionResult> {
+    if (native && !this.custom) {
+      return native.converterConvert("zip", input, streamInfo);
+    }
+    return this.ts.convert(input, streamInfo);
+  }
+}

@@ -23,7 +23,7 @@ jobs:
       - name: Type check
         run: bunx tsc --noEmit
       - name: Run tests
-        run: bun test || echo "No tests found, skipping"
+        run: bun test
 
   # ── Rust: fmt, clippy, tests ─────────────────────────────────────────────────
   rust:

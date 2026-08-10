@@ -7,10 +7,13 @@ license = "MIT"
 
 [dependencies]
 anyhow = "1"
-base64 = "0.23.1"
 clap = { version = "4", features = ["derive"] }
+ego-tree = "0.11"
 kamadak-exif = "0.6.1"
 lofty = "0.25.0"
+mupdf = "0.8.0"
+napi = { version = "2", default-features = false, features = ["napi8", "async"], optional = true }
+napi-derive = { version = "2", optional = true }
 regex = "1.13.1"
 roxmltree = "0.21.1"
 # "deterministic" keeps attributes in source order (IndexMap) — required for
@@ -18,14 +21,14 @@ roxmltree = "0.21.1"
 scraper = { version = "0.27.0", features = ["deterministic"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
-mupdf = "0.8.0"
 ureq = "3.4.0"
 zip = "8.6.0"
-ego-tree = "0.11"
-napi = { version = "2", default-features = false, features = ["napi8", "async"], optional = true }
-napi-derive = { version = "2", optional = true }
 
 [features]
+default = ["cli"]
+# The clap CLI binary. Deselected by npm's build:native (napi symbols only
+# resolve inside a Node process, so the bin cannot link with "napi" active).
+cli = []
 napi = ["dep:napi", "dep:napi-derive", "dep:napi-build"]
 
 [lints.clippy]
@@ -45,3 +48,4 @@ crate-type = ["cdylib", "rlib"]
 [[bin]]
 name = "markit"
 path = "src/main.rs"
+required-features = ["cli"]

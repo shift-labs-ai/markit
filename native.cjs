@@ -79,4 +79,8 @@ try {
   nativeBinding = null;
 }
 
+if (loadError && process.env.MARKIT_DEBUG) {
+  console.error('[markit] native addon unavailable, using TS fallback:', loadError.message);
+}
+
 module.exports = nativeBinding;

@@ -5,8 +5,16 @@ import { dirname, join } from 'node:path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 
-// Load native addon
-const native = require(join(__dirname, 'markit.darwin-arm64.node'));
+// Load native addon for the current platform (dev builds land in rust/ or repo root)
+const { platform, arch } = process;
+const file = `markit.${platform}-${arch === 'x64' ? 'x64' : arch}${platform === 'linux' ? '-gnu' : ''}.node`;
+const candidates = [join(__dirname, file), join(__dirname, '..', file)];
+const found = candidates.find((p) => require('node:fs').existsSync(p));
+if (!found) {
+  console.error(`No native build found (looked for ${file}). Run: bun run build:native`);
+  process.exit(1);
+}
+const native = require(found);
 
 console.log('Exports:', Object.keys(native));
 

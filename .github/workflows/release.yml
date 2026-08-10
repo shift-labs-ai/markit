@@ -64,7 +64,7 @@ jobs:
         run: bunx tsc --noEmit
 
       - name: Run tests
-        run: bun test || echo "No tests found, skipping"
+        run: bun test
 
   # ── GitHub Release (existing job, unchanged) ─────────────────────────────
   release:
@@ -122,6 +122,7 @@ jobs:
         run: |
           bunx napi build --release --strip --platform \
             --target ${{ matrix.target }} \
+            --features napi --cargo-flags=--no-default-features \
             --cargo-cwd rust
 
       - uses: actions/upload-artifact@v4
@@ -197,6 +198,7 @@ jobs:
         run: |
           npx napi build --release --strip --platform \
             --target ${{ matrix.target }} \
+            --features napi --cargo-flags=--no-default-features \
             --cargo-cwd rust
 
       - uses: actions/upload-artifact@v4

@@ -905,7 +905,6 @@ name = "markit"
 version = "0.5.3"
 dependencies = [
  "anyhow",
- "base64",
  "clap",
  "ego-tree",
  "kamadak-exif",

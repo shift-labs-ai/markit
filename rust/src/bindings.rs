@@ -267,48 +267,17 @@ pub fn converter_convert_url(name: String, url: String) -> AsyncTask<ConverterCo
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-/// Build a single converter by name. The names match `Converter::name()`
-/// for each builtin converter.
+/// Build a single converter by name (matching `Converter::name()`),
+/// sourced from the same builders the registry uses. zip and plain-text
+/// are not in the builder lists and are constructed explicitly.
 fn converter_by_name(name: &str) -> Result<Box<dyn Converter>> {
-    use crate::converters::audio::AudioConverter;
-    use crate::converters::csv::CsvConverter;
-    use crate::converters::docx::DocxConverter;
-    use crate::converters::epub::EpubConverter;
-    use crate::converters::github::GitHubConverter;
-    use crate::converters::html::HtmlConverter;
-    use crate::converters::image::ImageConverter;
-    use crate::converters::ipynb::IpynbConverter;
-    use crate::converters::iwork::IWorkConverter;
-    use crate::converters::json::JsonConverter;
-    use crate::converters::pdf::index::PdfConverter;
     use crate::converters::plain_text::PlainTextConverter;
-    use crate::converters::pptx::PptxConverter;
-    use crate::converters::rss::RssConverter;
-    use crate::converters::wikipedia::WikipediaConverter;
-    use crate::converters::xlsx::XlsxConverter;
-    use crate::converters::xml::XmlConverter;
-    use crate::converters::yaml::YamlConverter;
     use crate::converters::zip::ZipConverter;
+    use crate::markit::{builtin_generic, builtin_specific};
     use std::sync::Arc;
 
     match name {
-        "pdf" => Ok(Box::new(PdfConverter)),
-        "docx" => Ok(Box::new(DocxConverter)),
-        "pptx" => Ok(Box::new(PptxConverter)),
-        "xlsx" => Ok(Box::new(XlsxConverter)),
-        "epub" => Ok(Box::new(EpubConverter)),
-        "ipynb" => Ok(Box::new(IpynbConverter)),
-        "iwork" => Ok(Box::new(IWorkConverter)),
-        "github" => Ok(Box::new(GitHubConverter::new())),
-        "wikipedia" => Ok(Box::new(WikipediaConverter)),
-        "rss" => Ok(Box::new(RssConverter)),
-        "csv" => Ok(Box::new(CsvConverter)),
-        "json" => Ok(Box::new(JsonConverter)),
-        "yaml" => Ok(Box::new(YamlConverter)),
-        "image" => Ok(Box::new(ImageConverter)),
-        "audio" => Ok(Box::new(AudioConverter)),
         "zip" => {
-            use crate::markit::{builtin_generic, builtin_specific};
             // single-threaded; Arc only for shared ownership
             #[allow(clippy::arc_with_non_send_sync)]
             let parent: Arc<Vec<Box<dyn Converter>>> = Arc::new(
@@ -319,9 +288,11 @@ fn converter_by_name(name: &str) -> Result<Box<dyn Converter>> {
             );
             Ok(Box::new(ZipConverter::new(parent)))
         }
-        "xml" => Ok(Box::new(XmlConverter)),
-        "html" => Ok(Box::new(HtmlConverter)),
         "plain-text" => Ok(Box::new(PlainTextConverter)),
-        _ => Err(Error::from_reason(format!("Unknown converter: {}", name))),
+        _ => builtin_specific()
+            .into_iter()
+            .chain(builtin_generic())
+            .find(|c| c.name() == name)
+            .ok_or_else(|| Error::from_reason(format!("Unknown converter: {}", name))),
     }
 }
