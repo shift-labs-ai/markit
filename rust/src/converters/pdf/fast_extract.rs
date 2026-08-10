@@ -9,7 +9,7 @@
 //! regions keep the MuPDF path's device-space (y-down) convention.
 
 use anyhow::{anyhow, bail, Result};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::own_pdf::{decode_stream, dget, Dict, Pdf, Val};
 
@@ -1250,6 +1250,10 @@ struct Interp<'a> {
     /// matching EMC).
     mc_depth: u32,
     actual_text: Option<ActualTextSpan>,
+    /// Object numbers of OCGs OFF in the default configuration.
+    hidden_ocgs: std::rc::Rc<FxHashSet<u32>>,
+    /// Depth of the outermost hidden optional-content span, when inside.
+    hidden_until: Option<u32>,
     ctm: Mat,
     ctm_stack: Vec<Mat>,
     ts: TextState,
@@ -1417,6 +1421,20 @@ impl<'a> Interp<'a> {
                 b"BMC" => self.mc_depth += 1,
                 b"BDC" => {
                     self.mc_depth += 1;
+                    // /OC spans referencing an OCG that is OFF in the
+                    // default configuration are invisible: suppress
+                    // their content like a viewer would.
+                    if self.hidden_until.is_none() && !self.hidden_ocgs.is_empty() {
+                        if let [o1 @ Operand::Name { .. }, o2 @ Operand::Name { .. }] =
+                            lex.operands.as_slice()
+                        {
+                            if lex.name_bytes(*o1) == b"OC"
+                                && self.ocg_hidden(lex.name_bytes(*o2), resources)
+                            {
+                                self.hidden_until = Some(self.mc_depth);
+                            }
+                        }
+                    }
                     // /ActualText in the property dict replaces whatever
                     // the enclosed operators draw (MuPDF honors this).
                     if self.actual_text.is_none() {
@@ -1432,6 +1450,9 @@ impl<'a> Interp<'a> {
                     }
                 }
                 b"EMC" => {
+                    if self.hidden_until == Some(self.mc_depth) {
+                        self.hidden_until = None;
+                    }
                     if let Some(span) = &self.actual_text {
                         if span.depth == self.mc_depth {
                             let span = self.actual_text.take().unwrap();
@@ -1457,6 +1478,36 @@ impl<'a> Interp<'a> {
             lex.clear();
         }
         Ok(())
+    }
+
+    /// Is the named /Properties entry an OCG (or OCMD) that the default
+    /// configuration turns OFF?
+    fn ocg_hidden(&self, name: &[u8], resources: Option<&Dict<'a>>) -> bool {
+        let Some(res) = resources else { return false };
+        let Ok(Some(Val::Dict(props))) = self.pdf.dict_get(res, b"Properties") else {
+            return false;
+        };
+        match dget(&props, name) {
+            Some(Val::Ref(num)) => {
+                if self.hidden_ocgs.contains(num) {
+                    return true;
+                }
+                // OCMD: /OCGs holds the actual group refs.
+                if let Ok(Val::Dict(d)) = self.pdf.object(*num) {
+                    match dget(&d, b"OCGs") {
+                        Some(Val::Ref(n)) => return self.hidden_ocgs.contains(n),
+                        Some(Val::Array(a)) => {
+                            return a
+                                .iter()
+                                .any(|v| matches!(v, Val::Ref(n) if self.hidden_ocgs.contains(n)))
+                        }
+                        _ => {}
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
     }
 
     /// Emit the replacement text of a closed /ActualText span using the
@@ -1535,6 +1586,15 @@ impl<'a> Interp<'a> {
     }
 
     fn show_text(&mut self, bytes: &[u8]) {
+        self.text_ops += 1;
+        if self.hidden_until.is_some() {
+            // Inside an OFF optional-content span: invisible.
+            return;
+        }
+        if self.ts.font.as_ref().is_some_and(|f| f.unsupported_cmap) {
+            self.unsupported_font = true;
+            return;
+        }
         let Some(font) = self.ts.font.clone() else {
             return;
         };
@@ -1729,6 +1789,9 @@ impl<'a> Interp<'a> {
             .unwrap_or(b"");
 
         if subtype == b"Image" {
+            if self.hidden_until.is_some() {
+                return;
+            }
             // Unit square through the CTM.
             let (ax, ay) = self.ctm.apply(0.0, 0.0);
             let (bx, by) = self.ctm.apply(1.0, 1.0);
@@ -1773,6 +1836,24 @@ impl<'a> Interp<'a> {
 }
 
 // ── Page assembly ───────────────────────────────────────────────────────────
+
+/// Object numbers of optional-content groups switched OFF in the
+/// default viewer configuration (Catalog /OCProperties /D /OFF).
+fn collect_hidden_ocgs(pdf: &Pdf, root: &Dict) -> std::rc::Rc<FxHashSet<u32>> {
+    let mut set = FxHashSet::default();
+    if let Ok(Some(Val::Dict(ocp))) = pdf.dict_get(root, b"OCProperties") {
+        if let Ok(Some(Val::Dict(d))) = pdf.dict_get(&ocp, b"D") {
+            if let Some(Val::Array(off)) = dget(&d, b"OFF") {
+                for v in off {
+                    if let Val::Ref(n) = v {
+                        set.insert(*n);
+                    }
+                }
+            }
+        }
+    }
+    std::rc::Rc::new(set)
+}
 
 /// Base CTM for a page: MediaBox-origin normalization composed with the
 /// /Rotate transform, plus the resulting (visual) page height. Rotation
@@ -1992,6 +2073,7 @@ pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
     let Some(Val::Dict(root)) = pdf.dict_get(&pdf.trailer, b"Root")? else {
         bail!("no Root");
     };
+    let hidden_ocgs = collect_hidden_ocgs(&pdf, &root);
     let Some(Val::Dict(pages_root)) = pdf.dict_get(&root, b"Pages")? else {
         bail!("no Pages");
     };
@@ -2088,6 +2170,8 @@ pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
             unsupported_font: false,
             mc_depth: 0,
             actual_text: None,
+            hidden_ocgs: hidden_ocgs.clone(),
+            hidden_until: None,
             ctm: base,
             ctm_stack: Vec::new(),
             ts: TextState::default(),
@@ -2171,6 +2255,7 @@ pub(crate) fn page_image_placements<'a>(
     let Some(Val::Dict(root)) = pdf.dict_get(&pdf.trailer, b"Root")? else {
         bail!("no Root");
     };
+    let hidden_ocgs = collect_hidden_ocgs(pdf, &root);
     let Some(Val::Dict(pages_root)) = pdf.dict_get(&root, b"Pages")? else {
         bail!("no Pages");
     };
@@ -2210,6 +2295,8 @@ pub(crate) fn page_image_placements<'a>(
         unsupported_font: false,
         mc_depth: 0,
         actual_text: None,
+        hidden_ocgs: hidden_ocgs.clone(),
+        hidden_until: None,
         ctm: base,
         ctm_stack: Vec::new(),
         ts: TextState::default(),
@@ -2302,6 +2389,27 @@ mod tests {
 
     /// Password-protected fixtures decrypt with either the user or the
     /// owner password and refuse a wrong one. Env-var scoped in a single
+    /// Content inside an /OC span whose OCG is OFF in the default
+    /// configuration is invisible and must be suppressed.
+    #[test]
+    fn hidden_ocg_layer_suppressed() {
+        let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [7 0 R] /D << /OFF [7 0 R] >> >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> /Properties << /MC0 7 0 R >> >> /Contents 5 0 R >> endobj
+4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+5 0 obj << /Length 92 >> stream
+BT /F1 12 Tf 72 720 Td (visible) Tj /OC /MC0 BDC ( hidden) Tj EMC ( also-visible) Tj ET
+endstream endobj
+7 0 obj << /Type /OCG /Name (Watermark) >> endobj
+trailer << /Root 1 0 R >>";
+        let pages = extract_pages_fast(pdf).expect("ocg");
+        let text = text_of(&pages);
+        assert!(text.contains("visible"), "got: {text}");
+        assert!(!text.contains("hidden"), "got: {text}");
+        assert!(text.contains("also-visible"), "got: {text}");
+    }
+
     /// /ActualText in a marked-content span replaces the drawn glyphs
     /// (tagged-PDF semantics, same as MuPDF).
     #[test]

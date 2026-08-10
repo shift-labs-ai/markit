@@ -278,6 +278,29 @@ fn extract_xobject(pdf: &Pdf, dict: &Dict, raw: &[u8]) -> Result<ExtractedImage>
         }
     }
 
+    // /Decode [1 0] inverts the sample ramp (commonly on 1-bit and
+    // CCITT-sourced bitmaps); ImageMask stencils render as grayscale
+    // (painted = black), which /Decode may flip.
+    let inverted = match pdf.dict_get(dict, b"Decode")? {
+        Some(Val::Array(a)) => {
+            let v: Vec<f64> = a
+                .iter()
+                .filter_map(|o| pdf.resolve(o).ok().and_then(|v| v.as_num()))
+                .collect();
+            v.len() >= 2 && v[0] > v[1]
+        }
+        _ => false,
+    };
+    let is_mask = matches!(pdf.dict_get(dict, b"ImageMask")?, Some(Val::Bool(true)));
+    if inverted != is_mask {
+        // ImageMask default paints 1-bits; without /Decode flip that
+        // means sample 1 = ink = black, which the 0..255 ramp already
+        // inverted once — XOR keeps both conventions straight.
+        for s in samples.iter_mut() {
+            *s = 255 - *s;
+        }
+    }
+
     // Expand palette / convert CMYK to what PNG can carry.
     let (color, final_samples) = match (&palette, components) {
         (Some(pal), 1) => {
@@ -308,6 +331,31 @@ fn extract_xobject(pdf: &Pdf, dict: &Dict, raw: &[u8]) -> Result<ExtractedImage>
         _ => bail!("unsupported component count {components}"),
     };
 
+    // /SMask: attach the soft mask as a PNG alpha channel when its
+    // dimensions match.
+    let (color, final_samples) = match smask_alpha(pdf, dict, width, height)? {
+        Some(alpha) => match color {
+            png::ColorType::Grayscale => {
+                let mut ga = Vec::with_capacity(final_samples.len() * 2);
+                for (i, &g) in final_samples.iter().enumerate() {
+                    ga.push(g);
+                    ga.push(alpha[i]);
+                }
+                (png::ColorType::GrayscaleAlpha, ga)
+            }
+            png::ColorType::Rgb => {
+                let mut rgba = Vec::with_capacity(final_samples.len() / 3 * 4);
+                for (i, px) in final_samples.chunks_exact(3).enumerate() {
+                    rgba.extend_from_slice(px);
+                    rgba.push(alpha[i]);
+                }
+                (png::ColorType::Rgba, rgba)
+            }
+            _ => (color, final_samples),
+        },
+        None => (color, final_samples),
+    };
+
     let mut out = Vec::new();
     {
         let mut enc = png::Encoder::new(&mut out, width, height);
@@ -321,6 +369,80 @@ fn extract_xobject(pdf: &Pdf, dict: &Dict, raw: &[u8]) -> Result<ExtractedImage>
         bytes: out,
         ext: "png",
     })
+}
+
+/// Decode an image's /SMask stream into one alpha byte per pixel, when
+/// present and dimension-matched.
+fn smask_alpha(pdf: &Pdf, dict: &Dict, width: u32, height: u32) -> Result<Option<Vec<u8>>> {
+    let Some(Val::Stream(sd, sraw)) = pdf.dict_get(dict, b"SMask")? else {
+        return Ok(None);
+    };
+    let sw = pdf
+        .dict_get(&sd, b"Width")?
+        .and_then(|v| v.as_num())
+        .unwrap_or(0.0) as u32;
+    let sh = pdf
+        .dict_get(&sd, b"Height")?
+        .and_then(|v| v.as_num())
+        .unwrap_or(0.0) as u32;
+    if sw != width || sh != height {
+        return Ok(None); // scaled masks: skip rather than resample
+    }
+    let sbpc = pdf
+        .dict_get(&sd, b"BitsPerComponent")?
+        .and_then(|v| v.as_num())
+        .unwrap_or(8.0) as u32;
+    // DCT-coded masks would need a JPEG decode; keep to bitmap masks.
+    let filters = match pdf.dict_get(&sd, b"Filter")? {
+        Some(Val::Name(n)) => vec![n.to_vec()],
+        Some(Val::Array(a)) => a
+            .iter()
+            .filter_map(|v| pdf.resolve(v).ok())
+            .filter_map(|v| v.as_name().map(|n| n.to_vec()))
+            .collect(),
+        _ => Vec::new(),
+    };
+    if filters
+        .iter()
+        .any(|f| matches!(f.as_slice(), b"DCTDecode" | b"JPXDecode" | b"JBIG2Decode"))
+    {
+        return Ok(None);
+    }
+    let data = decode_stream(&sd, sraw, pdf)?;
+    let row_in = (width as usize * sbpc as usize).div_ceil(8);
+    if data.len() < row_in * height as usize {
+        return Ok(None);
+    }
+    let mut alpha = Vec::with_capacity(width as usize * height as usize);
+    for row in 0..height as usize {
+        let r = &data[row * row_in..(row + 1) * row_in];
+        match sbpc {
+            8 => alpha.extend_from_slice(&r[..width as usize]),
+            16 => {
+                for pair in r.chunks_exact(2).take(width as usize) {
+                    alpha.push(pair[0]);
+                }
+            }
+            1 | 2 | 4 => {
+                let per = 8 / sbpc as usize;
+                let max = (1u16 << sbpc) - 1;
+                let mut n = 0usize;
+                'row: for &byte in r {
+                    for k in 0..per {
+                        let shift = 8 - sbpc as usize * (k + 1);
+                        let v = ((byte as u16 >> shift) & max) * 255 / max;
+                        alpha.push(v as u8);
+                        n += 1;
+                        if n == width as usize {
+                            break 'row;
+                        }
+                    }
+                }
+            }
+            _ => return Ok(None),
+        }
+    }
+    Ok(Some(alpha))
 }
 
 /// (components per sample, optional RGB palette).
