@@ -6,6 +6,7 @@
 //! - replacementForNode applies rule.replacement(content, node) with flanking whitespace
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use ego_tree::NodeId;
 use regex::Regex;
@@ -19,10 +20,12 @@ pub fn html_to_markdown(html: &str) -> String {
     // domino (turndown's DOM) parses them as elements. Rewrite to <div>, which
     // turndown treats identically (block defaultReplacement), so the content
     // converts the same way.
-    let noscript_open = Regex::new(r"(?i)<noscript(\s[^>]*)?>").unwrap();
-    let noscript_close = Regex::new(r"(?i)</noscript>").unwrap();
-    let html = noscript_open.replace_all(html, "<div$1>");
-    let html = noscript_close.replace_all(&html, "</div>");
+    static NOSCRIPT_OPEN: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?i)<noscript(\s[^>]*)?>").unwrap());
+    static NOSCRIPT_CLOSE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?i)</noscript>").unwrap());
+    let html = NOSCRIPT_OPEN.replace_all(html, "<div$1>");
+    let html = NOSCRIPT_CLOSE.replace_all(&html, "</div>");
     let html = html.as_ref();
 
     let has_html_tag =
@@ -48,7 +51,9 @@ pub fn html_to_markdown(html: &str) -> String {
 /// - Promote first row to <thead>/<th> when <thead> is missing
 pub fn normalize_tables_html(html: &str) -> String {
     // 1. Strip <p> inside cells
-    let re_cell = Regex::new(r"(?is)<(td|th)([^>]*)>([\s\S]*?)</(td|th)>").unwrap();
+    static RE_CELL: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?is)<(td|th)([^>]*)>([\s\S]*?)</(td|th)>").unwrap());
+    let re_cell = &*RE_CELL;
     let step1 = re_cell.replace_all(html, |caps: &regex::Captures| {
         let tag = &caps[1];
         let attrs = &caps[2];
@@ -59,16 +64,21 @@ pub fn normalize_tables_html(html: &str) -> String {
     });
 
     // 2. Add <thead> to tables that lack it
-    let re_table = Regex::new(
-        r"(?is)<table([^>]*)>\s*(?:<tbody>\s*)?(<tr[\s\S]*?</tr>)([\s\S]*?)</(?:tbody>\s*</)?table>",
-    )
-    .unwrap();
+    static RE_TABLE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?is)<table([^>]*)>\s*(?:<tbody>\s*)?(<tr[\s\S]*?</tr>)([\s\S]*?)</(?:tbody>\s*</)?table>",
+        )
+        .unwrap()
+    });
+    let re_table = &*RE_TABLE;
     let step2 = re_table.replace_all(&step1, |caps: &regex::Captures| {
         let attrs = &caps[1];
         let first_row = &caps[2];
         let rest = &caps[3];
-        let re_td_open = Regex::new(r"(?i)<td").unwrap();
-        let re_td_close = Regex::new(r"(?i)</td>").unwrap();
+        static RE_TD_OPEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)<td").unwrap());
+        static RE_TD_CLOSE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)</td>").unwrap());
+        let re_td_open = &*RE_TD_OPEN;
+        let re_td_close = &*RE_TD_CLOSE;
         let thead_row = re_td_open.replace_all(first_row, "<th");
         let thead_row = re_td_close.replace_all(&thead_row, "</th>");
         format!("<table{attrs}><thead>{thead_row}</thead><tbody>{rest}</tbody></table>")
@@ -745,7 +755,8 @@ fn rule_wrap(content: String, marker: &str) -> String {
 
 /// turndown's cleanAttribute: collapse newline runs.
 fn clean_attribute(value: &str) -> String {
-    let re = Regex::new(r"(\n+\s*)+").unwrap();
+    static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\n+\s*)+").unwrap());
+    let re = &*RE;
     re.replace_all(value, "\n").into_owned()
 }
 
@@ -811,7 +822,8 @@ fn rule_code(content: String, el: ElementRef, ctx: &Ctx) -> String {
         ""
     };
     let mut delimiter = "`".to_string();
-    let backtick_re = Regex::new(r"`+").unwrap();
+    static BACKTICK_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"`+").unwrap());
+    let backtick_re = &*BACKTICK_RE;
     let matches: Vec<&str> = backtick_re
         .find_iter(&content)
         .map(|m| m.as_str())
@@ -865,16 +877,16 @@ fn rule_pre(content: String, el: ElementRef) -> String {
             .value()
             .attr("class")
             .and_then(|cls| {
-                Regex::new(r"language-(\S+)")
-                    .unwrap()
-                    .captures(cls)
-                    .map(|c| c[1].to_string())
+                static LANG_RE: LazyLock<Regex> =
+                    LazyLock::new(|| Regex::new(r"language-(\S+)").unwrap());
+                LANG_RE.captures(cls).map(|c| c[1].to_string())
             })
             .unwrap_or_default();
         let code: String = code_el.text().collect();
 
         let mut fence_size = 3usize;
-        let fence_re = Regex::new(r"(?m)^`{3,}").unwrap();
+        static FENCE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^`{3,}").unwrap());
+        let fence_re = &*FENCE_RE;
         for m in fence_re.find_iter(&code) {
             if m.as_str().len() >= fence_size {
                 fence_size = m.as_str().len() + 1;
@@ -1326,9 +1338,12 @@ fn escape_url_parens(url: &str) -> String {
 }
 
 fn strip_p_in_cell(inner: &str) -> String {
-    let re_p_start = Regex::new(r"(?i)^\s*<p>").unwrap();
-    let re_p_end = Regex::new(r"(?i)</p>\s*$").unwrap();
-    let re_p_mid = Regex::new(r"(?i)</p>\s*<p>").unwrap();
+    static RE_P_START: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^\s*<p>").unwrap());
+    static RE_P_END: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)</p>\s*$").unwrap());
+    static RE_P_MID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)</p>\s*<p>").unwrap());
+    let re_p_start = &*RE_P_START;
+    let re_p_end = &*RE_P_END;
+    let re_p_mid = &*RE_P_MID;
     let s = re_p_start.replace(inner, "");
     let s = re_p_end.replace(&s, "");
     let s = re_p_mid.replace_all(&s, " ");

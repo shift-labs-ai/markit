@@ -233,8 +233,12 @@ fn parse_opf(xml: &str) -> Result<(EpubMetadata, HashMap<String, String>, Vec<St
 
 /// Strip <script …>…</script> and <style …>…</style> blocks (case-insensitive, dotall).
 fn strip_script_style(html: &str) -> String {
-    let re_script = regex::Regex::new(r"(?is)<script[\s\S]*?</script>").unwrap();
-    let re_style = regex::Regex::new(r"(?is)<style[\s\S]*?</style>").unwrap();
+    static RE_SCRIPT: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"(?is)<script[\s\S]*?</script>").unwrap());
+    static RE_STYLE: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"(?is)<style[\s\S]*?</style>").unwrap());
+    let re_script = &*RE_SCRIPT;
+    let re_style = &*RE_STYLE;
     let s = re_script.replace_all(html, "");
     re_style.replace_all(&s, "").into_owned()
 }

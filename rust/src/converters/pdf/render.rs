@@ -171,7 +171,9 @@ fn promote_sub_header_prefixes(matrix: Vec<Vec<String>>) -> Vec<Vec<String>> {
         return matrix;
     }
 
-    let paren_re = regex::Regex::new(r"^\([^)]{1,40}\)$").unwrap();
+    static PAREN_RE: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"^\([^)]{1,40}\)$").unwrap());
+    let paren_re = &*PAREN_RE;
     let mut result: Vec<Vec<String>> = matrix.to_vec();
     let cols = matrix[0].len();
     let mut rows_to_remove: std::collections::HashSet<usize> = std::collections::HashSet::new();
@@ -428,7 +430,9 @@ fn merge_consecutive_headings(blocks: Vec<ContentBlock>, body_fs: f64) -> Vec<Co
         return vec![];
     }
 
-    let heading_re = regex::Regex::new(r"^(#{1,6} )").unwrap();
+    static HEADING_RE: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"^(#{1,6} )").unwrap());
+    let heading_re = &*HEADING_RE;
     let max_gap = (body_fs * 3.0).max(30.0);
     let mut merged: Vec<ContentBlock> = Vec::new();
     let mut cur = blocks[0].clone();
@@ -468,8 +472,12 @@ fn merge_paragraph_wraps(blocks: Vec<ContentBlock>, body_fs: f64) -> Vec<Content
         return blocks;
     }
 
-    let heading_re = regex::Regex::new(r"^#{1,6} ").unwrap();
-    let sentence_end_re = regex::Regex::new(r"[.!?…)\]]\s*$").unwrap();
+    static HEADING_RE: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"^#{1,6} ").unwrap());
+    let heading_re = &*HEADING_RE;
+    static SENTENCE_END_RE: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"[.!?…)\]]\s*$").unwrap());
+    let sentence_end_re = &*SENTENCE_END_RE;
     let max_gap = body_fs * 2.0;
     let min_wrap_length = 25;
 
@@ -536,7 +544,9 @@ fn merge_paragraph_wraps(blocks: Vec<ContentBlock>, body_fs: f64) -> Vec<Content
 
 /// Remove page number blocks near the bottom of the page.
 fn remove_page_numbers(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> {
-    let page_num_re = regex::Regex::new(r"^(?:#{1,6}\s*)?\d+\s*$").unwrap();
+    static PAGE_NUM_RE: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"^(?:#{1,6}\s*)?\d+\s*$").unwrap());
+    let page_num_re = &*PAGE_NUM_RE;
     let bottom_y = 120.0;
     let len = blocks.len();
 
@@ -564,8 +574,12 @@ fn remove_page_numbers(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> {
 /// markdown table, plus short label lines whose count matches the table's
 /// logical row count. Reconstructs into a proper (N+1)-column table.
 fn normalize_detached_first_column_tables(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> {
-    let heading_re = regex::Regex::new(r"^#{1,6}\s").unwrap();
-    let separator_re = regex::Regex::new(r"^\|\s*[-: ]+\|").unwrap();
+    static HEADING_RE: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"^#{1,6}\s").unwrap());
+    let heading_re = &*HEADING_RE;
+    static SEPARATOR_RE: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"^\|\s*[-: ]+\|").unwrap());
+    let separator_re = &*SEPARATOR_RE;
 
     let is_table_block = |text: &str| text.trim_start().starts_with('|');
     let is_plain_block = |text: &str| !heading_re.is_match(text) && !is_table_block(text);

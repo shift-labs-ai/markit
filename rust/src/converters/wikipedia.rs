@@ -22,15 +22,22 @@ impl WikipediaConverter {
         // (?is): i = case-insensitive, s = dot matches newline
         // Mirrors TS: /<div[^>]*id="mw-content-text"[^>]*>([\s\S]*?)<\/div>\s*(?:<\/div>|$)/i
         // Using (?s) so bare . matches newlines; avoids [\s\S] escaping in raw strings.
-        let re_content =
-            Regex::new(r#"(?is)<div[^>]*id="mw-content-text"[^>]*>(.*?)</div>\s*(?:</div>|$)"#)?;
+        static RE_CONTENT: LazyLock<Regex> = LazyLock::new(|| {
+            Regex::new(r#"(?is)<div[^>]*id="mw-content-text"[^>]*>(.*?)</div>\s*(?:</div>|$)"#)
+                .unwrap()
+        });
+        let re_content = &*RE_CONTENT;
         let content_cap = re_content.captures(&html);
 
         // ── Extract title ─────────────────────────────────────────────────────
         // First try <span class="mw-page-title-main">, then <title>
-        let re_title_span =
-            Regex::new(r#"(?is)<span[^>]*class="mw-page-title-main"[^>]*>(.*?)</span>"#)?;
-        let re_title_tag = Regex::new(r"(?is)<title[^>]*>(.*?)</title>")?;
+        static RE_TITLE_SPAN: LazyLock<Regex> = LazyLock::new(|| {
+            Regex::new(r#"(?is)<span[^>]*class="mw-page-title-main"[^>]*>(.*?)</span>"#).unwrap()
+        });
+        static RE_TITLE_TAG: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"(?is)<title[^>]*>(.*?)</title>").unwrap());
+        let re_title_span = &*RE_TITLE_SPAN;
+        let re_title_tag = &*RE_TITLE_TAG;
 
         let title_raw = re_title_span
             .captures(&html)
@@ -58,17 +65,31 @@ impl WikipediaConverter {
         // Mirrors the TS replace chain exactly: same patterns, same order.
         // [\s\S] in raw strings: use [^\x00]* trick or rely on (?s) + .*
         // We use (?s) flag so .* matches newlines too.
-        let re_script = Regex::new(r"(?is)<script.*?</script>")?;
-        let re_style = Regex::new(r"(?is)<style.*?</style>")?;
+        static RE_SCRIPT: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"(?is)<script.*?</script>").unwrap());
+        static RE_STYLE: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"(?is)<style.*?</style>").unwrap());
+        let re_script = &*RE_SCRIPT;
+        let re_style = &*RE_STYLE;
         // TS: /<div[^>]*class="[^"]*mw-editsection[^"]*"[\s\S]*?<\/div>/gi
-        let re_editsection =
-            Regex::new(r#"(?is)<div[^>]*class="[^"]*mw-editsection[^"]*".*?</div>"#)?;
+        static RE_EDITSECTION: LazyLock<Regex> = LazyLock::new(|| {
+            Regex::new(r#"(?is)<div[^>]*class="[^"]*mw-editsection[^"]*".*?</div>"#).unwrap()
+        });
+        let re_editsection = &*RE_EDITSECTION;
         // TS: /<sup[^>]*class="[^"]*reference[^"]*"[\s\S]*?<\/sup>/gi
-        let re_reference = Regex::new(r#"(?is)<sup[^>]*class="[^"]*reference[^"]*".*?</sup>"#)?;
+        static RE_REFERENCE: LazyLock<Regex> = LazyLock::new(|| {
+            Regex::new(r#"(?is)<sup[^>]*class="[^"]*reference[^"]*".*?</sup>"#).unwrap()
+        });
+        let re_reference = &*RE_REFERENCE;
         // TS: /<div[^>]*class="[^"]*navbox[\s\S]*?<\/div>/gi
-        let re_navbox = Regex::new(r#"(?is)<div[^>]*class="[^"]*navbox.*?</div>"#)?;
+        static RE_NAVBOX: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r#"(?is)<div[^>]*class="[^"]*navbox.*?</div>"#).unwrap());
+        let re_navbox = &*RE_NAVBOX;
         // TS: /<table[^>]*class="[^"]*sidebar[\s\S]*?<\/table>/gi
-        let re_sidebar = Regex::new(r#"(?is)<table[^>]*class="[^"]*sidebar.*?</table>"#)?;
+        static RE_SIDEBAR: LazyLock<Regex> = LazyLock::new(|| {
+            Regex::new(r#"(?is)<table[^>]*class="[^"]*sidebar.*?</table>"#).unwrap()
+        });
+        let re_sidebar = &*RE_SIDEBAR;
 
         content = re_script.replace_all(&content, "").into_owned();
         content = re_style.replace_all(&content, "").into_owned();
