@@ -40,3 +40,5 @@ test/fixtures/.DS_Store
 test/fixtures/pdfs/*.pdf
 .pi-rlm/
 *.node
+/index.js
+/index.d.ts
