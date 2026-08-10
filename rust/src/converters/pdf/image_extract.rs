@@ -241,7 +241,7 @@ fn extract_xobject(pdf: &Pdf, dict: &Dict, raw: &[u8]) -> Result<ExtractedImage>
         .and_then(|v| v.as_num())
         .unwrap_or(8.0) as u32;
 
-    let (components, palette) = color_info(pdf, dict)?;
+    let (components, palette, tint_inverted) = color_info(pdf, dict)?;
     let row_in = (width as usize * components * bpc as usize).div_ceil(8);
     if data.len() < row_in * height as usize {
         bail!("short image data");
@@ -292,7 +292,7 @@ fn extract_xobject(pdf: &Pdf, dict: &Dict, raw: &[u8]) -> Result<ExtractedImage>
         _ => false,
     };
     let is_mask = matches!(pdf.dict_get(dict, b"ImageMask")?, Some(Val::Bool(true)));
-    if inverted != is_mask {
+    if (inverted != is_mask) != tint_inverted {
         // ImageMask default paints 1-bits; without /Decode flip that
         // means sample 1 = ink = black, which the 0..255 ramp already
         // inverted once — XOR keeps both conventions straight.
@@ -300,6 +300,19 @@ fn extract_xobject(pdf: &Pdf, dict: &Dict, raw: &[u8]) -> Result<ExtractedImage>
             *s = 255 - *s;
         }
     }
+
+    // DeviceN with several colorants: collapse to the mean tint so the
+    // grayscale path below applies.
+    let (components, samples) = if tint_inverted && components > 1 {
+        let mut gray = Vec::with_capacity(samples.len() / components);
+        for px in samples.chunks_exact(components) {
+            let sum: u32 = px.iter().map(|&v| v as u32).sum();
+            gray.push((sum / components as u32) as u8);
+        }
+        (1usize, gray)
+    } else {
+        (components, samples)
+    };
 
     // Expand palette / convert CMYK to what PNG can carry.
     let (color, final_samples) = match (&palette, components) {
@@ -446,11 +459,14 @@ fn smask_alpha(pdf: &Pdf, dict: &Dict, width: u32, height: u32) -> Result<Option
 }
 
 /// (components per sample, optional RGB palette).
-fn color_info(pdf: &Pdf, dict: &Dict) -> Result<(usize, Option<Vec<u8>>)> {
+/// (components per sample, optional RGB palette, tint-inverted).
+/// Separation/DeviceN tints run 0 = none to 1 = full colorant, i.e. the
+/// opposite of a luminance ramp.
+fn color_info(pdf: &Pdf, dict: &Dict) -> Result<(usize, Option<Vec<u8>>, bool)> {
     match pdf.dict_get(dict, b"ColorSpace")? {
-        None | Some(Val::Name(b"DeviceGray")) | Some(Val::Name(b"CalGray")) => Ok((1, None)),
-        Some(Val::Name(b"DeviceRGB")) | Some(Val::Name(b"CalRGB")) => Ok((3, None)),
-        Some(Val::Name(b"DeviceCMYK")) => Ok((4, None)),
+        None | Some(Val::Name(b"DeviceGray")) | Some(Val::Name(b"CalGray")) => Ok((1, None, false)),
+        Some(Val::Name(b"DeviceRGB")) | Some(Val::Name(b"CalRGB")) => Ok((3, None, false)),
+        Some(Val::Name(b"DeviceCMYK")) => Ok((4, None, false)),
         Some(Val::Array(a)) => {
             let head = a.first().and_then(|v| v.as_name()).unwrap_or(b"");
             match head {
@@ -463,7 +479,7 @@ fn color_info(pdf: &Pdf, dict: &Dict) -> Result<(usize, Option<Vec<u8>>)> {
                         }
                         _ => 3,
                     };
-                    Ok((n, None))
+                    Ok((n, None, false))
                 }
                 b"Indexed" => {
                     // [/Indexed base hival lookup] — palette in base space
@@ -473,9 +489,9 @@ fn color_info(pdf: &Pdf, dict: &Dict) -> Result<(usize, Option<Vec<u8>>)> {
                         Some(Ok(Val::Stream(sd, raw))) => decode_stream(&sd, raw, pdf)?,
                         _ => bail!("bad Indexed lookup"),
                     };
-                    Ok((1, Some(lookup)))
+                    Ok((1, Some(lookup), false))
                 }
-                b"DeviceN" | b"Separation" => Ok((1, None)),
+                b"DeviceN" | b"Separation" => Ok((1, None, false)),
                 _ => bail!("unsupported colorspace"),
             }
         }

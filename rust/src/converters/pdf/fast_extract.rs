@@ -90,6 +90,9 @@ pub(crate) struct FontInfo {
     /// Adobe CID ordering table for Identity-encoded CID-keyed fonts
     /// without ToUnicode.
     adobe_ordering: Option<super::cjk_cmap::OrderingMap>,
+    /// Vertical writing mode (WMode 1: -V CMaps). Glyphs advance down
+    /// the page instead of across it.
+    vertical: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -115,6 +118,7 @@ impl Default for FontInfo {
             unsupported_cmap: false,
             cjk: None,
             adobe_ordering: None,
+            vertical: false,
             size_hint_monospace: false,
         }
     }
@@ -146,8 +150,10 @@ fn build_font(pdf: &Pdf, dict: &Dict) -> FontInfo {
         match g(b"Encoding") {
             // Identity: codes are CIDs. Vertical variants extract the
             // same text; assembly treats them as horizontal runs.
-            Some(Val::Name(b"Identity-H")) | Some(Val::Name(b"Identity-V")) | None => {}
+            Some(Val::Name(b"Identity-H")) | None => {}
+            Some(Val::Name(b"Identity-V")) => info.vertical = true,
             Some(Val::Name(n)) => {
+                info.vertical = n.ends_with(b"-V");
                 if n.ends_with(b"UCS2-H")
                     || n.ends_with(b"UCS2-V")
                     || n.ends_with(b"UTF16-H")
@@ -167,6 +173,7 @@ fn build_font(pdf: &Pdf, dict: &Dict) -> FontInfo {
             // (unicode joins later from ToUnicode or the ordering).
             Some(Val::Stream(sd, raw)) => {
                 if let Ok(text) = decode_stream(&sd, raw, pdf) {
+                    info.vertical = memchr::memmem::find(&text, b"/WMode 1").is_some();
                     info.cjk = super::cjk_cmap::parse_embedded(&text, None);
                 }
             }
@@ -1693,15 +1700,20 @@ impl<'a> Interp<'a> {
             }
         }
 
-        // Advance Tm.
-        let tx = advance;
+        // Advance Tm: horizontal writing moves across, vertical (WMode
+        // 1) moves down the page.
+        let (tx, ty) = if font.vertical {
+            (0.0, -advance)
+        } else {
+            (advance, 0.0)
+        };
         self.ts.tm = Mat {
             a: 1.0,
             b: 0.0,
             c: 0.0,
             d: 1.0,
             e: tx,
-            f: 0.0,
+            f: ty,
         }
         .mul(self.ts.tm);
 

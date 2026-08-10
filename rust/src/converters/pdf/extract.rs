@@ -451,7 +451,12 @@ fn finish_text_boxes(raws: Vec<RawTextItem>, page_number: u32) -> Result<Vec<Tex
         .enumerate()
         .map(|(i, w)| TextBox {
             id: format!("p{}-t{}", page_number, i),
-            text: w.text.trim().to_string(),
+            // RTL script arrives in visual order: restore logical order
+            // (and base Arabic forms) at line level.
+            text: match super::bidi::fix_rtl(&w.text) {
+                Some(t) => t.trim().to_string(),
+                None => w.text.trim().to_string(),
+            },
             page_number,
             font_size: w.font_size,
             is_bold: w.is_bold,
