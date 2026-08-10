@@ -87,6 +87,9 @@ pub(crate) struct FontInfo {
     /// Predefined CJK CMap (GBK-EUC-H and friends): variable-length
     /// codes to CIDs, with the ordering's CID->Unicode table.
     cjk: Option<std::sync::Arc<super::cjk_cmap::CjkCmap>>,
+    /// Adobe CID ordering table for Identity-encoded CID-keyed fonts
+    /// without ToUnicode.
+    adobe_ordering: Option<super::cjk_cmap::OrderingMap>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -111,6 +114,7 @@ impl Default for FontInfo {
             ucs2_codes: false,
             unsupported_cmap: false,
             cjk: None,
+            adobe_ordering: None,
             size_hint_monospace: false,
         }
     }
@@ -159,9 +163,13 @@ fn build_font(pdf: &Pdf, dict: &Dict) -> FontInfo {
                     info.unsupported_cmap = true;
                 }
             }
-            // Embedded CMap stream: codespace defaults to 2-byte; CID
-            // mapping usually Identity for subset fonts. Accept.
-            Some(Val::Stream(..)) => {}
+            // Embedded CMap stream: parse its codespace + cidranges
+            // (unicode joins later from ToUnicode or the ordering).
+            Some(Val::Stream(sd, raw)) => {
+                if let Ok(text) = decode_stream(&sd, raw, pdf) {
+                    info.cjk = super::cjk_cmap::parse_embedded(&text, None);
+                }
+            }
             _ => {}
         }
         if let Some(Val::Array(desc)) = g(b"DescendantFonts") {
@@ -181,6 +189,22 @@ fn build_font(pdf: &Pdf, dict: &Dict) -> FontInfo {
                     // Identity in the common case).
                     if g(b"ToUnicode").is_none() {
                         recover_cid_unicode(pdf, &cid_font, &mut info);
+                    }
+                    // Adobe CID-keyed font: the ordering's CID->Unicode
+                    // table applies directly (fills the gaps the font
+                    // program left).
+                    if g(b"ToUnicode").is_none() {
+                        if let Ok(Some(Val::Dict(csi))) = pdf.dict_get(&cid_font, b"CIDSystemInfo")
+                        {
+                            let ord = match pdf.dict_get(&csi, b"Ordering") {
+                                Ok(Some(Val::Name(n))) => Some(n.to_vec()),
+                                Ok(Some(Val::Str(s))) => Some(s),
+                                _ => None,
+                            };
+                            if let Some(ord) = ord {
+                                info.adobe_ordering = super::cjk_cmap::ordering_map(&ord);
+                            }
+                        }
                     }
                 }
             }
@@ -1221,6 +1245,11 @@ struct Interp<'a> {
     /// A font with an unsupported predefined CMap showed text: the page
     /// cannot be decoded faithfully.
     unsupported_font: bool,
+    /// Marked-content nesting depth, and the depth at which an
+    /// /ActualText span opened (replacement text captured until the
+    /// matching EMC).
+    mc_depth: u32,
+    actual_text: Option<ActualTextSpan>,
     ctm: Mat,
     ctm_stack: Vec<Mat>,
     ts: TextState,
@@ -1385,6 +1414,32 @@ impl<'a> Interp<'a> {
                         self.do_xobject(&name, resources);
                     }
                 }
+                b"BMC" => self.mc_depth += 1,
+                b"BDC" => {
+                    self.mc_depth += 1;
+                    // /ActualText in the property dict replaces whatever
+                    // the enclosed operators draw (MuPDF honors this).
+                    if self.actual_text.is_none() {
+                        if let Some(o @ Operand::Dict { .. }) = lex.operands.last().copied() {
+                            if let Some(s) = parse_actual_text(lex.dict_bytes(o)) {
+                                self.actual_text = Some(ActualTextSpan {
+                                    text: s,
+                                    depth: self.mc_depth,
+                                    geom: None,
+                                });
+                            }
+                        }
+                    }
+                }
+                b"EMC" => {
+                    if let Some(span) = &self.actual_text {
+                        if span.depth == self.mc_depth {
+                            let span = self.actual_text.take().unwrap();
+                            self.emit_actual_text(span);
+                        }
+                    }
+                    self.mc_depth = self.mc_depth.saturating_sub(1);
+                }
                 // Inline image (BI…ID…EI, payload skipped by the lexer):
                 // record the placement so image regions and scanned-page
                 // detection see it. The empty payload marker keeps the
@@ -1402,6 +1457,26 @@ impl<'a> Interp<'a> {
             lex.clear();
         }
         Ok(())
+    }
+
+    /// Emit the replacement text of a closed /ActualText span using the
+    /// geometry its suppressed runs accumulated.
+    fn emit_actual_text(&mut self, span: ActualTextSpan) {
+        if span.text.trim().is_empty() {
+            return;
+        }
+        let Some((x0, y0, x1, size_dev, bold)) = span.geom else {
+            return;
+        };
+        self.items.push(RawItem {
+            text: span.text,
+            x: x0,
+            y: y0 - 0.20 * size_dev,
+            width: (x1 - x0).abs().max(0.01),
+            height: 1.2 * size_dev,
+            font_size: (size_dev as i32) as f64,
+            is_bold: bold,
+        });
     }
 
     fn td(&mut self, tx: f64, ty: f64) {
@@ -1531,8 +1606,13 @@ impl<'a> Interp<'a> {
             if let Some(c) = uni_override {
                 text.push(c);
             } else if font.cjk.is_some() {
-                // CID had no unicode mapping: emit nothing rather than
-                // garbage (matches the notdef behavior).
+                // Embedded/predefined CMap without a table hit: try
+                // ToUnicode (keyed by CID), then the Adobe ordering.
+                if let Some(s) = font.to_unicode.get(&code) {
+                    text.push_str(s);
+                } else if let Some(c) = font.adobe_ordering.as_ref().and_then(|m| m.lookup(code)) {
+                    text.push(c);
+                }
             } else if font.two_byte {
                 if font.ucs2_codes {
                     // Codes are UCS-2 code units directly.
@@ -1541,6 +1621,8 @@ impl<'a> Interp<'a> {
                     }
                 } else if let Some(s) = font.to_unicode.get(&code) {
                     text.push_str(s);
+                } else if let Some(c) = font.adobe_ordering.as_ref().and_then(|m| m.lookup(code)) {
+                    text.push(c);
                 } else if let Some(c) = char::from_u32(code) {
                     text.push(c);
                 }
@@ -1563,11 +1645,26 @@ impl<'a> Interp<'a> {
         }
         .mul(self.ts.tm);
 
+        let (x1, _) = trm.apply(advance / self.ts.size.max(1e-9), 0.0);
+
+        if let Some(span) = &mut self.actual_text {
+            // Geometry only: the replacement text supersedes the glyphs.
+            let bold = self.ts.font.as_ref().is_some_and(|f| f.is_bold);
+            match &mut span.geom {
+                Some((gx0, _gy0, gx1, gsize, _)) => {
+                    *gx0 = gx0.min(x0.min(x1));
+                    *gx1 = gx1.max(x0.max(x1));
+                    *gsize = gsize.max(size_dev);
+                }
+                geom @ None => *geom = Some((x0.min(x1), y0, x0.max(x1), size_dev, bold)),
+            }
+            return;
+        }
+
         if text.trim().is_empty() {
             return;
         }
 
-        let (x1, _) = trm.apply(advance / self.ts.size.max(1e-9), 0.0);
         let width_dev = (x1 - x0).abs().max(0.01);
         self.items.push(RawItem {
             text,
@@ -1732,6 +1829,108 @@ fn rotation_base(rotate: Option<f64>, mb: &[f64], mx0: f64, my0: f64) -> (Mat, f
     }
 }
 
+/// Pull /ActualText out of a raw BDC property dict. Handles literal
+/// strings (with escapes) and hex strings; UTF-16BE by BOM, else
+/// PDFDocEncoding treated as latin1.
+fn parse_actual_text(dict: &[u8]) -> Option<String> {
+    let at = memchr::memmem::find(dict, b"/ActualText")?;
+    let mut p = at + b"/ActualText".len();
+    while p < dict.len() && dict[p].is_ascii_whitespace() {
+        p += 1;
+    }
+    let bytes: Vec<u8> = match dict.get(p)? {
+        b'(' => {
+            let mut out = Vec::new();
+            let mut depth = 1usize;
+            p += 1;
+            while p < dict.len() && depth > 0 {
+                match dict[p] {
+                    b'\\' => {
+                        p += 1;
+                        match dict.get(p)? {
+                            b'n' => out.push(b'\n'),
+                            b'r' => out.push(b'\r'),
+                            b't' => out.push(b'\t'),
+                            b'b' => out.push(8),
+                            b'f' => out.push(12),
+                            d @ b'0'..=b'7' => {
+                                let mut v = (d - b'0') as u32;
+                                for _ in 0..2 {
+                                    match dict.get(p + 1) {
+                                        Some(d2 @ b'0'..=b'7') => {
+                                            v = v * 8 + (d2 - b'0') as u32;
+                                            p += 1;
+                                        }
+                                        _ => break,
+                                    }
+                                }
+                                out.push(v as u8);
+                            }
+                            &c => out.push(c),
+                        }
+                        p += 1;
+                    }
+                    b'(' => {
+                        depth += 1;
+                        out.push(b'(');
+                        p += 1;
+                    }
+                    b')' => {
+                        depth -= 1;
+                        if depth > 0 {
+                            out.push(b')');
+                        }
+                        p += 1;
+                    }
+                    c => {
+                        out.push(c);
+                        p += 1;
+                    }
+                }
+            }
+            out
+        }
+        b'<' => {
+            let end = dict[p..].iter().position(|&b| b == b'>')? + p;
+            let mut out = Vec::new();
+            let mut hi: Option<u8> = None;
+            for &b in &dict[p + 1..end] {
+                let v = match b {
+                    b'0'..=b'9' => b - b'0',
+                    b'a'..=b'f' => b - b'a' + 10,
+                    b'A'..=b'F' => b - b'A' + 10,
+                    _ => continue,
+                };
+                match hi.take() {
+                    Some(h) => out.push((h << 4) | v),
+                    None => hi = Some(v),
+                }
+            }
+            out
+        }
+        _ => return None,
+    };
+
+    if bytes.starts_with(&[0xFE, 0xFF]) {
+        let units: Vec<u16> = bytes[2..]
+            .chunks_exact(2)
+            .map(|c| u16::from_be_bytes([c[0], c[1]]))
+            .collect();
+        Some(String::from_utf16_lossy(&units))
+    } else {
+        Some(bytes.iter().map(|&b| b as char).collect())
+    }
+}
+
+/// An open /ActualText marked-content span: replacement text plus the
+/// geometry accumulated from the suppressed show-text operators.
+struct ActualTextSpan {
+    text: String,
+    depth: u32,
+    /// (x0, y0, x1, size_dev, is_bold) built up across runs.
+    geom: Option<(f64, f64, f64, f64, bool)>,
+}
+
 /// Inheritable page-tree attributes.
 #[derive(Clone, Default)]
 struct Inherit<'a> {
@@ -1887,6 +2086,8 @@ pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
             image_xobjects: Vec::new(),
             text_ops: 0,
             unsupported_font: false,
+            mc_depth: 0,
+            actual_text: None,
             ctm: base,
             ctm_stack: Vec::new(),
             ts: TextState::default(),
@@ -2007,6 +2208,8 @@ pub(crate) fn page_image_placements<'a>(
         image_xobjects: Vec::new(),
         text_ops: 0,
         unsupported_font: false,
+        mc_depth: 0,
+        actual_text: None,
         ctm: base,
         ctm_stack: Vec::new(),
         ts: TextState::default(),
@@ -2099,6 +2302,26 @@ mod tests {
 
     /// Password-protected fixtures decrypt with either the user or the
     /// owner password and refuse a wrong one. Env-var scoped in a single
+    /// /ActualText in a marked-content span replaces the drawn glyphs
+    /// (tagged-PDF semantics, same as MuPDF).
+    #[test]
+    fn actual_text_replaces_glyphs() {
+        let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj
+4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+5 0 obj << /Length 96 >> stream
+BT /F1 12 Tf 72 720 Td /Span << /ActualText (correct) >> BDC (wrong) Tj EMC ( after) Tj ET
+endstream endobj
+trailer << /Root 1 0 R >>";
+        let pages = extract_pages_fast(pdf).expect("actualtext");
+        let text = text_of(&pages);
+        assert!(text.contains("correct"), "got: {text}");
+        assert!(!text.contains("wrong"), "got: {text}");
+        assert!(text.contains("after"), "got: {text}");
+    }
+
     /// A predefined CJK CMap (GBK-EUC-H) decodes both the multi-byte
     /// hanzi codespace and 1-byte ASCII through Adobe's tables.
     #[test]

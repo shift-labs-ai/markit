@@ -298,6 +298,30 @@ fn unimap(ord: Ordering) -> Arc<UniMap> {
         .clone()
 }
 
+/// CID -> unicode table for an Adobe ordering, addressed by the
+/// CIDSystemInfo /Ordering name. For CID-keyed fonts without ToUnicode
+/// the CID space itself is Adobe's, so the mapping applies no matter
+/// which CMap encoded the codes.
+#[derive(Clone)]
+pub struct OrderingMap(Arc<UniMap>);
+
+impl OrderingMap {
+    pub fn lookup(&self, cid: u32) -> Option<char> {
+        self.0.lookup(cid)
+    }
+}
+
+pub fn ordering_map(ordering: &[u8]) -> Option<OrderingMap> {
+    let ord = match ordering {
+        b"GB1" => Ordering::GB1,
+        b"CNS1" => Ordering::CNS1,
+        b"Japan1" => Ordering::Japan1,
+        b"Korea1" | b"KR" => Ordering::Korea1,
+        _ => return None,
+    };
+    Some(OrderingMap(unimap(ord)))
+}
+
 /// Load a predefined CMap by name (cached per name).
 pub fn lookup(name: &[u8]) -> Option<Arc<CjkCmap>> {
     static CACHE: OnceLock<std::sync::Mutex<rustc_hash::FxHashMap<Vec<u8>, Arc<CjkCmap>>>> =
@@ -318,6 +342,152 @@ pub fn lookup(name: &[u8]) -> Option<Arc<CjkCmap>> {
     });
     cache.lock().unwrap().insert(name.to_vec(), cm.clone());
     Some(cm)
+}
+
+/// Parse an embedded CMap stream: codespacerange + cidrange/cidchar
+/// sections, plus an optional usecmap reference merged underneath.
+pub fn parse_embedded(data: &[u8], uni: Option<&[u8]>) -> Option<Arc<CjkCmap>> {
+    fn hex_between(s: &[u8], at: &mut usize) -> Option<u32> {
+        while *at < s.len() && s[*at] != b'<' {
+            if !s[*at].is_ascii_whitespace() {
+                return None;
+            }
+            *at += 1;
+        }
+        let start = *at + 1;
+        let end = start + s.get(start..)?.iter().position(|&b| b == b'>')?;
+        let mut v = 0u32;
+        for &b in &s[start..end] {
+            v = (v << 4)
+                | match b {
+                    b'0'..=b'9' => (b - b'0') as u32,
+                    b'a'..=b'f' => (b - b'a' + 10) as u32,
+                    b'A'..=b'F' => (b - b'A' + 10) as u32,
+                    _ => 0,
+                };
+        }
+        *at = end + 1;
+        Some(v)
+    }
+    // Byte length of the next hex token (counts digits, rounds up).
+    fn hex_nbytes(s: &[u8], at: usize) -> u32 {
+        let Some(open) = s[at..].iter().position(|&b| b == b'<') else {
+            return 1;
+        };
+        let start = at + open + 1;
+        let n = s[start..]
+            .iter()
+            .take_while(|&&b| b != b'>')
+            .filter(|b| b.is_ascii_hexdigit())
+            .count();
+        (n as u32).div_ceil(2)
+    }
+    fn dec_at(s: &[u8], at: &mut usize) -> Option<u32> {
+        while *at < s.len() && s[*at].is_ascii_whitespace() {
+            *at += 1;
+        }
+        let start = *at;
+        while *at < s.len() && s[*at].is_ascii_digit() {
+            *at += 1;
+        }
+        std::str::from_utf8(&s[start..*at]).ok()?.parse().ok()
+    }
+
+    let mut codespaces: Vec<(u32, u32, u32)> = Vec::new();
+    let mut cidranges: Vec<(u32, u32, u32)> = Vec::new();
+
+    // usecmap: "/Name usecmap" pulls a predefined base underneath.
+    let mut base: Option<Arc<CjkCmap>> = None;
+    if let Some(u) = memchr::memmem::find(data, b" usecmap") {
+        let head = &data[..u];
+        if let Some(slash) = head.iter().rposition(|&b| b == b'/') {
+            let name: Vec<u8> = head[slash + 1..]
+                .iter()
+                .copied()
+                .filter(|b| !b.is_ascii_whitespace())
+                .collect();
+            base = lookup(&name);
+        }
+    }
+
+    let sect = |open: &[u8], close: &[u8], three: bool, out: &mut Vec<(u32, u32, u32)>| {
+        let mut pos = 0usize;
+        while let Some(at) = memchr::memmem::find(&data[pos..], open) {
+            let start = pos + at + open.len();
+            let end =
+                start + memchr::memmem::find(&data[start..], close).unwrap_or(data.len() - start);
+            let body = &data[start..end];
+            let mut p = 0usize;
+            loop {
+                if three {
+                    let Some(lo) = hex_between(body, &mut p) else {
+                        break;
+                    };
+                    let Some(hi) = hex_between(body, &mut p) else {
+                        break;
+                    };
+                    let Some(cid) = dec_at(body, &mut p) else {
+                        break;
+                    };
+                    out.push((lo, hi, cid));
+                } else {
+                    let Some(code) = hex_between(body, &mut p) else {
+                        break;
+                    };
+                    let Some(cid) = dec_at(body, &mut p) else {
+                        break;
+                    };
+                    out.push((code, code, cid));
+                }
+            }
+            pos = end;
+        }
+    };
+    sect(b"begincidrange", b"endcidrange", true, &mut cidranges);
+    sect(b"begincidchar", b"endcidchar", false, &mut cidranges);
+
+    // codespacerange (byte-length classes carried by digit count).
+    let mut pos = 0usize;
+    while let Some(at) = memchr::memmem::find(&data[pos..], b"begincodespacerange") {
+        let start = pos + at + b"begincodespacerange".len();
+        let end = start
+            + memchr::memmem::find(&data[start..], b"endcodespacerange")
+                .unwrap_or(data.len() - start);
+        let body = &data[start..end];
+        let mut p = 0usize;
+        loop {
+            let n = hex_nbytes(body, p);
+            let Some(lo) = hex_between(body, &mut p) else {
+                break;
+            };
+            let Some(hi) = hex_between(body, &mut p) else {
+                break;
+            };
+            codespaces.push((n, lo, hi));
+        }
+        pos = end;
+    }
+
+    if let Some(b) = &base {
+        codespaces.extend_from_slice(&b.codespaces);
+        cidranges.extend_from_slice(&b.cidranges);
+    }
+    if codespaces.is_empty() && cidranges.is_empty() {
+        return None;
+    }
+    if codespaces.is_empty() {
+        codespaces.push((2, 0, 0xFFFF));
+    }
+    cidranges.sort_by_key(|r| r.0);
+    let uni_map = uni
+        .and_then(ordering_map)
+        .map(|m| m.0)
+        .unwrap_or_else(|| Arc::new(UniMap { ranges: Vec::new() }));
+    Some(Arc::new(CjkCmap {
+        codespaces,
+        cidranges,
+        uni: uni_map,
+    }))
 }
 
 impl CjkCmap {
@@ -383,6 +553,15 @@ mod tests {
         let out = cm.decode(&[0x93, 0xFA, 0x96, 0x7B]);
         assert_eq!(out[0].1, Some('日'));
         assert_eq!(out[1].1, Some('本'));
+    }
+
+    #[test]
+    fn ordering_map_japan1() {
+        let m = ordering_map(b"Japan1").expect("Japan1 table");
+        // Adobe-Japan1 CID 34 is 'A' (proportional Latin block starts at
+        // CID 1 = space).
+        assert_eq!(m.lookup(34), Some('A'));
+        assert!(ordering_map(b"NoSuchOrdering").is_none());
     }
 
     #[test]

@@ -20,6 +20,11 @@ pub enum Operand {
         start: usize,
         len: usize,
     },
+    /// Range into the source content: a raw << … >> dictionary literal.
+    Dict {
+        start: usize,
+        len: usize,
+    },
     /// Marker: an array literal opened at this operand index.
     ArrStart,
     Other,
@@ -58,6 +63,13 @@ impl<'a> Lexer<'a> {
     pub fn name_bytes(&self, op: Operand) -> &'a [u8] {
         match op {
             Operand::Name { start, len } => &self.data[start..start + len],
+            _ => &[],
+        }
+    }
+
+    pub fn dict_bytes(&self, op: Operand) -> &'a [u8] {
+        match op {
+            Operand::Dict { start, len } => &self.data[start..start + len],
             _ => &[],
         }
     }
@@ -116,8 +128,8 @@ impl<'a> Lexer<'a> {
                 b'(' => self.lex_string(),
                 b'<' => {
                     if self.data.get(self.pos + 1) == Some(&b'<') {
+                        // skip_dict records the span as Operand::Dict.
                         self.skip_dict();
-                        self.operands.push(Operand::Other);
                     } else {
                         self.lex_hex_string();
                     }
@@ -279,7 +291,10 @@ impl<'a> Lexer<'a> {
     }
 
     fn skip_dict(&mut self) {
-        // << … >> possibly nested; strings inside may contain >>.
+        // << … >> possibly nested; strings inside may contain >>. The
+        // raw span is preserved as an operand (BDC properties carry
+        // /ActualText).
+        let dict_start = self.pos;
         self.pos += 2;
         let mut depth = 1usize;
         while self.pos < self.data.len() && depth > 0 {
@@ -301,6 +316,10 @@ impl<'a> Lexer<'a> {
                 _ => self.pos += 1,
             }
         }
+        self.operands.push(Operand::Dict {
+            start: dict_start,
+            len: self.pos - dict_start,
+        });
     }
 
     fn skip_inline_image(&mut self) {
