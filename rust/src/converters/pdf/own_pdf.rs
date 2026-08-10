@@ -84,11 +84,89 @@ impl<'a> Pdf<'a> {
             objstm_cache: RefCell::new(FxHashMap::default()),
             decrypt: None,
         };
-        pdf.load_xref_chain(start)?;
+        if pdf.load_xref_chain(start).is_err() || pdf.trailer.is_empty() {
+            pdf.repair_scan()?;
+        }
         // Empty-password AES-256 documents decrypt transparently; anything
-        // else errors here and the caller falls back to MuPDF.
+        // else errors here and the caller reports the failure.
         pdf.setup_decryption()?;
         Ok(pdf)
+    }
+
+    /// Damaged-file recovery: scavenge "N G obj" markers for offsets and
+    /// find a trailer (or any /Root-bearing catalog) the hard way.
+    fn repair_scan(&mut self) -> Result<()> {
+        self.xref.clear();
+        let data = self.data;
+        let finder = memchr::memmem::Finder::new(b" obj");
+        let mut at = 0usize;
+        while let Some(rel) = finder.find(&data[at..]) {
+            let hit = at + rel;
+            // Walk back over "N G" digits/whitespace to the object number.
+            let mut j = hit;
+            let mut seen_gen = false;
+            let mut seen_num = false;
+            let mut num_end = 0usize;
+            let mut num_start = 0usize;
+            while j > 0 {
+                let b = data[j - 1];
+                if b.is_ascii_digit() {
+                    if !seen_gen {
+                        while j > 0 && data[j - 1].is_ascii_digit() {
+                            j -= 1;
+                        }
+                        seen_gen = true;
+                    } else {
+                        num_end = j;
+                        while j > 0 && data[j - 1].is_ascii_digit() {
+                            j -= 1;
+                        }
+                        num_start = j;
+                        seen_num = true;
+                        break;
+                    }
+                } else if b == b' ' || b == b'\r' || b == b'\n' {
+                    j -= 1;
+                } else {
+                    break;
+                }
+            }
+            if seen_num && num_end > num_start {
+                let num: u32 = std::str::from_utf8(&data[num_start..num_end])
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+                // Later definitions win in damaged files.
+                self.xref.insert(num, XrefEntry::Offset(num_start));
+            }
+            at = hit + 4;
+        }
+        if self.xref.is_empty() {
+            bail!("repair scan found no objects");
+        }
+
+        // Trailer: last "trailer" keyword, else hunt for a /Type /Catalog.
+        if let Some(t) = memchr::memmem::rfind(data, b"trailer") {
+            let mut lx = ObjLexer::new(data, t + 7);
+            if let Ok(Val::Dict(d)) = lx.value() {
+                self.trailer = d;
+            }
+        }
+        if dget(&self.trailer, b"Root").is_none() {
+            let nums: Vec<u32> = self.xref.keys().copied().collect();
+            for num in nums {
+                if let Ok(Val::Dict(d)) = self.object(num) {
+                    if matches!(dget(&d, b"Type"), Some(Val::Name(b"Catalog"))) {
+                        self.trailer = vec![(b"Root".as_slice(), Val::Ref(num))];
+                        break;
+                    }
+                }
+            }
+        }
+        if dget(&self.trailer, b"Root").is_none() {
+            bail!("repair scan found no catalog");
+        }
+        Ok(())
     }
 
     /// Parse without rejecting encryption (decryption setup / probing).
@@ -424,6 +502,7 @@ fn apply_filter(name: &[u8], data: &[u8]) -> Result<Vec<u8>> {
             Ok(out)
         }
         b"ASCII85Decode" | b"A85" => ascii85(data),
+        b"LZWDecode" | b"LZW" => lzw_decode(data),
         b"RunLengthDecode" | b"RL" => {
             let mut out = Vec::with_capacity(data.len() * 2);
             let mut i = 0usize;
@@ -452,6 +531,66 @@ fn apply_filter(name: &[u8], data: &[u8]) -> Result<Vec<u8>> {
             Ok(out)
         }
         _ => bail!("unsupported filter {}", String::from_utf8_lossy(name)),
+    }
+}
+
+/// LZW as PDF uses it (MSB-first codes, 9–12 bits, EarlyChange=1).
+fn lzw_decode(data: &[u8]) -> Result<Vec<u8>> {
+    const CLEAR: u16 = 256;
+    const EOD: u16 = 257;
+
+    let mut out = Vec::with_capacity(data.len() * 3);
+    let mut dict: Vec<Vec<u8>> = (0..=257u16).map(|i| vec![i as u8]).collect();
+    let mut code_len = 9usize;
+    let mut prev: Option<u16> = None;
+
+    let mut bitbuf = 0u32;
+    let mut bits = 0usize;
+    let mut i = 0usize;
+
+    loop {
+        while bits < code_len {
+            if i >= data.len() {
+                return Ok(out);
+            }
+            bitbuf = (bitbuf << 8) | data[i] as u32;
+            bits += 8;
+            i += 1;
+        }
+        let code = ((bitbuf >> (bits - code_len)) & ((1 << code_len) - 1)) as u16;
+        bits -= code_len;
+
+        match code {
+            CLEAR => {
+                dict.truncate(258);
+                code_len = 9;
+                prev = None;
+            }
+            EOD => return Ok(out),
+            _ => {
+                let entry: Vec<u8> = if (code as usize) < dict.len() {
+                    dict[code as usize].clone()
+                } else if let Some(p) = prev {
+                    // KwKwK case
+                    let mut e = dict[p as usize].clone();
+                    e.push(dict[p as usize][0]);
+                    e
+                } else {
+                    bail!("bad LZW stream");
+                };
+                out.extend_from_slice(&entry);
+                if let Some(p) = prev {
+                    let mut ne = dict[p as usize].clone();
+                    ne.push(entry[0]);
+                    dict.push(ne);
+                }
+                prev = Some(code);
+                // EarlyChange=1: widen one code early.
+                if dict.len() + 1 >= (1 << code_len) && code_len < 12 {
+                    code_len += 1;
+                }
+            }
+        }
     }
 }
 
