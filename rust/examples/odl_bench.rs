@@ -23,6 +23,16 @@ fn main() {
         ..Default::default()
     };
 
+    let loops: usize = std::env::var("ODL_LOOPS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    for _ in 1..loops {
+        for path in &entries {
+            let bytes = std::fs::read(path).unwrap();
+            let _ = conv.convert(&bytes, &info);
+        }
+    }
     let mut timings: Vec<(String, f64)> = Vec::new();
     let mut failures = 0usize;
     let total = Instant::now();

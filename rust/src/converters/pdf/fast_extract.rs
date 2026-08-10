@@ -8,7 +8,6 @@
 //! regions keep the MuPDF path's device-space (y-down) convention.
 
 use anyhow::{anyhow, bail, Result};
-use lopdf::content::Content;
 use lopdf::{Dictionary, Document, Object, ObjectId};
 use rustc_hash::FxHashMap;
 
@@ -595,135 +594,114 @@ struct Interp<'a> {
 }
 
 impl<'a> Interp<'a> {
-    fn run(&mut self, content: &Content, resources: Option<&'a Dictionary>) -> Result<()> {
+    fn run(&mut self, content: &[u8], resources: Option<&'a Dictionary>) -> Result<()> {
+        use super::content_lex::{Lexer, Operand};
+
         if self.depth > 6 {
             return Ok(()); // form recursion cap
         }
         let fonts = self.font_map(resources);
+        let mut lex = Lexer::new(content);
 
-        for op in &content.operations {
-            let operands = &op.operands;
-            match op.operator.as_str() {
-                "q" => self.ctm_stack.push(self.ctm),
-                "Q" => {
+        while let Some(op) = lex.next_op() {
+            let n = |i: usize| -> Option<f64> {
+                match lex.operands.get(i) {
+                    Some(Operand::Num(v)) => Some(*v),
+                    _ => None,
+                }
+            };
+            match op {
+                b"q" => self.ctm_stack.push(self.ctm),
+                b"Q" => {
                     if let Some(m) = self.ctm_stack.pop() {
                         self.ctm = m;
                     }
                 }
-                "cm" => {
-                    if let Some(m) = mat_from(operands) {
-                        self.ctm = m.mul(self.ctm);
+                b"cm" => {
+                    if let (Some(a), Some(b), Some(c), Some(d), Some(e), Some(f)) =
+                        (n(0), n(1), n(2), n(3), n(4), n(5))
+                    {
+                        self.ctm = Mat { a, b, c, d, e, f }.mul(self.ctm);
                     }
                 }
-                "BT" => {
+                b"BT" => {
                     self.ts.tm = IDENTITY;
                     self.ts.tlm = IDENTITY;
                 }
-                "ET" => {}
-                "Tf" => {
-                    if operands.len() == 2 {
-                        if let Some(name) = name_of(&operands[0]) {
-                            self.ts.font = fonts.get(name).cloned();
-                        }
-                        self.ts.size = num(&operands[1]).unwrap_or(0.0);
+                b"ET" => {}
+                b"Tf" => {
+                    if lex.operands.len() == 2 {
+                        let name = lex.name_bytes(lex.operands[0]);
+                        self.ts.font = fonts.get(name).cloned();
+                        self.ts.size = n(1).unwrap_or(0.0);
                     }
                 }
-                "Td" => {
-                    if let (Some(tx), Some(ty)) = (
-                        operands.first().and_then(num),
-                        operands.get(1).and_then(num),
-                    ) {
-                        self.ts.tlm = Mat {
-                            a: 1.0,
-                            b: 0.0,
-                            c: 0.0,
-                            d: 1.0,
-                            e: tx,
-                            f: ty,
-                        }
-                        .mul(self.ts.tlm);
-                        self.ts.tm = self.ts.tlm;
+                b"Td" => {
+                    if let (Some(tx), Some(ty)) = (n(0), n(1)) {
+                        self.td(tx, ty);
                     }
                 }
-                "TD" => {
-                    if let (Some(tx), Some(ty)) = (
-                        operands.first().and_then(num),
-                        operands.get(1).and_then(num),
-                    ) {
+                b"TD" => {
+                    if let (Some(tx), Some(ty)) = (n(0), n(1)) {
                         self.ts.leading = -ty;
-                        self.ts.tlm = Mat {
-                            a: 1.0,
-                            b: 0.0,
-                            c: 0.0,
-                            d: 1.0,
-                            e: tx,
-                            f: ty,
-                        }
-                        .mul(self.ts.tlm);
-                        self.ts.tm = self.ts.tlm;
+                        self.td(tx, ty);
                     }
                 }
-                "Tm" => {
-                    if let Some(m) = mat_from(operands) {
+                b"Tm" => {
+                    if let (Some(a), Some(b), Some(c), Some(d), Some(e), Some(f)) =
+                        (n(0), n(1), n(2), n(3), n(4), n(5))
+                    {
+                        let m = Mat { a, b, c, d, e, f };
                         self.ts.tm = m;
                         self.ts.tlm = m;
                     }
                 }
-                "T*" => self.next_line(),
-                "TL" => self.ts.leading = operands.first().and_then(num).unwrap_or(0.0),
-                "Tc" => self.ts.char_spacing = operands.first().and_then(num).unwrap_or(0.0),
-                "Tw" => self.ts.word_spacing = operands.first().and_then(num).unwrap_or(0.0),
-                "Tz" => self.ts.h_scale = operands.first().and_then(num).unwrap_or(100.0) / 100.0,
-                "Ts" => self.ts.rise = operands.first().and_then(num).unwrap_or(0.0),
-                "Tj" => {
-                    if let Some(Object::String(bytes, _)) = operands.first() {
-                        self.show_text(bytes);
+                b"T*" => self.next_line(),
+                b"TL" => self.ts.leading = n(0).unwrap_or(0.0),
+                b"Tc" => self.ts.char_spacing = n(0).unwrap_or(0.0),
+                b"Tw" => self.ts.word_spacing = n(0).unwrap_or(0.0),
+                b"Tz" => self.ts.h_scale = n(0).unwrap_or(100.0) / 100.0,
+                b"Ts" => self.ts.rise = n(0).unwrap_or(0.0),
+                b"Tj" => {
+                    if let Some(o @ Operand::Str { .. }) = lex.operands.first().copied() {
+                        self.show_text(lex.str_bytes(o));
                     }
                 }
-                "'" => {
+                b"'" => {
                     self.next_line();
-                    if let Some(Object::String(bytes, _)) = operands.first() {
-                        self.show_text(bytes);
+                    if let Some(o @ Operand::Str { .. }) = lex.operands.first().copied() {
+                        self.show_text(lex.str_bytes(o));
                     }
                 }
-                "\"" => {
-                    if operands.len() == 3 {
-                        self.ts.word_spacing = num(&operands[0]).unwrap_or(0.0);
-                        self.ts.char_spacing = num(&operands[1]).unwrap_or(0.0);
+                b"\"" => {
+                    if lex.operands.len() == 3 {
+                        self.ts.word_spacing = n(0).unwrap_or(0.0);
+                        self.ts.char_spacing = n(1).unwrap_or(0.0);
                         self.next_line();
-                        if let Object::String(bytes, _) = &operands[2] {
-                            self.show_text(bytes);
+                        if let o @ Operand::Str { .. } = lex.operands[2] {
+                            self.show_text(lex.str_bytes(o));
                         }
                     }
                 }
-                "TJ" => {
-                    if let Some(Object::Array(parts)) = operands.first() {
-                        for part in parts {
-                            match part {
-                                Object::String(bytes, _) => self.show_text(bytes),
-                                Object::Integer(i) => self.kern(*i as f64),
-                                Object::Real(r) => self.kern(*r as f64),
-                                _ => {}
-                            }
+                b"TJ" => {
+                    for i in 0..lex.operands.len() {
+                        match lex.operands[i] {
+                            o @ Operand::Str { .. } => self.show_text(lex.str_bytes(o)),
+                            Operand::Num(v) => self.kern(v),
+                            _ => {}
                         }
                     }
                 }
                 // ── paths → segments ────────────────────────────────
-                "m" => {
-                    if let (Some(x), Some(y)) = (
-                        operands.first().and_then(num),
-                        operands.get(1).and_then(num),
-                    ) {
+                b"m" => {
+                    if let (Some(x), Some(y)) = (n(0), n(1)) {
                         let p = self.ctm.apply(x, y);
                         self.path_start = Some(p);
                         self.path_cur = Some(p);
                     }
                 }
-                "l" => {
-                    if let (Some(x), Some(y)) = (
-                        operands.first().and_then(num),
-                        operands.get(1).and_then(num),
-                    ) {
+                b"l" => {
+                    if let (Some(x), Some(y)) = (n(0), n(1)) {
                         let p = self.ctm.apply(x, y);
                         if let Some(c) = self.path_cur {
                             self.path_segments.push((c.0, c.1, p.0, p.1));
@@ -731,28 +709,23 @@ impl<'a> Interp<'a> {
                         self.path_cur = Some(p);
                     }
                 }
-                "c" | "v" | "y" => {
-                    // Curves: track the end point, emit no segment.
-                    let n = operands.len();
-                    if n >= 2 {
-                        if let (Some(x), Some(y)) = (num(&operands[n - 2]), num(&operands[n - 1])) {
+                b"c" | b"v" | b"y" => {
+                    let k = lex.operands.len();
+                    if k >= 2 {
+                        if let (Some(x), Some(y)) = (n(k - 2), n(k - 1)) {
                             self.path_cur = Some(self.ctm.apply(x, y));
                         }
                     }
                 }
-                "h" => {
+                b"h" => {
                     if let (Some(c), Some(s)) = (self.path_cur, self.path_start) {
                         self.path_segments.push((c.0, c.1, s.0, s.1));
                         self.path_cur = Some(s);
                     }
                 }
-                "re" => {
-                    let v: Vec<f64> = operands.iter().filter_map(num).collect();
-                    if v.len() == 4 {
-                        let (p0, p1) = (
-                            self.ctm.apply(v[0], v[1]),
-                            self.ctm.apply(v[0] + v[2], v[1] + v[3]),
-                        );
+                b"re" => {
+                    if let (Some(x), Some(y), Some(w), Some(h)) = (n(0), n(1), n(2), n(3)) {
+                        let (p0, p1) = (self.ctm.apply(x, y), self.ctm.apply(x + w, y + h));
                         self.path_rects.push((
                             p0.0.min(p1.0),
                             p0.1.min(p1.1),
@@ -761,19 +734,34 @@ impl<'a> Interp<'a> {
                         ));
                     }
                 }
-                "S" | "s" | "B" | "B*" | "b" | "b*" => self.flush_path(true),
-                "f" | "F" | "f*" => self.flush_path(false),
-                "n" => self.clear_path(),
+                b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*" => self.flush_path(true),
+                b"f" | b"F" | b"f*" => self.flush_path(false),
+                b"n" => self.clear_path(),
                 // ── XObjects: forms (recurse) + images (bbox) ───────
-                "Do" => {
-                    if let Some(name) = operands.first().and_then(name_of) {
-                        self.do_xobject(name, resources);
+                b"Do" => {
+                    if let Some(o @ Operand::Name { .. }) = lex.operands.first().copied() {
+                        let name = lex.name_bytes(o).to_vec();
+                        self.do_xobject(&name, resources);
                     }
                 }
                 _ => {}
             }
+            lex.clear();
         }
         Ok(())
+    }
+
+    fn td(&mut self, tx: f64, ty: f64) {
+        self.ts.tlm = Mat {
+            a: 1.0,
+            b: 0.0,
+            c: 0.0,
+            d: 1.0,
+            e: tx,
+            f: ty,
+        }
+        .mul(self.ts.tlm);
+        self.ts.tm = self.ts.tlm;
     }
 
     fn font_map(
@@ -992,9 +980,6 @@ impl<'a> Interp<'a> {
             let Ok(data) = stream.decompressed_content() else {
                 return;
             };
-            let Ok(content) = Content::decode(&data) else {
-                return;
-            };
             let form_res = match stream
                 .dict
                 .get(b"Resources")
@@ -1016,7 +1001,7 @@ impl<'a> Interp<'a> {
                 }
             }
             self.depth += 1;
-            let _ = self.run(&content, form_res);
+            let _ = self.run(&data, form_res);
             self.depth -= 1;
             self.ctm = saved_ctm;
         }
@@ -1063,7 +1048,6 @@ pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
         let content_data = doc
             .get_page_content(page_id)
             .map_err(|e| anyhow!("content: {e}"))?;
-        let content = Content::decode(&content_data).map_err(|e| anyhow!("decode: {e}"))?;
 
         // Resources are inheritable through the page tree; lopdf's
         // get_page_resources only surfaces the direct dictionary.
@@ -1097,7 +1081,7 @@ pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
             page_number: page_no,
             depth: 0,
         };
-        interp.run(&content, resources)?;
+        interp.run(&content_data, resources)?;
 
         if !interp.items.is_empty() {
             any_text = true;

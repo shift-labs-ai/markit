@@ -15,7 +15,9 @@ ego-tree = "0.11"
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 kamadak-exif = "0.6.1"
 lofty = "0.25.0"
-lopdf = { version = "0.38", features = ["rayon"] }
+# default-features off: rayon's per-document thread fan-out is pure
+# overhead at our document sizes, and the date crates are unused.
+lopdf = { version = "0.38", default-features = false }
 memchr = "2"
 mupdf = "0.8.0"
 napi = { version = "2", default-features = false, features = ["napi8", "async"], optional = true }
