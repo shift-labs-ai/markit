@@ -54,16 +54,16 @@ impl Converter for ImageConverter {
 
 /// Parse EXIF and return ordered field lines matching the TS output format.
 fn parse_exif(input: &[u8]) -> Result<Vec<String>> {
-    use exif::{In, Reader, Tag, Value};
+    use exif::{Reader, Tag, Value};
 
     let mut cursor = Cursor::new(input);
     let exif = Reader::new().read_from_container(&mut cursor)?;
 
+    // TS also reads XMP Title/Keywords via exifr; kamadak-exif is EXIF-only,
+    // so those two fields are never emitted here (known minor divergence).
     let mut width: Option<u32> = None;
     let mut height: Option<u32> = None;
-    let title: Option<String> = None;
     let mut description: Option<String> = None;
-    let keywords: Option<String> = None;
     let mut artist: Option<String> = None;
     let mut copyright: Option<String> = None;
     let mut make: Option<String> = None;
@@ -79,9 +79,6 @@ fn parse_exif(input: &[u8]) -> Result<Vec<String>> {
     let mut iso: Option<u32> = None;
     let mut focal_length: Option<f64> = None;
     let mut software: Option<String> = None;
-
-    // We need In to specify IFD, but iterate fields() which covers all IFDs
-    let _ = In::PRIMARY; // ensure imported
 
     for field in exif.fields() {
         match field.tag {
@@ -196,14 +193,8 @@ fn parse_exif(input: &[u8]) -> Result<Vec<String>> {
     if let (Some(w), Some(h)) = (width, height) {
         lines.push(format!("ImageSize: {w}x{h}"));
     }
-    if let Some(v) = title {
-        lines.push(format!("Title: {v}"));
-    }
     if let Some(v) = description {
         lines.push(format!("Description: {v}"));
-    }
-    if let Some(v) = keywords {
-        lines.push(format!("Keywords: {v}"));
     }
     if let Some(v) = artist {
         lines.push(format!("Artist: {v}"));
@@ -303,8 +294,6 @@ fn format_float(f: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
 
     fn make_info(ext: Option<&str>, mime: Option<&str>, filename: Option<&str>) -> StreamInfo {
         StreamInfo {

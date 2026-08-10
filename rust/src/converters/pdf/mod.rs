@@ -505,7 +505,7 @@ mod js_sort_tests {
             let len = (rand() % 300) as usize;
             let mut v: Vec<(u64, usize)> = (0..len).map(|i| (rand() % 8, i)).collect();
             let mut expected = v.clone();
-            expected.sort_by(|a, b| a.0.cmp(&b.0));
+            expected.sort_by_key(|a| a.0);
             super::js_stable_sort(&mut v, |a, b| a.0.cmp(&b.0));
             assert_eq!(v, expected, "trial {trial} len {len}");
         }

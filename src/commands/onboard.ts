@@ -18,7 +18,7 @@ Use \`markit\` to convert files and URLs to markdown. Supports PDF, DOCX, HTML, 
 - Use \`-q\` to get raw markdown without formatting
 - Pipe output directly: \`markit report.pdf | other-tool\`
 </rules>
-</markit>
+</mill>
 `.trim();
 
 const MARKER = "<mill>";

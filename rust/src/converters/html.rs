@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 use anyhow::Result;
 use regex::Regex;
 
@@ -30,20 +32,24 @@ impl Converter for HtmlConverter {
     }
 
     fn convert(&self, input: &[u8], _info: &StreamInfo) -> Result<ConversionResult> {
+        static RE_SCRIPT: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"(?is)<script[\s\S]*?</script>").unwrap());
+        static RE_STYLE: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"(?is)<style[\s\S]*?</style>").unwrap());
+        static RE_TITLE: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"(?is)<title[^>]*>([\s\S]*?)</title>").unwrap());
+
         let html = decode_text(input);
 
         // Remove script and style tags before converting
-        let re_script = Regex::new(r"(?is)<script[\s\S]*?</script>").unwrap();
-        let re_style = Regex::new(r"(?is)<style[\s\S]*?</style>").unwrap();
-        let cleaned = re_script.replace_all(&html, "");
-        let cleaned = re_style.replace_all(&cleaned, "");
+        let cleaned = RE_SCRIPT.replace_all(&html, "");
+        let cleaned = RE_STYLE.replace_all(&cleaned, "");
 
         let normalized = normalize_tables_html(&cleaned);
         let markdown = html_to_markdown(&normalized);
 
         // Extract title
-        let re_title = Regex::new(r"(?is)<title[^>]*>([\s\S]*?)</title>").unwrap();
-        let title = re_title
+        let title = RE_TITLE
             .captures(&html)
             .map(|c| c[1].trim().to_string())
             .filter(|t| !t.is_empty());

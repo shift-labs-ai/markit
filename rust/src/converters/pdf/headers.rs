@@ -271,7 +271,7 @@ mod tests {
             .map(|i| {
                 let mut texts = vec![make_text_box("Body", 500.0, 490.0, i)];
                 // Chapter header appears on pages 5-15 (11 consecutive)
-                if i >= 5 && i <= 15 {
+                if (5..=15).contains(&i) {
                     texts.push(make_text_box("Chapter 3", 750.0, 740.0, i));
                 }
                 make_page(i, texts)

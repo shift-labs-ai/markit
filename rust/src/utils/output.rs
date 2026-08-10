@@ -128,11 +128,12 @@ where
     if options.json {
         json_output(&json_fn());
     } else if options.quiet {
-        if let Some(q) = quiet_fn {
-            q();
+        // TS: quiet WITHOUT a quiet handler falls through to the human
+        // handler (see src/utils/output.ts output()).
+        match quiet_fn {
+            Some(q) => q(),
+            None => human_fn(),
         }
-        // If no quiet handler, do nothing (matches TS behavior where quiet
-        // without a handler falls through to nothing)
     } else {
         human_fn();
     }

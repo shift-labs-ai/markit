@@ -1,6 +1,3 @@
-// TODO(phase-url): constructed by the registry once Markit::convert_url lands.
-#![allow(dead_code)]
-
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 

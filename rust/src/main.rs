@@ -94,18 +94,20 @@ Docs: https://github.com/Michaelliv/markit";
 const KNOWN_COMMANDS: &[&str] = &["convert", "formats", "onboard", "help"];
 
 fn levenshtein(a: &str, b: &str) -> usize {
-    let m = a.len();
-    let n = b.len();
+    let ac: Vec<char> = a.chars().collect();
+    let bc: Vec<char> = b.chars().collect();
+    let m = ac.len();
+    let n = bc.len();
     let mut dp = vec![vec![0usize; n + 1]; m + 1];
-    for i in 0..=m {
-        dp[i][0] = i;
+    for (i, row) in dp.iter_mut().enumerate() {
+        row[0] = i;
     }
     for j in 0..=n {
         dp[0][j] = j;
     }
-    for (i, ac) in a.chars().enumerate() {
-        for (j, bc) in b.chars().enumerate() {
-            let cost = if ac != bc { 1 } else { 0 };
+    for i in 0..m {
+        for j in 0..n {
+            let cost = usize::from(ac[i] != bc[j]);
             dp[i + 1][j + 1] = (dp[i][j + 1] + 1)
                 .min(dp[i + 1][j] + 1)
                 .min(dp[i][j] + cost);

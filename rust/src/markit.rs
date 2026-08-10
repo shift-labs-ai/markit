@@ -25,6 +25,8 @@ use crate::converters::zip::ZipConverter;
 use crate::discover_markdown_source::discover_markdown_source;
 use crate::types::{ConversionResult, Converter, StreamInfo};
 
+// Mirrors the TS constant in src/markit.ts, which has lagged the package
+// version since 0.1.0 — kept identical for request-fingerprint parity.
 const USER_AGENT: &str = "markit/0.1.0";
 
 // ── Injectable HTTP trait ────────────────────────────────────────────
@@ -91,6 +93,38 @@ pub struct Markit {
     http: Box<dyn HttpFetch>,
 }
 
+/// Built-in converters in registry order: specific formats first, generic
+/// last. Mirrors the ordering in src/markit.ts.
+fn builtin_specific() -> Vec<Box<dyn Converter>> {
+    vec![
+        Box::new(PdfConverter),
+        Box::new(DocxConverter),
+        Box::new(PptxConverter),
+        Box::new(XlsxConverter),
+        Box::new(EpubConverter),
+        Box::new(IpynbConverter),
+        Box::new(IWorkConverter),
+        Box::new(GitHubConverter::new()),
+        Box::new(WikipediaConverter),
+        Box::new(RssConverter),
+        Box::new(CsvConverter),
+        Box::new(JsonConverter),
+        Box::new(YamlConverter),
+        Box::new(ImageConverter),
+        Box::new(AudioConverter),
+    ]
+}
+
+fn builtin_generic() -> Vec<Box<dyn Converter>> {
+    vec![Box::new(XmlConverter), Box::new(HtmlConverter)]
+}
+
+impl Default for Markit {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Markit {
     pub fn new() -> Self {
         Self::with_http(Box::new(UreqFetcher))
@@ -98,58 +132,22 @@ impl Markit {
 
     /// Constructor with injectable HTTP for testing.
     pub fn with_http(http: Box<dyn HttpFetch>) -> Self {
-        // Built-in converters: specific formats first, generic last.
-        // Mirrors the ordering in src/markit.ts constructor.
-        let specific: Vec<Box<dyn Converter>> = vec![
-            Box::new(PdfConverter),
-            Box::new(DocxConverter),
-            Box::new(PptxConverter),
-            Box::new(XlsxConverter),
-            Box::new(EpubConverter),
-            Box::new(IpynbConverter),
-            Box::new(IWorkConverter),
-            Box::new(GitHubConverter::new()),
-            Box::new(WikipediaConverter),
-            Box::new(RssConverter),
-            Box::new(CsvConverter),
-            Box::new(JsonConverter),
-            Box::new(YamlConverter),
-            Box::new(ImageConverter),
-            Box::new(AudioConverter),
-        ];
-
-        let generic: Vec<Box<dyn Converter>> =
-            vec![Box::new(XmlConverter), Box::new(HtmlConverter)];
-
-        // Build zip parent list from fresh builtin instances
+        // ZIP gets its own fresh instances of every non-zip converter for
+        // recursive extraction (TS shares the array; boxed trait objects
+        // cannot be shared, so we construct twice).
         #[allow(clippy::arc_with_non_send_sync)] // single-threaded; Arc only for shared ownership
-        let zip_parent_converters: Arc<Vec<Box<dyn Converter>>> = Arc::new(vec![
-            Box::new(PdfConverter),
-            Box::new(DocxConverter),
-            Box::new(PptxConverter),
-            Box::new(XlsxConverter),
-            Box::new(EpubConverter),
-            Box::new(IpynbConverter),
-            Box::new(IWorkConverter),
-            Box::new(GitHubConverter::new()),
-            Box::new(WikipediaConverter),
-            Box::new(RssConverter),
-            Box::new(CsvConverter),
-            Box::new(JsonConverter),
-            Box::new(YamlConverter),
-            Box::new(ImageConverter),
-            Box::new(AudioConverter),
-            Box::new(XmlConverter),
-            Box::new(HtmlConverter),
-        ]);
-
+        let zip_parent_converters: Arc<Vec<Box<dyn Converter>>> = Arc::new(
+            builtin_specific()
+                .into_iter()
+                .chain(builtin_generic())
+                .collect(),
+        );
         let zip = ZipConverter::new(Arc::clone(&zip_parent_converters));
 
-        // Builtins first, plain text last
-        let mut converters: Vec<Box<dyn Converter>> = Vec::new();
-        converters.extend(specific);
+        // Registry: specific, zip, generic, plain text last.
+        let mut converters: Vec<Box<dyn Converter>> = builtin_specific();
         converters.push(Box::new(zip));
-        converters.extend(generic);
+        converters.extend(builtin_generic());
         converters.push(Box::new(PlainTextConverter));
 
         Self { converters, http }
@@ -482,15 +480,6 @@ mod tests {
                 status,
                 content_type: ct.to_string(),
                 body: body.as_bytes().to_vec(),
-            });
-        }
-
-        fn add_bytes(&mut self, method: &str, url: &str, status: u16, ct: &str, body: Vec<u8>) {
-            let key = format!("{} {}", method, url);
-            self.responses.entry(key).or_default().push(MockResponse {
-                status,
-                content_type: ct.to_string(),
-                body,
             });
         }
     }

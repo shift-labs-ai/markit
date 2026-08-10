@@ -136,7 +136,6 @@ impl Converter for AudioConverter {
     }
 }
 
-/// Convert lofty FileType to a format string, analogous to TS's format.codec || format.container.
 /// Codec string matching music-metadata's `format.codec || format.container`
 /// (the TS "Format:" line). Where lofty's generic properties lack codec
 /// detail, the concrete file type is re-parsed.
@@ -211,7 +210,7 @@ fn codec_string(ft: FileType, input: &[u8]) -> Option<String> {
 }
 
 /// Format duration in seconds into "h:mm:ss" or "m:ss" matching the TS formatDuration.
-pub fn format_duration(seconds: f64) -> String {
+fn format_duration(seconds: f64) -> String {
     let total = seconds.round() as u64;
     let h = total / 3600;
     let m = (total % 3600) / 60;
@@ -226,8 +225,6 @@ pub fn format_duration(seconds: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
 
     fn make_info(ext: Option<&str>, mime: Option<&str>, filename: Option<&str>) -> StreamInfo {
         StreamInfo {
@@ -326,8 +323,6 @@ mod tests {
         let result = AudioConverter.convert(&[], &info).unwrap();
         assert_eq!(result.markdown, "*[audio: unknown]*");
     }
-
-    // --- transcribe hook ---
 
     // --- WAV fixture ---
 

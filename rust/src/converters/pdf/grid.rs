@@ -115,7 +115,7 @@ const PAGE_MARGIN: f64 = 20.0;
 
 fn unique_sorted(values: &[f64]) -> Vec<f64> {
     let mut sorted = values.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let mut result: Vec<f64> = Vec::new();
     for v in sorted {
         if result.is_empty() || (result.last().unwrap() - v).abs() > 1.0 {
@@ -131,7 +131,7 @@ fn unique_sorted(values: &[f64]) -> Vec<f64> {
 
 fn chain_covers_range(intervals: &[(f64, f64)], lower_y: f64, upper_y: f64, eps: f64) -> bool {
     let mut sorted = intervals.to_vec();
-    sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     let mut covered = lower_y;
     for iv in &sorted {
         if iv.0 > covered + eps {
@@ -308,7 +308,7 @@ fn expand_sub_rows_by_y_clusters(
                 .iter()
                 .map(|y| (y * 10.0).round() / 10.0)
                 .collect();
-            s.sort_by(|a, b| b.partial_cmp(a).unwrap());
+            s.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
             s.dedup();
             s
         };
@@ -725,7 +725,12 @@ fn build_table_grid(
     // Merge text boxes within each cell into cell text
     for (&cell_idx, box_indices) in &cell_boxes {
         let mut boxes: Vec<&TextBox> = box_indices.iter().map(|&bi| &split_boxes[bi]).collect();
-        boxes.sort_by(|a, b| b.bounds.top.partial_cmp(&a.bounds.top).unwrap());
+        boxes.sort_by(|a, b| {
+            b.bounds
+                .top
+                .partial_cmp(&a.bounds.top)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         let mut lines: Vec<String> = Vec::new();
         let mut current_line: Vec<String> = Vec::new();
@@ -787,7 +792,7 @@ fn infer_x_lines_from_boxes(text_boxes: &[TextBox], x_min: f64, x_max: f64) -> V
         .iter()
         .map(|tb| (tb.bounds.left + tb.bounds.right) / 2.0)
         .collect();
-    centers.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    centers.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     if centers.is_empty() {
         return vec![x_min, x_max];
     }
@@ -843,7 +848,7 @@ fn build_h_line_only_table(
     below_y_min.sort_by(|a, b| {
         let ya = (a.bounds.top + a.bounds.bottom) / 2.0;
         let yb = (b.bounds.top + b.bounds.bottom) / 2.0;
-        yb.partial_cmp(&ya).unwrap()
+        yb.partial_cmp(&ya).unwrap_or(std::cmp::Ordering::Equal)
     });
 
     let mut extension_boxes: Vec<&TextBox> = Vec::new();
@@ -892,13 +897,13 @@ fn build_h_line_only_table(
         let ya = (all_boxes[a].bounds.top + all_boxes[a].bounds.bottom) / 2.0;
         let yb = (all_boxes[b].bounds.top + all_boxes[b].bounds.bottom) / 2.0;
         if (ya - yb).abs() > 0.5 {
-            yb.partial_cmp(&ya).unwrap()
+            yb.partial_cmp(&ya).unwrap_or(std::cmp::Ordering::Equal)
         } else {
             all_boxes[a]
                 .bounds
                 .left
                 .partial_cmp(&all_boxes[b].bounds.left)
-                .unwrap()
+                .unwrap_or(std::cmp::Ordering::Equal)
         }
     });
 
@@ -944,7 +949,7 @@ fn build_h_line_only_table(
                     .bounds
                     .left
                     .partial_cmp(&all_boxes[b].bounds.left)
-                    .unwrap()
+                    .unwrap_or(std::cmp::Ordering::Equal)
             });
             let text: String = cbs
                 .iter()
@@ -1206,7 +1211,7 @@ pub fn resolve_table_grids(
 
     let all_y_lines_vals: Vec<f64> = filtered_h.iter().flat_map(|s| vec![s.y1, s.y2]).collect();
     let mut all_y_lines = unique_sorted(&all_y_lines_vals);
-    all_y_lines.sort_by(|a, b| b.partial_cmp(a).unwrap()); // descending
+    all_y_lines.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal)); // descending
 
     if all_y_lines.len() < 2 {
         return GridResult {
@@ -1683,7 +1688,7 @@ mod tests {
             tb("Value2", 420.0, 325.0),
         ];
         let result = resolve_table_grids(1, &boxes, &segs);
-        assert!(result.grids.len() >= 1);
+        assert!(!result.grids.is_empty());
         if !result.grids.is_empty() {
             // Only 2 unique X-lines from verticals (100, 500) → groupXLines has 2
             // which means it goes to buildTableGrid not buildHLineOnlyTable.

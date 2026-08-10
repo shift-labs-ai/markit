@@ -37,8 +37,15 @@ impl WikipediaConverter {
             .map(|c| c[1].to_string())
             .or_else(|| re_title_tag.captures(&html).map(|c| c[1].to_string()));
 
+        // TS: titleMatch[1].replace(/ - Wikipedia$/, "").trim() — end-anchored
+        // suffix strip on the raw capture, then trim.
         let title = title_raw
-            .map(|t| t.replace(" - Wikipedia", "").trim().to_string())
+            .map(|t| {
+                t.strip_suffix(" - Wikipedia")
+                    .unwrap_or(&t)
+                    .trim()
+                    .to_string()
+            })
             .filter(|t| !t.is_empty());
 
         // Use extracted content section, or fall back to full HTML

@@ -103,7 +103,11 @@ pub fn convert(source: &str, opts: &ConvertOptions) -> u8 {
                         if let Some(ref title) = res.title {
                             map.insert("title".into(), serde_json::json!(title));
                         }
-                        map.insert("length".into(), serde_json::json!(res.markdown.len()));
+                        // TS .length is UTF-16 code units, not bytes.
+                        map.insert(
+                            "length".into(),
+                            serde_json::json!(res.markdown.encode_utf16().count()),
+                        );
                         serde_json::Value::Object(map)
                     },
                     None::<fn()>,
@@ -112,7 +116,10 @@ pub fn convert(source: &str, opts: &ConvertOptions) -> u8 {
                         if let Some(ref title) = res.title {
                             println!("{}", dim(&format!("  title: {}", title)));
                         }
-                        println!("{}", dim(&format!("  {} chars", res.markdown.len())));
+                        println!(
+                            "{}",
+                            dim(&format!("  {} chars", res.markdown.encode_utf16().count()))
+                        );
                     },
                 );
             } else {
@@ -155,7 +162,10 @@ pub fn convert(source: &str, opts: &ConvertOptions) -> u8 {
                 return EXIT_UNSUPPORTED;
             }
 
-            if msg.contains("ENOENT") || msg.contains("No such file") || msg.contains("not found") {
+            // TS: msg.includes("ENOENT") || msg.includes("no such file").
+            // Rust io errors say "No such file or directory"; keep the match
+            // that narrow so converter errors are not misreported.
+            if msg.contains("ENOENT") || msg.contains("No such file") {
                 output(
                     &out_opts,
                     || serde_json::json!({ "success": false, "error": format!("File not found: {}", source) }),
