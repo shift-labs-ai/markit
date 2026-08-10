@@ -5,8 +5,7 @@
 //! compatible.  We intentionally avoid a full XML parser so CDATA, namespace
 //! prefixes (\`content:encoded\`), and malformed feeds all behave identically.
 
-use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
+use std::sync::LazyLock;
 
 use anyhow::{anyhow, Result};
 use regex::Regex;
@@ -28,37 +27,48 @@ const MIMETYPES: &[&str] = &[
 // ─────────────────────────────── helpers ────────────────────────────────────
 
 impl RssConverter {
-    /// Compiled per-tag regexes. The patterns embed the tag name, so they
-    /// cannot be plain statics — but the tag set is closed (the handful of
-    /// RSS/Atom element names used below), so a tiny global cache makes the
-    /// compilation once-per-process.
-    fn cached_tag_regex(tag: &str, capture: bool) -> Option<Regex> {
-        // regex-hygiene: allow — dynamic pattern, cached in TAG_REGEXES below.
-        type Cache = HashMap<(String, bool), Regex>;
-        static TAG_REGEXES: LazyLock<Mutex<Cache>> = LazyLock::new(|| Mutex::new(HashMap::new()));
-
-        let key = (tag.to_string(), capture);
-        let mut cache = TAG_REGEXES.lock().ok()?;
-        if let Some(re) = cache.get(&key) {
-            return Some(re.clone());
+    /// Return the once-compiled pattern for a known RSS/Atom tag.
+    ///
+    /// The converter's tag set is closed, so explicit statics avoid a mutex,
+    /// map lookup, key allocation, and Regex clone on every extracted field.
+    fn tag_regex(tag: &str, capture: bool) -> Option<&'static Regex> {
+        macro_rules! tag_re {
+            ($name:literal) => {{
+                static CAPTURE: LazyLock<Regex> = LazyLock::new(|| {
+                    Regex::new(concat!(r"(?si)<", $name, r"[^>]*>([\s\S]*?)</", $name, ">"))
+                        .unwrap()
+                });
+                static WHOLE: LazyLock<Regex> = LazyLock::new(|| {
+                    Regex::new(concat!(r"(?si)<", $name, r"[^>]*>[\s\S]*?</", $name, ">")).unwrap()
+                });
+                if capture {
+                    &*CAPTURE
+                } else {
+                    &*WHOLE
+                }
+            }};
         }
-        let escaped = regex::escape(tag);
-        // [\s\S]*? matches any char including newlines (lazy)
-        let pattern = if capture {
-            format!(r"(?si)<{escaped}[^>]*>([\s\S]*?)</{escaped}>")
-        } else {
-            format!(r"(?si)<{escaped}[^>]*>[\s\S]*?</{escaped}>")
-        };
-        // regex-hygiene: allow — dynamic tag-name pattern, cached above.
-        let re = Regex::new(&pattern).ok()?;
-        cache.insert(key, re.clone());
-        Some(re)
+
+        Some(match tag {
+            "title" => tag_re!("title"),
+            "description" => tag_re!("description"),
+            "item" => tag_re!("item"),
+            "pubDate" => tag_re!("pubDate"),
+            "content:encoded" => tag_re!("content:encoded"),
+            "link" => tag_re!("link"),
+            "subtitle" => tag_re!("subtitle"),
+            "entry" => tag_re!("entry"),
+            "updated" => tag_re!("updated"),
+            "summary" => tag_re!("summary"),
+            "content" => tag_re!("content"),
+            _ => return None,
+        })
     }
 
     /// Extract the text content of the first matching `<tag>…</tag>` element.
     /// Strips CDATA wrappers and trims.  Returns `None` when missing or empty.
     fn extract(xml: &str, tag: &str) -> Option<String> {
-        let re = Self::cached_tag_regex(tag, true)?;
+        let re = Self::tag_regex(tag, true)?;
         let caps = re.captures(xml)?;
         let content = caps.get(1)?.as_str();
         let stripped = strip_cdata(content);
@@ -72,7 +82,7 @@ impl RssConverter {
 
     /// Collect all `<tag>…</tag>` blocks (case-insensitive, multi-line).
     fn extract_all(xml: &str, tag: &str) -> Vec<String> {
-        let Some(re) = Self::cached_tag_regex(tag, false) else {
+        let Some(re) = Self::tag_regex(tag, false) else {
             return vec![];
         };
         re.find_iter(xml).map(|m| m.as_str().to_string()).collect()
