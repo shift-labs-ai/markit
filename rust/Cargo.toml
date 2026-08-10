@@ -22,6 +22,11 @@ mupdf = "0.8.0"
 ureq = "3.4.0"
 zip = "8.6.0"
 ego-tree = "0.11"
+napi = { version = "2", default-features = false, features = ["napi8", "async"], optional = true }
+napi-derive = { version = "2", optional = true }
+
+[features]
+napi = ["dep:napi", "dep:napi-derive", "dep:napi-build"]
 
 [lints.clippy]
 # The PDF pipeline and HTML→MD engine are line-for-line ports of the TS
@@ -30,6 +35,12 @@ ego-tree = "0.11"
 needless_range_loop = "allow"
 # CTM mirrors the TS type name (PDF current transformation matrix).
 upper_case_acronyms = "allow"
+
+[build-dependencies]
+napi-build = { version = "2", optional = true }
+
+[lib]
+crate-type = ["cdylib", "rlib"]
 
 [[bin]]
 name = "markit"

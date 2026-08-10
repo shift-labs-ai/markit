@@ -95,7 +95,7 @@ pub struct Markit {
 
 /// Built-in converters in registry order: specific formats first, generic
 /// last. Mirrors the ordering in src/markit.ts.
-fn builtin_specific() -> Vec<Box<dyn Converter>> {
+pub fn builtin_specific() -> Vec<Box<dyn Converter>> {
     vec![
         Box::new(PdfConverter),
         Box::new(DocxConverter),
@@ -115,7 +115,7 @@ fn builtin_specific() -> Vec<Box<dyn Converter>> {
     ]
 }
 
-fn builtin_generic() -> Vec<Box<dyn Converter>> {
+pub fn builtin_generic() -> Vec<Box<dyn Converter>> {
     vec![Box::new(XmlConverter), Box::new(HtmlConverter)]
 }
 
@@ -151,6 +151,14 @@ impl Markit {
         converters.push(Box::new(PlainTextConverter));
 
         Self { converters, http }
+    }
+
+    /// Returns the builtin converter names in registry order.
+    pub fn converter_names(&self) -> Vec<String> {
+        self.converters
+            .iter()
+            .map(|c| c.name().to_string())
+            .collect()
     }
 
     /// Convert a local file to markdown.

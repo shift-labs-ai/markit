@@ -1,0 +1,26 @@
+{
+  "name": "markit-ai-linux-arm64-gnu",
+  "version": "0.5.3",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "main": "markit.linux-arm64-gnu.node",
+  "files": [
+    "markit.linux-arm64-gnu.node"
+  ],
+  "description": "Native binary for markit-ai — convert anything to markdown",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Michaelliv/markit.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "libc": [
+    "glibc"
+  ]
+}

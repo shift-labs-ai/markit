@@ -38,3 +38,5 @@ test/fixtures/pdfs/
 test/fixtures/.DS_Store
 .pi/
 test/fixtures/pdfs/*.pdf
+.pi-rlm/
+*.node

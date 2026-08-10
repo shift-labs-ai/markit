@@ -1,0 +1,23 @@
+{
+  "name": "markit-ai-darwin-arm64",
+  "version": "0.5.3",
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "main": "markit.darwin-arm64.node",
+  "files": [
+    "markit.darwin-arm64.node"
+  ],
+  "description": "Native binary for markit-ai — convert anything to markdown",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Michaelliv/markit.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

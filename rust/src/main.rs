@@ -1,18 +1,11 @@
-mod commands;
-mod converters;
-mod discover_markdown_source;
-mod markit;
-mod types;
-mod utils;
-
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use crate::commands::convert::{convert, ConvertOptions};
-use crate::commands::formats::formats;
-use crate::commands::onboard::onboard;
-use crate::utils::output::{error, OutputOptions};
+use markit::commands::convert::{convert, ConvertOptions};
+use markit::commands::formats::formats;
+use markit::commands::onboard::onboard;
+use markit::utils::output::{error, OutputOptions};
 
 // clap renders "--version" as "{name} {version}", so keep the bare semver here;
 // the CLI output is "markit 0.5.3", matching the TS `markit ${version}` string.

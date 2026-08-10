@@ -1,7 +1,7 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Markit } from "../markit.js";
+import { Markit } from "../native-markit.js";
 import { EXIT_ERROR, EXIT_UNSUPPORTED } from "../utils/exit-codes.js";
 import type { OutputOptions } from "../utils/output.js";
 import { dim, error, output, success } from "../utils/output.js";

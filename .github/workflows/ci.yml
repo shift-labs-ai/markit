@@ -7,6 +7,7 @@ on:
     branches: [main]
 
 jobs:
+  # ── TypeScript: lint, types, tests ──────────────────────────────────────────
   check:
     runs-on: ubuntu-latest
     steps:
@@ -23,3 +24,36 @@ jobs:
         run: bunx tsc --noEmit
       - name: Run tests
         run: bun test || echo "No tests found, skipping"
+
+  # ── Rust: fmt, clippy, tests ─────────────────────────────────────────────────
+  rust:
+    name: Rust checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # MuPDF builds from C source and takes several minutes.
+      # workspaces: tells rust-cache the crate root is rust/ (not the repo root).
+      # cache-on-failure: true so a partial mupdf-sys build is still cached
+      # between fix iterations. Cache key includes Cargo.lock automatically.
+      - name: Cache Rust / MuPDF build artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust -> rust/target
+          cache-on-failure: true
+
+      - name: cargo fmt --check
+        working-directory: rust
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        working-directory: rust
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test
+        working-directory: rust
+        run: cargo test

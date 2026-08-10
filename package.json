@@ -17,11 +17,12 @@
     "markit": "./dist/main.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "native.cjs"
   ],
   "scripts": {
     "build": "tsc",
-    "prepublishOnly": "npm run build",
+    "prepublishOnly": "npm run build && napi prepublish -t npm --skip-gh-release",
     "dev": "bun run src/main.ts",
     "build:bun": "bun build --compile src/main.ts --outfile mill",
     "build:bun-linux": "bun build --compile --target=bun-linux-x64 src/main.ts --outfile mill-linux-x64",
@@ -34,7 +35,9 @@
     "lint:rust": "cd rust && cargo clippy",
     "check": "bunx biome check src/",
     "check:rust": "cd rust && cargo fmt --check && cargo clippy --all-targets -- -D warnings",
-    "check:all": "npm run check && npm run check:rust"
+    "check:all": "npm run check && npm run check:rust",
+    "build:native": "napi build --release --strip --platform",
+    "artifacts": "napi artifacts"
   },
   "repository": {
     "type": "git",
@@ -57,6 +60,7 @@
   "license": "MIT",
   "devDependencies": {
     "@biomejs/biome": "^2.3.14",
+    "@napi-rs/cli": "2.18.4",
     "@types/jszip": "^3.4.1",
     "@types/node": "^25.5.0",
     "@types/turndown": "^5.0.5",
@@ -74,5 +78,27 @@
     "rss-parser": "^3.13.0",
     "turndown": "^7.2.0",
     "turndown-plugin-gfm": "^1.0.2"
+  },
+  "napi": {
+    "name": "markit",
+    "triples": {
+      "defaults": false,
+      "additional": [
+        "aarch64-apple-darwin",
+        "x86_64-apple-darwin",
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-unknown-linux-musl",
+        "aarch64-unknown-linux-musl"
+      ]
+    }
+  },
+  "optionalDependencies": {
+    "markit-ai-darwin-arm64": "0.5.3",
+    "markit-ai-darwin-x64": "0.5.3",
+    "markit-ai-linux-x64-gnu": "0.5.3",
+    "markit-ai-linux-arm64-gnu": "0.5.3",
+    "markit-ai-linux-x64-musl": "0.5.3",
+    "markit-ai-linux-arm64-musl": "0.5.3"
   }
 }
