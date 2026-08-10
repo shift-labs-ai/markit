@@ -18,6 +18,8 @@ flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 kamadak-exif = "0.6.1"
 lofty = "0.25.0"
 memchr = "2"
+# PNG encoding for extracted PDF images (pure Rust, MIT/Apache).
+png = "0.18"
 mupdf = "0.8.0"
 napi = { version = "2", default-features = false, features = ["napi8", "async"], optional = true }
 napi-derive = { version = "2", optional = true }

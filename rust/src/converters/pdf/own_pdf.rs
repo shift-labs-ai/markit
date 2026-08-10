@@ -320,6 +320,11 @@ impl<'a> Pdf<'a> {
         Ok(dict)
     }
 
+    /// All known object numbers (survey/debug tooling).
+    pub fn object_numbers(&self) -> Vec<u32> {
+        self.xref.keys().copied().collect()
+    }
+
     /// Resolve an object by number, parsing it on demand.
     pub fn object(&self, num: u32) -> Result<Val<'a>> {
         match self.xref.get(&num) {
@@ -630,6 +635,11 @@ fn ascii85(data: &[u8]) -> Result<Vec<u8>> {
         out.extend_from_slice(&v.to_be_bytes()[..n - 1]);
     }
     Ok(out)
+}
+
+/// Public shim for image extraction.
+pub fn inflate_pub(data: &[u8]) -> Result<Vec<u8>> {
+    inflate(data)
 }
 
 fn inflate(data: &[u8]) -> Result<Vec<u8>> {
@@ -1114,6 +1124,11 @@ impl<'a> Pdf<'a> {
             return Ok(());
         }
         bail!("password required");
+    }
+
+    /// Public shim for image extraction.
+    pub fn decrypt_stream_pub(&self, raw: &[u8]) -> Result<Vec<u8>> {
+        self.decrypt_stream(raw)
     }
 
     pub(crate) fn decrypt_stream(&self, raw: &[u8]) -> Result<Vec<u8>> {

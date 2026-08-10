@@ -532,6 +532,8 @@ struct Interp<'a> {
     items: Vec<RawItem>,
     segments: Vec<Segment>,
     image_bboxes: Vec<(f64, f64, f64, f64)>, // user-space x0,y0,x1,y1
+    /// Image XObject placements in paint order (dict + raw stream bytes).
+    image_xobjects: Vec<(Dict<'a>, &'a [u8])>,
     ctm: Mat,
     ctm_stack: Vec<Mat>,
     ts: TextState,
@@ -918,6 +920,7 @@ impl<'a> Interp<'a> {
             let (bx, by) = self.ctm.apply(1.0, 1.0);
             self.image_bboxes
                 .push((ax.min(bx), ay.min(by), ax.max(bx), ay.max(by)));
+            self.image_xobjects.push((sdict.clone(), raw));
             return;
         }
 
@@ -956,6 +959,57 @@ impl<'a> Interp<'a> {
 }
 
 // ── Page assembly ───────────────────────────────────────────────────────────
+
+/// Inheritable page-tree attributes.
+#[derive(Clone, Default)]
+struct Inherit<'a> {
+    media: Option<Vec<f64>>,
+    rotate: Option<f64>,
+    resources: Option<Dict<'a>>,
+}
+
+fn walk_pages<'a>(
+    pdf: &'a Pdf<'a>,
+    node: &Dict<'a>,
+    inh: &Inherit<'a>,
+    out: &mut Vec<(Dict<'a>, Inherit<'a>)>,
+    depth: usize,
+) -> Result<()> {
+    if depth > 32 {
+        bail!("page tree too deep");
+    }
+    let mut inh = inh.clone();
+    if let Some(Val::Array(a)) = pdf.dict_get(node, b"MediaBox")? {
+        let v: Vec<f64> = a
+            .iter()
+            .filter_map(|o| pdf.resolve(o).ok().and_then(|v| v.as_num()))
+            .collect();
+        if v.len() == 4 {
+            inh.media = Some(v);
+        }
+    }
+    if let Some(v) = pdf.dict_get(node, b"Rotate")?.and_then(|v| v.as_num()) {
+        inh.rotate = Some(v);
+    }
+    if let Some(Val::Dict(r)) = pdf.dict_get(node, b"Resources")? {
+        inh.resources = Some(r);
+    }
+
+    if matches!(pdf.dict_get(node, b"Type")?, Some(Val::Name(b"Pages"))) {
+        let Some(Val::Array(kids)) = pdf.dict_get(node, b"Kids")? else {
+            bail!("Pages without Kids");
+        };
+        for kid in kids {
+            let Val::Dict(kd) = pdf.resolve(&kid)? else {
+                continue;
+            };
+            walk_pages(pdf, &kd, &inh, out, depth + 1)?;
+        }
+    } else {
+        out.push((node.clone(), inh));
+    }
+    Ok(())
+}
 
 /// Extract all pages via the own object layer. Errors mean "use the
 /// MuPDF fallback" (encryption, non-Flate filters, rotated pages,
@@ -1062,6 +1116,7 @@ pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
             items: Vec::new(),
             segments: Vec::new(),
             image_bboxes: Vec::new(),
+            image_xobjects: Vec::new(),
             // Normalize a non-zero MediaBox origin to (0,0).
             ctm: Mat {
                 a: 1.0,
@@ -1132,5 +1187,89 @@ pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
         bail!("no text extracted (scanned or unsupported encodings)");
     }
 
+    Ok(out)
+}
+/// Image placements for one page, in the same order and with the same
+/// area filter as the ImageRegion ids assigned during extraction
+/// ("p{page}-img{i}"), so a region id indexes directly into this list.
+pub(crate) fn page_image_placements<'a>(
+    pdf: &'a Pdf<'a>,
+    page_number: u32,
+) -> Result<Vec<(Dict<'a>, &'a [u8])>> {
+    let Some(Val::Dict(root)) = pdf.dict_get(&pdf.trailer, b"Root")? else {
+        bail!("no Root");
+    };
+    let Some(Val::Dict(pages_root)) = pdf.dict_get(&root, b"Pages")? else {
+        bail!("no Pages");
+    };
+    let mut page_dicts = Vec::new();
+    walk_pages(pdf, &pages_root, &Inherit::default(), &mut page_dicts, 0)?;
+    let Some((page, inh)) = page_dicts.into_iter().nth(page_number as usize - 1) else {
+        bail!("page out of range");
+    };
+
+    let mb = inh.media.as_ref().ok_or_else(|| anyhow!("no MediaBox"))?;
+    let (mx0, my0) = (mb[0].min(mb[2]), mb[1].min(mb[3]));
+    let page_height = (mb[3] - mb[1]).abs();
+
+    let mut content_buf: Vec<u8> = Vec::new();
+    match pdf.dict_get(&page, b"Contents")? {
+        Some(Val::Stream(d, raw)) => {
+            content_buf.extend_from_slice(&decode_stream(&d, raw, pdf)?);
+        }
+        Some(Val::Array(items)) => {
+            for it in items {
+                if let Val::Stream(d, raw) = pdf.resolve(&it)? {
+                    content_buf.extend_from_slice(&decode_stream(&d, raw, pdf)?);
+                    content_buf.push(b'\n');
+                }
+            }
+        }
+        _ => {}
+    }
+
+    let mut interp = Interp {
+        pdf,
+        items: Vec::new(),
+        segments: Vec::new(),
+        image_bboxes: Vec::new(),
+        image_xobjects: Vec::new(),
+        ctm: Mat {
+            a: 1.0,
+            b: 0.0,
+            c: 0.0,
+            d: 1.0,
+            e: -mx0,
+            f: -my0,
+        },
+        ctm_stack: Vec::new(),
+        ts: TextState::default(),
+        path_start: None,
+        path_cur: None,
+        path_segments: Vec::new(),
+        path_rects: Vec::new(),
+        seg_counter: 0,
+        page_number,
+        depth: 0,
+    };
+    interp.run(&content_buf, inh.resources.as_ref())?;
+
+    // Apply the same MIN_IMAGE_AREA filter (int-truncated device coords)
+    // that assigned the region ids.
+    let mut out = Vec::new();
+    for (i, &(x0, y0, x1, y1)) in interp.image_bboxes.iter().enumerate() {
+        let dev = (
+            x0 as f32,
+            (page_height - y1) as f32,
+            x1 as f32,
+            (page_height - y0) as f32,
+        );
+        let w = ((dev.2 - dev.0) as i32) as f64;
+        let h = ((dev.3 - dev.1) as i32) as f64;
+        if w * h < super::extract::MIN_IMAGE_AREA_PUB {
+            continue;
+        }
+        out.push(interp.image_xobjects[i].clone());
+    }
     Ok(out)
 }

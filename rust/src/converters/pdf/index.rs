@@ -92,6 +92,36 @@ impl Converter for PdfConverter {
             if let Some(dir) = image_dir {
                 if !page.images.is_empty() {
                     for img in &page.images {
+                        // Prefer direct embedded-image extraction (native
+                        // resolution, real format); rasterize via MuPDF only
+                        // when the encoding is unsupported.
+                        let written =
+                            match super::image_extract::extract_image_region_fast(input, img) {
+                                Ok(x) => {
+                                    let filepath =
+                                        Path::new(dir).join(format!("{}.{}", img.id, x.ext));
+                                    match fs::write(&filepath, &x.bytes) {
+                                        Ok(()) => Some(filepath),
+                                        Err(e) => {
+                                            eprintln!(
+                                                "Failed to write image {}: {}",
+                                                filepath.display(),
+                                                e
+                                            );
+                                            None
+                                        }
+                                    }
+                                }
+                                Err(_) => None,
+                            };
+                        if let Some(filepath) = written {
+                            image_blocks.push(ImageBlock {
+                                top_y: img.top_y,
+                                markdown: format!("![{}]({})", img.id, filepath.display()),
+                            });
+                            continue;
+                        }
+
                         let filename = format!("{}.png", img.id);
                         let filepath = Path::new(dir).join(&filename);
                         match render_image_region(input, img) {

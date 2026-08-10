@@ -892,6 +892,8 @@ fn tokenize_content_stream(raw: &str) -> Vec<String> {
 // ---------------------------------------------------------------------------
 
 const MIN_IMAGE_AREA: f64 = 5000.0;
+/// Public shim for the fast image-extraction path.
+pub(crate) const MIN_IMAGE_AREA_PUB: f64 = MIN_IMAGE_AREA;
 
 /// Shared bbox → image-region conversion (both extraction paths).
 fn image_regions_from_bboxes(
@@ -974,7 +976,12 @@ pub fn extract_pages(input: &[u8]) -> Result<Vec<PageContent>> {
             }
         }
     }
+    extract_pages_mupdf(input)
+}
 
+/// MuPDF-based extraction: the fallback engine, and the differential
+/// oracle for validating the own engine (examples/oracle_diff).
+pub fn extract_pages_mupdf(input: &[u8]) -> Result<Vec<PageContent>> {
     // Text extraction never consumes color-managed values, but MuPDF's
     // default context runs lcms ICC transforms during page processing
     // (~5% of small-document conversion). Off, once per thread.

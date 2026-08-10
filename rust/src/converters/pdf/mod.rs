@@ -6,6 +6,7 @@ pub mod extract;
 pub mod fast_extract;
 pub mod grid;
 pub mod headers;
+pub mod image_extract;
 pub mod index;
 pub mod own_pdf;
 pub mod render;
