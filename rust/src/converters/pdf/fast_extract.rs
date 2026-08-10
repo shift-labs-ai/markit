@@ -2052,8 +2052,29 @@ mod tests {
                 .unwrap_or_else(|e| panic!("{name}: fast path failed: {e}"));
             assert_eq!(text_of(&pages), expect, "{name} extraction differs");
         }
+
+        // Password routes share this test because MARKIT_PDF_PASSWORD is
+        // process-global: user and owner passwords both decrypt, a wrong
+        // password is refused.
+        for name in ["pw-aes256.pdf", "pw-rc4-128.pdf"] {
+            let bytes = fixture(name).unwrap();
+            for pw in ["usr", "own"] {
+                std::env::set_var("MARKIT_PDF_PASSWORD", pw);
+                let pages =
+                    extract_pages_fast(&bytes).unwrap_or_else(|e| panic!("{name}/{pw}: {e}"));
+                assert_eq!(text_of(&pages), expect, "{name}/{pw}");
+            }
+            std::env::set_var("MARKIT_PDF_PASSWORD", "wrong");
+            assert!(
+                extract_pages_fast(&bytes).is_err(),
+                "{name} accepted a wrong password"
+            );
+            std::env::remove_var("MARKIT_PDF_PASSWORD");
+        }
     }
 
+    /// Password-protected fixtures decrypt with either the user or the
+    /// owner password and refuse a wrong one. Env-var scoped in a single
     /// A wrong /Length must not corrupt the stream: the parser verifies
     /// the endstream delimiter and recovers by scanning.
     #[test]

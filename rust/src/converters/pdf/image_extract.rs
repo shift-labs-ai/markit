@@ -1,10 +1,9 @@
 //! Embedded-image extraction from PDF pages — the pure-Rust replacement
 //! for MuPDF region rasterization. Instead of rendering a page crop, the
 //! placed image XObject itself is extracted at native resolution:
-//! DCTDecode streams pass through as JPEG files; FlateDecode (and raw)
-//! bitmaps re-encode as PNG. Unsupported encodings (JPX, CCITT, JBIG2)
-//! yield None and the caller skips the image, matching the old renderer's
-//! failure behavior.
+//! DCTDecode streams pass through as JPEG files, JPXDecode as JP2;
+//! CCITT decodes to grayscale PNG; FlateDecode (and raw) bitmaps
+//! re-encode as PNG. JBIG2 stays on the rasterization fallback.
 
 use anyhow::{anyhow, bail, Result};
 
@@ -110,6 +109,19 @@ fn extract_xobject(pdf: &Pdf, dict: &Dict, raw: &[u8]) -> Result<ExtractedImage>
             .collect(),
         _ => Vec::new(),
     };
+
+    if filter_names.last().map(|n| n.as_slice()) == Some(b"JPXDecode") {
+        // A JPXDecode payload is a complete JP2/J2K codestream.
+        let mut bytes = pdf.decrypt_stream_pub(raw)?;
+        for f in &filter_names[..filter_names.len() - 1] {
+            if f.as_slice() == b"FlateDecode" {
+                bytes = super::own_pdf::inflate_pub(&bytes)?;
+            } else {
+                bail!("unsupported pre-JPX filter");
+            }
+        }
+        return Ok(ExtractedImage { bytes, ext: "jp2" });
+    }
 
     if filter_names.last().map(|n| n.as_slice()) == Some(b"CCITTFaxDecode") {
         let mut bytes = pdf.decrypt_stream_pub(raw)?;

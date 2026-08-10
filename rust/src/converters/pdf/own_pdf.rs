@@ -1096,9 +1096,9 @@ pub fn probe_encrypt_dict(data: &[u8]) -> Result<String> {
 
 // ── Standard security handler, V5 (AES-256, revisions 5 and 6) ─────────────
 //
-// Empty-password documents only (the common "encrypted for permissions"
-// case). Anything else — user passwords, RC4/AESV2 revisions — errors out
-// to the MuPDF fallback.
+// Standard security handler. The password comes from MARKIT_PDF_PASSWORD
+// (empty when unset — the common "encrypted for permissions" case). Both
+// the user- and owner-password routes are tried.
 
 pub(crate) struct Decryptor {
     key: [u8; 32],
@@ -1109,6 +1109,9 @@ impl<'a> Pdf<'a> {
         let Some(enc) = dget(&self.trailer, b"Encrypt") else {
             return Ok(());
         };
+        let password = std::env::var("MARKIT_PDF_PASSWORD").unwrap_or_default();
+        let pw: &[u8] = password.as_bytes();
+        let pw = &pw[..pw.len().min(127)];
         let Val::Dict(enc) = self.resolve(enc)? else {
             bail!("bad Encrypt");
         };
@@ -1154,18 +1157,18 @@ impl<'a> Pdf<'a> {
             bail!("short U/O/UE/OE");
         }
 
-        // Empty USER password (ISO 32000-2, 7.6.4.3.3/4).
-        if hash_2b(b"", &u[32..40], b"", r) == u[0..32] {
-            let ik = hash_2b(b"", &u[40..48], b"", r);
+        // USER password route (ISO 32000-2, 7.6.4.3.3/4).
+        if hash_2b(pw, &u[32..40], b"", r) == u[0..32] {
+            let ik = hash_2b(pw, &u[40..48], b"", r);
             let key = aes256_cbc_nopad_decrypt(&ik, &[0u8; 16], &ue[..32])?;
             self.decrypt = Some(Decryptor {
                 key: key.try_into().map_err(|_| anyhow!("bad UE"))?,
             });
             return Ok(());
         }
-        // Empty OWNER password (uses U as extra hash data).
-        if hash_2b(b"", &o[32..40], &u[..48], r) == o[0..32] {
-            let ik = hash_2b(b"", &o[40..48], &u[..48], r);
+        // OWNER password route (uses U as extra hash data).
+        if hash_2b(pw, &o[32..40], &u[..48], r) == o[0..32] {
+            let ik = hash_2b(pw, &o[40..48], &u[..48], r);
             let key = aes256_cbc_nopad_decrypt(&ik, &[0u8; 16], &oe[..32])?;
             self.decrypt = Some(Decryptor {
                 key: key.try_into().map_err(|_| anyhow!("bad OE"))?,
@@ -1235,9 +1238,15 @@ impl<'a> Pdf<'a> {
             _ => Vec::new(),
         };
 
-        // Algorithm 2 with the empty (padded) user password.
+        // Algorithm 2 with the (padded) user password.
+        let password = std::env::var("MARKIT_PDF_PASSWORD").unwrap_or_default();
+        let pw = password.as_bytes();
+        let mut padded = [0u8; 32];
+        let n = pw.len().min(32);
+        padded[..n].copy_from_slice(&pw[..n]);
+        padded[n..].copy_from_slice(&PAD[..32 - n]);
         let mut seed = Vec::with_capacity(128);
-        seed.extend_from_slice(&PAD);
+        seed.extend_from_slice(&padded);
         seed.extend_from_slice(&o[..32.min(o.len())]);
         seed.extend_from_slice(&(p as i32).to_le_bytes());
         seed.extend_from_slice(&id0);
@@ -1267,11 +1276,62 @@ impl<'a> Pdf<'a> {
             let x = rc4(&key, &x);
             u.len() >= 16 && x[..16] == u[..16]
         };
-        if !ok {
-            bail!("password required");
+        if ok {
+            self.legacy = Some(LegacyCrypt { key, aes });
+            return Ok(());
         }
 
-        self.legacy = Some(LegacyCrypt { key, aes });
+        // Owner-password route (Algorithm 7): recover the user password
+        // by decrypting /O with the owner key, then rerun Algorithm 2.
+        let mut oseed = Vec::with_capacity(96);
+        oseed.extend_from_slice(&padded);
+        let mut okey = md5(&oseed)[..key_len].to_vec();
+        if r >= 3 {
+            for _ in 0..50 {
+                okey = md5(&okey)[..key_len].to_vec();
+            }
+        }
+        let mut user_pw = o[..32.min(o.len())].to_vec();
+        if r == 2 {
+            user_pw = rc4(&okey, &user_pw);
+        } else {
+            for i in (0..=19u8).rev() {
+                let k2: Vec<u8> = okey.iter().map(|&b| b ^ i).collect();
+                user_pw = rc4(&k2, &user_pw);
+            }
+        }
+        let mut seed2 = Vec::with_capacity(128);
+        seed2.extend_from_slice(&user_pw[..32.min(user_pw.len())]);
+        seed2.extend_from_slice(&o[..32.min(o.len())]);
+        seed2.extend_from_slice(&(p as i32).to_le_bytes());
+        seed2.extend_from_slice(&id0);
+        if r >= 4 && !encrypt_metadata {
+            seed2.extend_from_slice(&[0xff, 0xff, 0xff, 0xff]);
+        }
+        let mut key2 = md5(&seed2)[..key_len].to_vec();
+        if r >= 3 {
+            for _ in 0..50 {
+                key2 = md5(&key2)[..key_len].to_vec();
+            }
+        }
+        let ok2 = if r == 2 {
+            rc4(&key2, &PAD) == u[..32.min(u.len())]
+        } else {
+            let mut h = Vec::with_capacity(64);
+            h.extend_from_slice(&PAD);
+            h.extend_from_slice(&id0);
+            let mut x = md5(&h).to_vec();
+            for i in 1..=19u8 {
+                let k2: Vec<u8> = key2.iter().map(|&b| b ^ i).collect();
+                x = rc4(&k2, &x);
+            }
+            let x = rc4(&key2, &x);
+            u.len() >= 16 && x[..16] == u[..16]
+        };
+        if !ok2 {
+            bail!("password required");
+        }
+        self.legacy = Some(LegacyCrypt { key: key2, aes });
         Ok(())
     }
 
