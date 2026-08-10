@@ -1,5 +1,6 @@
 //! PDF conversion pipeline. Port of src/converters/pdf/.
 
+pub mod ccitt;
 pub mod columns;
 pub mod content_lex;
 pub mod extract;

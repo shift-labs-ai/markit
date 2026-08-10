@@ -41,6 +41,64 @@ pub fn extract_image_region_fast(input: &[u8], region: &ImageRegion) -> Result<E
     extract_xobject(&pdf, &dict, raw)
 }
 
+/// CCITTFaxDecode → grayscale PNG.
+fn extract_ccitt(pdf: &Pdf, dict: &Dict, data: &[u8]) -> Result<ExtractedImage> {
+    let width = pdf
+        .dict_get(dict, b"Width")?
+        .and_then(|v| v.as_num())
+        .ok_or_else(|| anyhow!("no Width"))? as usize;
+    let height = pdf
+        .dict_get(dict, b"Height")?
+        .and_then(|v| v.as_num())
+        .unwrap_or(0.0) as usize;
+
+    let parms = match pdf.dict_get(dict, b"DecodeParms")? {
+        Some(Val::Dict(d)) => Some(d),
+        Some(Val::Array(a)) => a.iter().find_map(|v| match pdf.resolve(v) {
+            Ok(Val::Dict(d)) => Some(d),
+            _ => None,
+        }),
+        _ => None,
+    };
+    let pg = |key: &[u8], dflt: f64| -> f64 {
+        parms
+            .as_ref()
+            .and_then(|d| pdf.dict_get(d, key).ok().flatten())
+            .and_then(|v| v.as_num())
+            .unwrap_or(dflt)
+    };
+    let k = pg(b"K", 0.0) as i32;
+    let columns = pg(b"Columns", 1728.0) as usize;
+    let cols = if columns > 0 { columns } else { width };
+    let byte_align = matches!(
+        parms
+            .as_ref()
+            .and_then(|d| pdf.dict_get(d, b"EncodedByteAlign").ok().flatten()),
+        Some(Val::Bool(true))
+    );
+    let black_is_1 = matches!(
+        parms
+            .as_ref()
+            .and_then(|d| pdf.dict_get(d, b"BlackIs1").ok().flatten()),
+        Some(Val::Bool(true))
+    );
+
+    let gray = super::ccitt::decode(data, k, cols, height, byte_align, black_is_1)?;
+    let rows = gray.len() / cols;
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, cols as u32, rows as u32);
+        enc.set_color(png::ColorType::Grayscale);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut w = enc.write_header()?;
+        w.write_image_data(&gray)?;
+    }
+    Ok(ExtractedImage {
+        bytes: png,
+        ext: "png",
+    })
+}
+
 fn extract_xobject(pdf: &Pdf, dict: &Dict, raw: &[u8]) -> Result<ExtractedImage> {
     // Find the outermost filter; DCT passes through undecoded.
     let filter_names: Vec<Vec<u8>> = match pdf.dict_get(dict, b"Filter")? {
@@ -52,6 +110,18 @@ fn extract_xobject(pdf: &Pdf, dict: &Dict, raw: &[u8]) -> Result<ExtractedImage>
             .collect(),
         _ => Vec::new(),
     };
+
+    if filter_names.last().map(|n| n.as_slice()) == Some(b"CCITTFaxDecode") {
+        let mut bytes = pdf.decrypt_stream_pub(raw)?;
+        for f in &filter_names[..filter_names.len() - 1] {
+            if f.as_slice() == b"FlateDecode" {
+                bytes = super::own_pdf::inflate_pub(&bytes)?;
+            } else {
+                bail!("unsupported pre-CCITT filter");
+            }
+        }
+        return extract_ccitt(pdf, dict, &bytes);
+    }
 
     if filter_names.last().map(|n| n.as_slice()) == Some(b"DCTDecode") {
         // The (possibly Flate-wrapped) payload is a complete JPEG file.
