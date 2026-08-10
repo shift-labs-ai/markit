@@ -8,24 +8,34 @@
 //!   5. Render diagrams as PNG files (if output directory provided)
 //!   6. Render tables as markdown tables, free text as paragraphs/headings
 
+#[cfg(feature = "pdf")]
 use std::collections::HashSet;
+#[cfg(feature = "pdf")]
 use std::fs;
+#[cfg(feature = "pdf")]
 use std::path::Path;
 
 use anyhow::Result;
 
 use crate::types::{ConversionResult, Converter, MarkitOptions, StreamInfo};
 
+#[cfg(feature = "pdf")]
 use super::columns::detect_columns;
+#[cfg(feature = "pdf")]
 use super::extract::{extract_pages, render_image_region};
+#[cfg(feature = "pdf")]
 use super::grid::resolve_table_grids;
+#[cfg(feature = "pdf")]
 use super::headers::strip_headers_footers;
+#[cfg(feature = "pdf")]
 use super::render::{render_page_content, ImageBlock};
+#[cfg(feature = "pdf")]
 use super::types::{Segment, TextBox};
 
 const EXTENSIONS: &[&str] = &[".pdf"];
 const MIMETYPES: &[&str] = &["application/pdf", "application/x-pdf"];
 
+#[cfg(feature = "pdf")]
 /// Process a set of text boxes (one column or full page): run table detection,
 /// separate free text, and render to markdown.
 fn process_column(
@@ -53,6 +63,7 @@ fn process_column(
 
 pub struct PdfConverter;
 
+#[cfg(feature = "pdf")]
 impl Converter for PdfConverter {
     fn name(&self) -> &'static str {
         "pdf"
@@ -244,7 +255,7 @@ impl Converter for PdfConverter {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "pdf"))]
 mod tests {
     use super::*;
     use std::path::Path;
@@ -333,5 +344,40 @@ mod tests {
                 || result.markdown.contains("Platform Controller Hub"),
             "Output should contain key text from the PDF"
         );
+    }
+}
+
+/// Fallback when built without the "pdf" feature: accepts PDFs but fails
+/// with build instructions — mirrors the TS dynamic-import error
+/// ("PDF support requires 'mupdf'. Install it: npm install mupdf").
+#[cfg(not(feature = "pdf"))]
+impl Converter for PdfConverter {
+    fn name(&self) -> &'static str {
+        "pdf"
+    }
+
+    fn accepts(&self, info: &StreamInfo) -> bool {
+        if let Some(ext) = &info.extension {
+            if EXTENSIONS.contains(&ext.as_str()) {
+                return true;
+            }
+        }
+        if let Some(mime) = &info.mimetype {
+            if MIMETYPES.iter().any(|m| mime.starts_with(m)) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn convert(
+        &self,
+        _input: &[u8],
+        _info: &StreamInfo,
+        _options: &MarkitOptions,
+    ) -> Result<ConversionResult> {
+        Err(anyhow::anyhow!(
+            "PDF support requires the 'pdf' feature (MuPDF). Rebuild with: cargo build --features pdf"
+        ))
     }
 }

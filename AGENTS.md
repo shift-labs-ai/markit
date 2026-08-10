@@ -19,6 +19,11 @@ bun run check:rust                     # rustfmt --check + clippy -D warnings
 bun run check:all                      # Both sides
 ```
 
+PDF support in the Rust port is a default-on cargo feature (`pdf`) — MuPDF
+is a slow C build; `cargo build --no-default-features` skips it and the pdf
+converter fails gracefully with rebuild instructions (mirroring the TS
+optional `mupdf` import).
+
 The Rust port lives in `rust/` and mirrors the TS pipeline byte-for-byte;
 run both test suites when touching conversion logic. Lint policy is in
 `rust/Cargo.toml` `[lints.clippy]` (index loops in ported algorithm code

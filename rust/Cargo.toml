@@ -18,10 +18,17 @@ roxmltree = "0.21.1"
 scraper = { version = "0.27.0", features = ["deterministic"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
-mupdf = "0.8.0"
+mupdf = { version = "0.8.0", optional = true }
 ureq = "3.4.0"
 zip = "8.6.0"
 ego-tree = "0.11"
+
+[features]
+# PDF conversion builds MuPDF from source (C FFI, slow first build).
+# Mirrors the TS side, where mupdf is an optional dynamic import.
+# Disable with: cargo build --no-default-features
+default = ["pdf"]
+pdf = ["dep:mupdf"]
 
 [lints.clippy]
 # The PDF pipeline and HTML→MD engine are line-for-line ports of the TS

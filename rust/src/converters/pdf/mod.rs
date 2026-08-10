@@ -1,11 +1,22 @@
 //! PDF conversion pipeline. Port of src/converters/pdf/.
 
+// The geometry/render pipeline (columns/grid/headers/render/types) is pure
+// logic with no mupdf dependency — always compiled so its tests run even
+// without the "pdf" feature. Only extraction (extract) and the converter's
+// real impl (index) need MuPDF; without the feature their consumers vanish,
+// so dead_code is expected and silenced.
+#[cfg_attr(not(feature = "pdf"), allow(dead_code))]
 pub mod columns;
+#[cfg(feature = "pdf")]
 pub mod extract;
+#[cfg_attr(not(feature = "pdf"), allow(dead_code))]
 pub mod grid;
+#[cfg_attr(not(feature = "pdf"), allow(dead_code))]
 pub mod headers;
 pub mod index;
+#[cfg_attr(not(feature = "pdf"), allow(dead_code))]
 pub mod render;
+#[cfg_attr(not(feature = "pdf"), allow(dead_code))]
 pub mod types;
 
 /// JavaScriptCore-faithful Array#sort for comparators that do not implement
