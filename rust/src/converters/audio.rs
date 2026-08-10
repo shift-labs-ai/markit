@@ -53,7 +53,7 @@ impl Converter for AudioConverter {
             let sample_rate = props.sample_rate();
             let channels = props.channels();
 
-            let format_str = file_type_to_format(tagged_file.file_type());
+            let format_str = codec_string(tagged_file.file_type(), input);
 
             // Try to get tag from primary or first tag
             let tag_opt = tagged_file
@@ -155,24 +155,77 @@ impl Converter for AudioConverter {
 }
 
 /// Convert lofty FileType to a format string, analogous to TS's format.codec || format.container.
-fn file_type_to_format(ft: FileType) -> Option<String> {
-    let s = match ft {
-        FileType::Mpeg => "MPEG",
-        FileType::Mp4 => "MP4",
-        FileType::Flac => "FLAC",
-        FileType::Wav => "WAV",
-        FileType::Aiff => "AIFF",
-        FileType::Aac => "AAC",
-        FileType::Vorbis => "Vorbis",
-        FileType::Opus => "Opus",
-        FileType::Speex => "Speex",
-        FileType::Ape => "Monkey's Audio",
-        FileType::Mpc => "Musepack",
-        FileType::WavPack => "WavPack",
-        FileType::Custom(name) => name,
-        _ => return None,
-    };
-    Some(s.to_string())
+/// Codec string matching music-metadata's `format.codec || format.container`
+/// (the TS "Format:" line). Where lofty's generic properties lack codec
+/// detail, the concrete file type is re-parsed.
+fn codec_string(ft: FileType, input: &[u8]) -> Option<String> {
+    use lofty::config::ParseOptions;
+    match ft {
+        FileType::Wav => {
+            // music-metadata: WaveFormatNameMap[fmt.wFormatTag], e.g. "PCM".
+            let file = lofty::iff::wav::WavFile::read_from(
+                &mut std::io::Cursor::new(input),
+                ParseOptions::new(),
+            )
+            .ok()?;
+            Some(match file.properties().format() {
+                lofty::iff::wav::WavFormat::PCM => "PCM".to_string(),
+                lofty::iff::wav::WavFormat::IEEE_FLOAT => "IEEE_FLOAT".to_string(),
+                lofty::iff::wav::WavFormat::Other(2) => "ADPCM".to_string(),
+                lofty::iff::wav::WavFormat::Other(tag) => format!("non-PCM ({tag})"),
+            })
+        }
+        FileType::Mpeg => {
+            // music-metadata: `MPEG ${version} Layer ${layer}`.
+            let file = lofty::mpeg::MpegFile::read_from(
+                &mut std::io::Cursor::new(input),
+                ParseOptions::new(),
+            )
+            .ok()?;
+            let props = file.properties();
+            let version = match props.version() {
+                lofty::mpeg::MpegVersion::V1 => "1",
+                lofty::mpeg::MpegVersion::V2 => "2",
+                lofty::mpeg::MpegVersion::V2_5 => "2.5",
+                _ => return Some("MPEG".to_string()),
+            };
+            let layer = match props.layer() {
+                lofty::mpeg::Layer::Layer1 => 1,
+                lofty::mpeg::Layer::Layer2 => 2,
+                lofty::mpeg::Layer::Layer3 => 3,
+            };
+            Some(format!("MPEG {version} Layer {layer}"))
+        }
+        FileType::Mp4 => {
+            // music-metadata: per-track encoder names, e.g. "MPEG-4/AAC", "ALAC".
+            let file = lofty::mp4::Mp4File::read_from(
+                &mut std::io::Cursor::new(input),
+                ParseOptions::new(),
+            )
+            .ok()?;
+            match file.properties().codec() {
+                Some(lofty::mp4::Mp4Codec::AAC) => Some("MPEG-4/AAC".to_string()),
+                Some(lofty::mp4::Mp4Codec::ALAC) => Some("ALAC".to_string()),
+                Some(lofty::mp4::Mp4Codec::MP3) => Some("MPEG-1 layer 3".to_string()),
+                Some(other) => Some(format!("{other:?}")),
+                None => None,
+            }
+        }
+        FileType::Flac => Some("FLAC".to_string()),
+        FileType::Vorbis => Some("Vorbis I".to_string()),
+        FileType::Opus => Some("Opus".to_string()),
+        FileType::Aac => Some("AAC".to_string()),
+        // music-metadata AIFF: compressionTypes.NONE for standard AIFF.
+        FileType::Aiff => Some("not compressed\tPCM\tApple Computer".to_string()),
+        // Rare formats music-metadata reports via container naming; keep
+        // lofty's names (known minor divergence).
+        FileType::Speex => Some("Speex".to_string()),
+        FileType::Ape => Some("Monkey's Audio".to_string()),
+        FileType::Mpc => Some("Musepack".to_string()),
+        FileType::WavPack => Some("WavPack".to_string()),
+        FileType::Custom(name) => Some(name.to_string()),
+        _ => None,
+    }
 }
 
 /// Format duration in seconds into "h:mm:ss" or "m:ss" matching the TS formatDuration.
