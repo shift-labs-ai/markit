@@ -34,6 +34,9 @@ pub fn extract_image_region_fast(input: &[u8], region: &ImageRegion) -> Result<E
         .into_iter()
         .nth(idx)
         .ok_or_else(|| anyhow!("image index out of range"))?;
+    if raw.is_empty() {
+        bail!("inline image: no extractable stream");
+    }
 
     extract_xobject(&pdf, &dict, raw)
 }

@@ -78,6 +78,15 @@ pub(crate) struct FontInfo {
     two_byte: bool,
     is_bold: bool,
     size_hint_monospace: bool,
+    symbol_font: SymbolFont,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum SymbolFont {
+    #[default]
+    None,
+    Symbol,
+    ZapfDingbats,
 }
 
 impl Default for FontInfo {
@@ -90,6 +99,7 @@ impl Default for FontInfo {
             to_unicode: FxHashMap::default(),
             two_byte: false,
             is_bold: false,
+            symbol_font: SymbolFont::None,
             size_hint_monospace: false,
         }
     }
@@ -108,6 +118,11 @@ fn build_font(pdf: &Pdf, dict: &Dict) -> FontInfo {
     info.is_bold =
         base_name.contains("bold") || base_name.contains("black") || base_name.contains("heavy");
     info.size_hint_monospace = base_name.contains("courier") || base_name.contains("mono");
+    if base_name.contains("symbol") {
+        info.symbol_font = SymbolFont::Symbol;
+    } else if base_name.contains("zapf") || base_name.contains("dingbat") {
+        info.symbol_font = SymbolFont::ZapfDingbats;
+    }
 
     let is_type0 = matches!(g(b"Subtype"), Some(Val::Name(b"Type0")));
 
@@ -345,6 +360,32 @@ fn parse_cid_widths(pdf: &Pdf, w: &[Val], out: &mut FxHashMap<u32, f64>) {
 }
 
 // ── Encodings ────────────────────────────────────────────────────────────────
+
+/// MacRomanEncoding, code points 128–255 (0 = unmapped).
+const MAC_ROMAN_HIGH: [u32; 128] = [
+    0x00C4, 0x00C5, 0x00C7, 0x00C9, 0x00D1, 0x00D6, 0x00DC, 0x00E1, 0x00E0, 0x00E2, 0x00E4, 0x00E3,
+    0x00E5, 0x00E7, 0x00E9, 0x00E8, 0x00EA, 0x00EB, 0x00ED, 0x00EC, 0x00EE, 0x00EF, 0x00F1, 0x00F3,
+    0x00F2, 0x00F4, 0x00F6, 0x00F5, 0x00FA, 0x00F9, 0x00FB, 0x00FC, 0x2020, 0x00B0, 0x00A2, 0x00A3,
+    0x00A7, 0x2022, 0x00B6, 0x00DF, 0x00AE, 0x00A9, 0x2122, 0x00B4, 0x00A8, 0x2260, 0x00C6, 0x00D8,
+    0x221E, 0x00B1, 0x2264, 0x2265, 0x00A5, 0x00B5, 0x2202, 0x2211, 0x220F, 0x03C0, 0x222B, 0x00AA,
+    0x00BA, 0x03A9, 0x00E6, 0x00F8, 0x00BF, 0x00A1, 0x00AC, 0x221A, 0x0192, 0x2248, 0x2206, 0x00AB,
+    0x00BB, 0x2026, 0x00A0, 0x00C0, 0x00C3, 0x00D5, 0x0152, 0x0153, 0x2013, 0x2014, 0x201C, 0x201D,
+    0x2018, 0x2019, 0x00F7, 0x25CA, 0x00FF, 0x0178, 0x2044, 0x20AC, 0x2039, 0x203A, 0xFB01, 0xFB02,
+    0x2021, 0x00B7, 0x201A, 0x201E, 0x2030, 0x00C2, 0x00CA, 0x00C1, 0x00CB, 0x00C8, 0x00CD, 0x00CE,
+    0x00CF, 0x00CC, 0x00D3, 0x00D4, 0xF8FF, 0x00D2, 0x00DA, 0x00DB, 0x00D9, 0x0131, 0x02C6, 0x02DC,
+    0x00AF, 0x02D8, 0x02D9, 0x02DA, 0x00B8, 0x02DD, 0x02DB, 0x02C7,
+];
+
+/// StandardEncoding (Adobe), code points 128–255 (0 = unmapped).
+const STANDARD_HIGH: [u32; 128] = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0x00A1, 0x00A2, 0x00A3, 0x2044, 0x00A5, 0x0192, 0x00A7, 0x00A4, 0x0027, 0x201C, 0x00AB,
+    0x2039, 0x203A, 0xFB01, 0xFB02, 0, 0x2013, 0x2020, 0x2021, 0x00B7, 0, 0x00B6, 0x2022, 0x201A,
+    0x201E, 0x201D, 0x00BB, 0x2026, 0x2030, 0, 0x00BF, 0, 0x0060, 0x00B4, 0x02C6, 0x02DC, 0x00AF,
+    0x02D8, 0x02D9, 0x00A8, 0, 0x02DA, 0x00B8, 0, 0x02DD, 0x02DB, 0x02C7, 0x2014, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00C6, 0, 0x00AA, 0, 0, 0, 0, 0x0141, 0x00D8, 0x0152, 0x00BA, 0,
+    0, 0, 0, 0, 0x00E6, 0, 0, 0, 0x0131, 0, 0, 0x0142, 0x00F8, 0x0153, 0x00DF, 0, 0, 0, 0,
+];
 
 /// WinAnsiEncoding, code points 128–255 (0 = unmapped).
 const WIN_ANSI_HIGH: [u32; 128] = [
@@ -714,16 +755,221 @@ fn recover_cid_unicode(pdf: &Pdf, cid_font: &Dict, info: &mut FontInfo) {
     }
 }
 
+/// Symbol font built-in encoding (Greek + math, the used range).
+fn symbol_encoding(map: &mut [Option<char>; 256]) {
+    *map = [None; 256];
+    const PAIRS: &[(u8, u32)] = &[
+        (0x20, 0x0020),
+        (0x21, 0x0021),
+        (0x22, 0x2200),
+        (0x23, 0x0023),
+        (0x24, 0x2203),
+        (0x25, 0x0025),
+        (0x26, 0x0026),
+        (0x27, 0x220B),
+        (0x28, 0x0028),
+        (0x29, 0x0029),
+        (0x2A, 0x2217),
+        (0x2B, 0x002B),
+        (0x2C, 0x002C),
+        (0x2D, 0x2212),
+        (0x2E, 0x002E),
+        (0x2F, 0x002F),
+        (0x3A, 0x003A),
+        (0x3B, 0x003B),
+        (0x3C, 0x003C),
+        (0x3D, 0x003D),
+        (0x3E, 0x003E),
+        (0x3F, 0x003F),
+        (0x40, 0x2245),
+        (0x41, 0x0391),
+        (0x42, 0x0392),
+        (0x43, 0x03A7),
+        (0x44, 0x0394),
+        (0x45, 0x0395),
+        (0x46, 0x03A6),
+        (0x47, 0x0393),
+        (0x48, 0x0397),
+        (0x49, 0x0399),
+        (0x4A, 0x03D1),
+        (0x4B, 0x039A),
+        (0x4C, 0x039B),
+        (0x4D, 0x039C),
+        (0x4E, 0x039D),
+        (0x4F, 0x039F),
+        (0x50, 0x03A0),
+        (0x51, 0x0398),
+        (0x52, 0x03A1),
+        (0x53, 0x03A3),
+        (0x54, 0x03A4),
+        (0x55, 0x03A5),
+        (0x56, 0x03C2),
+        (0x57, 0x03A9),
+        (0x58, 0x039E),
+        (0x59, 0x03A8),
+        (0x5A, 0x0396),
+        (0x5B, 0x005B),
+        (0x5C, 0x2234),
+        (0x5D, 0x005D),
+        (0x5E, 0x22A5),
+        (0x5F, 0x005F),
+        (0x60, 0xF8E5),
+        (0x61, 0x03B1),
+        (0x62, 0x03B2),
+        (0x63, 0x03C7),
+        (0x64, 0x03B4),
+        (0x65, 0x03B5),
+        (0x66, 0x03C6),
+        (0x67, 0x03B3),
+        (0x68, 0x03B7),
+        (0x69, 0x03B9),
+        (0x6A, 0x03D5),
+        (0x6B, 0x03BA),
+        (0x6C, 0x03BB),
+        (0x6D, 0x03BC),
+        (0x6E, 0x03BD),
+        (0x6F, 0x03BF),
+        (0x70, 0x03C0),
+        (0x71, 0x03B8),
+        (0x72, 0x03C1),
+        (0x73, 0x03C3),
+        (0x74, 0x03C4),
+        (0x75, 0x03C5),
+        (0x76, 0x03D6),
+        (0x77, 0x03C9),
+        (0x78, 0x03BE),
+        (0x79, 0x03C8),
+        (0x7A, 0x03B6),
+        (0x7B, 0x007B),
+        (0x7C, 0x007C),
+        (0x7D, 0x007D),
+        (0x7E, 0x223C),
+        (0xA0, 0x20AC),
+        (0xA1, 0x03D2),
+        (0xA2, 0x2032),
+        (0xA3, 0x2264),
+        (0xA4, 0x2044),
+        (0xA5, 0x221E),
+        (0xA6, 0x0192),
+        (0xA7, 0x2663),
+        (0xA8, 0x2666),
+        (0xA9, 0x2665),
+        (0xAA, 0x2660),
+        (0xAB, 0x2194),
+        (0xAC, 0x2190),
+        (0xAD, 0x2191),
+        (0xAE, 0x2192),
+        (0xAF, 0x2193),
+        (0xB0, 0x00B0),
+        (0xB1, 0x00B1),
+        (0xB2, 0x2033),
+        (0xB3, 0x2265),
+        (0xB4, 0x00D7),
+        (0xB5, 0x221D),
+        (0xB6, 0x2202),
+        (0xB7, 0x2022),
+        (0xB8, 0x00F7),
+        (0xB9, 0x2260),
+        (0xBA, 0x2261),
+        (0xBB, 0x2248),
+        (0xBC, 0x2026),
+        (0xBF, 0x21B5),
+        (0xC0, 0x2135),
+        (0xC5, 0x2295),
+        (0xC6, 0x2205),
+        (0xC7, 0x2229),
+        (0xC8, 0x222A),
+        (0xC9, 0x2283),
+        (0xCA, 0x2287),
+        (0xCB, 0x2284),
+        (0xCC, 0x2282),
+        (0xCD, 0x2286),
+        (0xCE, 0x2208),
+        (0xCF, 0x2209),
+        (0xD0, 0x2220),
+        (0xD1, 0x2207),
+        (0xD5, 0x220F),
+        (0xD6, 0x221A),
+        (0xD7, 0x22C5),
+        (0xD8, 0x00AC),
+        (0xD9, 0x2227),
+        (0xDA, 0x2228),
+        (0xDB, 0x21D4),
+        (0xDC, 0x21D0),
+        (0xDD, 0x21D1),
+        (0xDE, 0x21D2),
+        (0xDF, 0x21D3),
+        (0xE5, 0x2211),
+        (0xF2, 0x222B),
+        (0x30, 0x0030),
+        (0x31, 0x0031),
+        (0x32, 0x0032),
+        (0x33, 0x0033),
+        (0x34, 0x0034),
+        (0x35, 0x0035),
+        (0x36, 0x0036),
+        (0x37, 0x0037),
+        (0x38, 0x0038),
+        (0x39, 0x0039),
+    ];
+    for &(code, u) in PAIRS {
+        map[code as usize] = char::from_u32(u);
+    }
+}
+
+/// ZapfDingbats built-in encoding (the used range).
+fn zapf_encoding(map: &mut [Option<char>; 256]) {
+    *map = [None; 256];
+    map[0x20] = Some(' ');
+    // 0x21..=0x7E maps to U+2701..U+275E in order, with a handful of gaps
+    // that don't matter for text recovery.
+    for code in 0x21u16..=0x7E {
+        map[code as usize] = char::from_u32(0x2701 + (code as u32 - 0x21));
+    }
+    // 0x80..: ornaments; 0xA1..=0xEF maps to U+2761.. block.
+    for code in 0xA1u16..=0xEF {
+        map[code as usize] = char::from_u32(0x2761 + (code as u32 - 0xA1));
+    }
+}
+
 fn build_simple_encoding(pdf: &Pdf, dict: &Dict, info: &mut FontInfo) {
-    // Default: treat as WinAnsi-flavoured Latin (covers Standard/WinAnsi
-    // ASCII range; MacRoman divergence is handled only via Differences).
-    for b in 0u16..256 {
-        let c = if b < 128 {
-            char::from_u32(b as u32)
-        } else {
-            char::from_u32(WIN_ANSI_HIGH[b as usize - 128])
-        };
-        info.to_unicode_simple[b as usize] = c.filter(|c| *c != '\0');
+    // Base table: the named encoding (direct or /BaseEncoding inside an
+    // encoding dict); WinAnsi as the practical default.
+    let enc_val = pdf.dict_get(dict, b"Encoding").ok().flatten();
+    let mut base_name: Option<&[u8]> = match &enc_val {
+        Some(Val::Name(n)) => Some(n),
+        Some(Val::Dict(d)) => match dget(d, b"BaseEncoding") {
+            Some(Val::Name(n)) => Some(n),
+            _ => None,
+        },
+        _ => None,
+    };
+    // Symbol and ZapfDingbats use built-in encodings, not the Latin set.
+    if base_name.is_none() {
+        if info.symbol_font == SymbolFont::Symbol {
+            base_name = Some(b"Symbol");
+        } else if info.symbol_font == SymbolFont::ZapfDingbats {
+            base_name = Some(b"ZapfDingbats");
+        }
+    }
+    let high: &[u32; 128] = match base_name {
+        Some(b"MacRomanEncoding") => &MAC_ROMAN_HIGH,
+        Some(b"StandardEncoding") => &STANDARD_HIGH,
+        _ => &WIN_ANSI_HIGH,
+    };
+    match base_name {
+        Some(b"Symbol") => symbol_encoding(&mut info.to_unicode_simple),
+        Some(b"ZapfDingbats") => zapf_encoding(&mut info.to_unicode_simple),
+        _ => {
+            for b in 0u16..256 {
+                let c = if b < 128 {
+                    char::from_u32(b as u32)
+                } else {
+                    char::from_u32(high[b as usize - 128])
+                };
+                info.to_unicode_simple[b as usize] = c.filter(|c| *c != '\0');
+            }
+        }
     }
 
     if let Ok(Some(Val::Dict(enc))) = pdf.dict_get(dict, b"Encoding") {
@@ -1099,6 +1345,18 @@ impl<'a> Interp<'a> {
                         let name = lex.name_bytes(o).to_vec();
                         self.do_xobject(&name, resources);
                     }
+                }
+                // Inline image (BI…ID…EI, payload skipped by the lexer):
+                // record the placement so image regions and scanned-page
+                // detection see it. The empty payload marker keeps the
+                // bbox/xobject pairing aligned; extraction of these
+                // regions falls back to rasterization.
+                b"BI" => {
+                    let (ax, ay) = self.ctm.apply(0.0, 0.0);
+                    let (bx, by) = self.ctm.apply(1.0, 1.0);
+                    self.image_bboxes
+                        .push((ax.min(bx), ay.min(by), ax.max(bx), ay.max(by)));
+                    self.image_xobjects.push((Vec::new(), &[]));
                 }
                 _ => {}
             }
@@ -1756,6 +2014,23 @@ mod tests {
                 .unwrap_or_else(|e| panic!("{name}: fast path failed: {e}"));
             assert_eq!(text_of(&pages), expect, "{name} extraction differs");
         }
+    }
+
+    /// A wrong /Length must not corrupt the stream: the parser verifies
+    /// the endstream delimiter and recovers by scanning.
+    #[test]
+    fn wrong_stream_length_recovers() {
+        let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj
+4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+5 0 obj << /Length 9999 >> stream
+BT /F1 12 Tf 72 720 Td (Recovered) Tj ET
+endstream endobj
+trailer << /Root 1 0 R >>";
+        let pages = extract_pages_fast(pdf).expect("length repair");
+        assert!(text_of(&pages).contains("Recovered"));
     }
 
     /// A rotated page must still extract its text (geometry transformed,

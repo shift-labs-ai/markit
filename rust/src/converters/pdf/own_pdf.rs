@@ -795,13 +795,41 @@ impl<'a> ObjLexer<'a> {
             let Val::Dict(dict) = v else {
                 bail!("stream without dict")
             };
-            let len = match pdf.dict_get(&dict, b"Length")? {
-                Some(Val::Num(n)) => n as usize,
-                _ => bail!("stream without Length"),
+            // /Length may be indirect, wrong, or absent in damaged files;
+            // trust it only when "endstream" actually follows the span.
+            let len = match pdf.dict_get(&dict, b"Length") {
+                Ok(Some(Val::Num(n))) => Some(n as usize),
+                _ => None,
             };
-            if self.pos + len > self.data.len() {
-                bail!("stream length past EOF");
-            }
+            let valid = |l: usize| -> bool {
+                let end = self.pos + l;
+                if end > self.data.len() {
+                    return false;
+                }
+                let tail = &self.data[end..(end + 20).min(self.data.len())];
+                tail.iter()
+                    .position(|&b| !matches!(b, b'\r' | b'\n' | b' ' | b'\t'))
+                    .is_some_and(|i| tail[i..].starts_with(b"endstream"))
+            };
+            let len = match len {
+                Some(l) if valid(l) => l,
+                _ => {
+                    // Recover: nearest following "endstream" delimiter.
+                    let hay = &self.data[self.pos..];
+                    let Some(at) = memchr::memmem::find(hay, b"endstream") else {
+                        bail!("stream without endstream");
+                    };
+                    // Trim the EOL that precedes the keyword.
+                    let mut l = at;
+                    if l > 0 && hay[l - 1] == b'\n' {
+                        l -= 1;
+                    }
+                    if l > 0 && hay[l - 1] == b'\r' {
+                        l -= 1;
+                    }
+                    l
+                }
+            };
             let raw = &self.data[self.pos..self.pos + len];
             return Ok((num, Val::Stream(dict, raw)));
         }

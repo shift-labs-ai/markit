@@ -149,6 +149,9 @@ impl<'a> Lexer<'a> {
                         }
                         b"BI" => {
                             self.skip_inline_image();
+                            // Surface the inline image as an operator so
+                            // interpreters can record its placement.
+                            return Some(b"BI");
                         }
                         _ => return Some(tok),
                     }
@@ -421,10 +424,12 @@ mod tests {
 
     #[test]
     fn inline_image_skipped() {
+        // The payload is skipped; BI itself surfaces as an operator so
+        // interpreters can record the placement.
         let r = ops(b"q BI /W 4 /H 4 ID \x00\x01\x02 EI Q (x) Tj");
         assert_eq!(
             r.iter().map(|(o, _)| o.as_str()).collect::<Vec<_>>(),
-            vec!["q", "Q", "Tj"]
+            vec!["q", "BI", "Q", "Tj"]
         );
     }
 
