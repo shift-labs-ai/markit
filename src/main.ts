@@ -2,9 +2,11 @@
 
 import { createRequire } from "node:module";
 import { Command } from "commander";
-import { convert } from "./commands/convert.js";
-import { formats } from "./commands/formats.js";
-import { onboard } from "./commands/onboard.js";
+
+// Command modules are imported lazily inside each action: the converter
+// machinery costs ~100ms to load and --help/--version/startup should not
+// pay for it (cf. anydoc's cli.js, which requires its binding only after
+// argument parsing).
 
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json");
@@ -41,6 +43,7 @@ program
   .option("-o, --output <file>", "Write to file instead of stdout")
   .action(async (source, opts, cmd) => {
     const globals = cmd.optsWithGlobals();
+    const { convert } = await import("./commands/convert.js");
     await convert(source, {
       json: globals.json,
       quiet: globals.quiet,
@@ -54,6 +57,7 @@ program
   .description("List supported formats")
   .action(async (_opts, cmd) => {
     const globals = cmd.optsWithGlobals();
+    const { formats } = await import("./commands/formats.js");
     await formats([], { json: globals.json, quiet: globals.quiet });
   });
 
@@ -62,6 +66,7 @@ program
   .description("Add markit instructions to CLAUDE.md or AGENTS.md")
   .action(async (_opts, cmd) => {
     const globals = cmd.optsWithGlobals();
+    const { onboard } = await import("./commands/onboard.js");
     await onboard([], { json: globals.json, quiet: globals.quiet });
   });
 
@@ -90,6 +95,7 @@ program.on("command:*", async (args) => {
   }
 
   const globals = program.opts();
+  const { convert } = await import("./commands/convert.js");
   await convert(source, {
     json: globals.json,
     quiet: globals.quiet,

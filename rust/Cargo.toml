@@ -39,6 +39,10 @@ needless_range_loop = "allow"
 # CTM mirrors the TS type name (PDF current transformation matrix).
 upper_case_acronyms = "allow"
 
+[profile.release]
+lto = "thin"
+strip = "symbols"
+
 [build-dependencies]
 napi-build = { version = "2", optional = true }
 
