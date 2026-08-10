@@ -130,10 +130,7 @@ export class Markit {
  * The TS fallback instance is created per wrapper instance, lazily,
  * and only ever in fallback mode.
  */
-function makeConverterClass(
-  converterName: string,
-  tsClass: keyof TsImpl,
-) {
+function makeConverterClass(converterName: string, tsClass: keyof TsImpl) {
   return class implements Converter {
     name = converterName;
     #ts: Converter | null = null;

@@ -5,7 +5,7 @@
 //! - join(output, replacement) trims trailing/leading newlines, inserts separator
 //! - replacementForNode applies rule.replacement(content, node) with flanking whitespace
 
-use std::collections::HashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::LazyLock;
 
 use ego_tree::NodeId;
@@ -19,13 +19,10 @@ pub fn html_to_markdown(html: &str) -> String {
     // html5ever parses <noscript> children as raw text (scripting flag on);
     // domino (turndown's DOM) parses them as elements. Rewrite to <div>, which
     // turndown treats identically (block defaultReplacement), so the content
-    // converts the same way.
-    static NOSCRIPT_OPEN: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?i)<noscript(\s[^>]*)?>").unwrap());
-    static NOSCRIPT_CLOSE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?i)</noscript>").unwrap());
-    let html = NOSCRIPT_OPEN.replace_all(html, "<div$1>");
-    let html = NOSCRIPT_CLOSE.replace_all(&html, "</div>");
+    // converts the same way. Scan-based equivalents of
+    // (?i)<noscript(\s[^>]*)?> → <div$1> and (?i)</noscript> → </div>.
+    let html = rewrite_noscript_open(html);
+    let html = crate::utils::strip_blocks::replace_ci_literal(&html, "</noscript>", "</div>");
     let html = html.as_ref();
 
     let has_html_tag =
@@ -37,54 +34,255 @@ pub fn html_to_markdown(html: &str) -> String {
     };
     let root = doc.root_element();
     let (collapsed, removed) = collapse_whitespace_pass(root);
+    let mut summaries = FxHashMap::default();
+    build_summaries(*root, &collapsed, &removed, &mut summaries);
     let mut ctx = Ctx {
         collapsed,
         removed,
+        summaries,
         ..Default::default()
     };
     let output = process(root, &mut ctx);
     post_process(&output)
 }
 
+/// Scan-based noscript-open rewrite, equivalent to the regex
+/// `(?i)<noscript(\s[^>]*)?>` replaced with `<div$1>`: after the literal,
+/// the tag either closes immediately (empty group) or a whitespace
+/// character opens an attribute run of non-close characters ending at the
+/// tag close. Any other continuation is not a match, exactly like the regex.
+fn rewrite_noscript_open(html: &str) -> std::borrow::Cow<'_, str> {
+    use crate::utils::strip_blocks::find_ci;
+    let bytes = html.as_bytes();
+    let needle = "<noscript";
+    let Some(mut at) = find_ci(bytes, needle, 0) else {
+        return std::borrow::Cow::Borrowed(html);
+    };
+    let mut out = String::with_capacity(html.len());
+    let mut pos = 0usize;
+    loop {
+        let after = at + needle.len();
+        let matched_end = match bytes.get(after) {
+            Some(b'>') => Some(after + 1),
+            Some(&b) if (b as char).is_ascii_whitespace() || b >= 0x80 => {
+                // \s is Unicode in the regex; non-ASCII needs a char check.
+                let ok = html[after..]
+                    .chars()
+                    .next()
+                    .is_some_and(char::is_whitespace);
+                if ok {
+                    memchr::memchr(b'>', &bytes[after..]).map(|gt| after + gt + 1)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        match matched_end {
+            Some(end) => {
+                out.push_str(&html[pos..at]);
+                out.push_str("<div");
+                out.push_str(&html[after..end]); // ($1)> — attrs (if any) plus '>'
+                pos = end;
+            }
+            None => {
+                // Not a match here; the literal itself is kept.
+                out.push_str(&html[pos..after]);
+                pos = after;
+            }
+        }
+        match find_ci(bytes, needle, pos) {
+            Some(next) => at = next,
+            None => break,
+        }
+    }
+    out.push_str(&html[pos..]);
+    std::borrow::Cow::Owned(out)
+}
+
 /// Normalize HTML tables so the table converter can handle them:
 /// - Strip <p> tags inside <td>/<th> cells (join multiple paragraphs with space)
 /// - Promote first row to <thead>/<th> when <thead> is missing
 pub fn normalize_tables_html(html: &str) -> String {
-    // 1. Strip <p> inside cells
-    static RE_CELL: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?is)<(td|th)([^>]*)>([\s\S]*?)</(td|th)>").unwrap());
-    let re_cell = &*RE_CELL;
-    let step1 = re_cell.replace_all(html, |caps: &regex::Captures| {
-        let tag = &caps[1];
-        let attrs = &caps[2];
-        let inner = &caps[3];
-        let close = &caps[4];
+    let step1 = normalize_cells(html);
+    normalize_table_heads(&step1)
+}
+
+/// Scan-based `(?is)<(td|th)([^>]*)>([\s\S]*?)</(td|th)>` replace: strip
+/// <p> inside each cell. Replicates the regex exactly, including its sloppy
+/// edges: `<th` also matches at `<thead>` (attrs "ead"), an inner `<td`
+/// inside the attribute run is consumed as attributes, and the close is the
+/// first literal `</td>` or `</th>` regardless of which tag opened.
+fn normalize_cells(html: &str) -> String {
+    let bytes = html.as_bytes();
+    let mut out = String::with_capacity(html.len());
+    let mut pos = 0usize;
+    let mut search = 0usize;
+
+    while let Some(at) = find_cell_open(bytes, search) {
+        let tag_end = at + 3; // "<td" | "<th"
+                              // ([^>]*)> — attributes run to the first '>', which is mandatory.
+        let Some(gt) = memchr::memchr(b'>', &bytes[tag_end..]) else {
+            break; // no '>' anywhere after: no later open can match either
+        };
+        let attrs_end = tag_end + gt;
+        let inner_start = attrs_end + 1;
+        // First literal </td> or </th> after the open.
+        let Some(close_at) = find_cell_close(bytes, inner_start) else {
+            break; // closes only get scarcer for later opens
+        };
+
+        out.push_str(&html[pos..at]);
+        let tag = &html[at + 1..tag_end];
+        let attrs = &html[tag_end..attrs_end];
+        let inner = &html[inner_start..close_at];
+        let close = &html[close_at + 2..close_at + 4];
         let stripped = strip_p_in_cell(inner);
-        format!("<{tag}{attrs}>{stripped}</{close}>")
-    });
+        out.push('<');
+        out.push_str(tag);
+        out.push_str(attrs);
+        out.push('>');
+        out.push_str(&stripped);
+        out.push_str("</");
+        out.push_str(close);
+        out.push('>');
 
-    // 2. Add <thead> to tables that lack it
-    static RE_TABLE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r"(?is)<table([^>]*)>\s*(?:<tbody>\s*)?(<tr[\s\S]*?</tr>)([\s\S]*?)</(?:tbody>\s*</)?table>",
-        )
-        .unwrap()
-    });
-    let re_table = &*RE_TABLE;
-    let step2 = re_table.replace_all(&step1, |caps: &regex::Captures| {
-        let attrs = &caps[1];
-        let first_row = &caps[2];
-        let rest = &caps[3];
-        static RE_TD_OPEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)<td").unwrap());
-        static RE_TD_CLOSE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)</td>").unwrap());
-        let re_td_open = &*RE_TD_OPEN;
-        let re_td_close = &*RE_TD_CLOSE;
-        let thead_row = re_td_open.replace_all(first_row, "<th");
-        let thead_row = re_td_close.replace_all(&thead_row, "</th>");
-        format!("<table{attrs}><thead>{thead_row}</thead><tbody>{rest}</tbody></table>")
-    });
+        pos = close_at + 5;
+        search = pos;
+    }
+    out.push_str(&html[pos..]);
+    out
+}
 
-    step2.into_owned()
+/// Next case-insensitive `<td` or `<th` at or after `from`.
+fn find_cell_open(bytes: &[u8], from: usize) -> Option<usize> {
+    let mut i = from;
+    while let Some(rel) = memchr::memchr(b'<', &bytes[i..]) {
+        let at = i + rel;
+        let win = bytes.get(at + 1..at + 3)?;
+        if win[0].eq_ignore_ascii_case(&b't')
+            && (win[1].eq_ignore_ascii_case(&b'd') || win[1].eq_ignore_ascii_case(&b'h'))
+        {
+            return Some(at);
+        }
+        i = at + 1;
+    }
+    None
+}
+
+/// Next case-insensitive literal `</td>` or `</th>` at or after `from`.
+fn find_cell_close(bytes: &[u8], from: usize) -> Option<usize> {
+    let mut i = from;
+    while let Some(rel) = memchr::memchr(b'<', &bytes[i..]) {
+        let at = i + rel;
+        let win = bytes.get(at + 1..at + 5)?;
+        if win[0] == b'/'
+            && win[1].eq_ignore_ascii_case(&b't')
+            && (win[2].eq_ignore_ascii_case(&b'd') || win[2].eq_ignore_ascii_case(&b'h'))
+            && win[3] == b'>'
+        {
+            return Some(at);
+        }
+        i = at + 1;
+    }
+    None
+}
+
+/// Scan-based
+/// `(?is)<table([^>]*)>\s*(?:<tbody>\s*)?(<tr[\s\S]*?</tr>)([\s\S]*?)</(?:tbody>\s*</)?table>`
+/// replace: promote the first row to <thead> when a table lacks one.
+/// Backtracking notes mirrored from the regex: after the optional
+/// `<tbody>\s*`, the literal `<tr` must follow directly (whitespace cannot
+/// begin `<tr`, so the greedy `\s*` never backtracks into a match); a
+/// failed start falls through to the next `<table` occurrence.
+fn normalize_table_heads(html: &str) -> String {
+    use crate::utils::strip_blocks::{find_ci, replace_ci_literal};
+    let bytes = html.as_bytes();
+    let mut out = String::with_capacity(html.len());
+    let mut pos = 0usize;
+    let mut search = 0usize;
+
+    'outer: while let Some(at) = find_ci(bytes, "<table", search) {
+        search = at + 1; // on any failure below, resume at the next "<table"
+
+        let tag_end = at + 6;
+        let Some(gt) = memchr::memchr(b'>', &bytes[tag_end..]) else {
+            break;
+        };
+        let attrs_end = tag_end + gt;
+        let mut p = attrs_end + 1;
+
+        // \s*
+        p += skip_ws(&html[p..]);
+        // (?:<tbody>\s*)?
+        if starts_with_ci(bytes, p, "<tbody>") {
+            p += 7;
+            p += skip_ws(&html[p..]);
+        }
+        // (<tr …first </tr>)
+        if !starts_with_ci(bytes, p, "<tr") {
+            continue 'outer;
+        }
+        let Some(tr_close) = find_ci(bytes, "</tr>", p + 3) else {
+            break;
+        };
+        let first_row = &html[p..tr_close + 5];
+        let rest_start = tr_close + 5;
+
+        // ([\s\S]*?)</(?:tbody>\s*</)?table> — first position where either
+        // </tbody>\s*</table> or </table> matches; the tbody variant is
+        // tried first at each position, like the regex's greedy option.
+        let mut q = rest_start;
+        let (rest_end, match_end) = loop {
+            let Some(lt) = memchr::memchr(b'<', &bytes[q..]) else {
+                continue 'outer;
+            };
+            let c = q + lt;
+            if starts_with_ci(bytes, c, "</tbody>") {
+                let after = c + 8 + skip_ws(&html[c + 8..]);
+                if starts_with_ci(bytes, after, "</table>") {
+                    break (c, after + 8);
+                }
+            }
+            if starts_with_ci(bytes, c, "</table>") {
+                break (c, c + 8);
+            }
+            q = c + 1;
+        };
+
+        let attrs = &html[tag_end..attrs_end];
+        let rest = &html[rest_start..rest_end];
+        let thead_row = replace_ci_literal(first_row, "<td", "<th");
+        let thead_row = replace_ci_literal(&thead_row, "</td>", "</th>");
+
+        out.push_str(&html[pos..at]);
+        out.push_str("<table");
+        out.push_str(attrs);
+        out.push_str("><thead>");
+        out.push_str(&thead_row);
+        out.push_str("</thead><tbody>");
+        out.push_str(rest);
+        out.push_str("</tbody></table>");
+
+        pos = match_end;
+        search = match_end;
+    }
+    out.push_str(&html[pos..]);
+    out
+}
+
+/// Byte length of the leading Unicode-whitespace run (regex \s*).
+fn skip_ws(s: &str) -> usize {
+    s.char_indices()
+        .find(|(_, c)| !c.is_whitespace())
+        .map(|(i, _)| i)
+        .unwrap_or(s.len())
+}
+
+fn starts_with_ci(bytes: &[u8], at: usize, lit: &str) -> bool {
+    bytes
+        .get(at..at + lit.len())
+        .is_some_and(|w| w.eq_ignore_ascii_case(lit.as_bytes()))
 }
 
 // ============================== collapseWhitespace pre-pass ==============================
@@ -176,6 +374,18 @@ fn node_tag(node: &ego_tree::NodeRef<Node>) -> Option<String> {
     node.value().as_element().map(|e| e.name().to_lowercase())
 }
 
+/// Lowercased tag name without allocating in the common case: html5ever
+/// already lowercases HTML element names, so only foreign (SVG/MathML)
+/// camelCase names pay for an owned copy.
+fn tag_lower<'a>(el: ElementRef<'a>) -> std::borrow::Cow<'a, str> {
+    let name = el.value().name();
+    if name.bytes().any(|b| b.is_ascii_uppercase()) {
+        std::borrow::Cow::Owned(name.to_lowercase())
+    } else {
+        std::borrow::Cow::Borrowed(name)
+    }
+}
+
 fn node_is_pre(node: &ego_tree::NodeRef<Node>) -> bool {
     node_tag(node).as_deref() == Some("pre")
 }
@@ -187,7 +397,7 @@ fn node_is_pre(node: &ego_tree::NodeRef<Node>) -> bool {
 /// skipping is sufficient).
 fn skip_first_child<'a>(
     node: &ego_tree::NodeRef<'a, Node>,
-    removed: &std::collections::HashSet<NodeId>,
+    removed: &FxHashSet<NodeId>,
 ) -> Option<ego_tree::NodeRef<'a, Node>> {
     let mut child = node.first_child();
     while let Some(c) = child {
@@ -201,7 +411,7 @@ fn skip_first_child<'a>(
 
 fn skip_next_sibling<'a>(
     node: &ego_tree::NodeRef<'a, Node>,
-    removed: &std::collections::HashSet<NodeId>,
+    removed: &FxHashSet<NodeId>,
 ) -> Option<ego_tree::NodeRef<'a, Node>> {
     let mut sib = node.next_sibling();
     while let Some(s) = sib {
@@ -216,7 +426,7 @@ fn skip_next_sibling<'a>(
 fn td_next<'a>(
     prev: Option<&ego_tree::NodeRef<'a, Node>>,
     current: &ego_tree::NodeRef<'a, Node>,
-    removed: &std::collections::HashSet<NodeId>,
+    removed: &FxHashSet<NodeId>,
 ) -> Option<ego_tree::NodeRef<'a, Node>> {
     let returning = prev
         .map(|p| p.parent().map(|pp| pp.id()) == Some(current.id()))
@@ -233,7 +443,7 @@ fn td_next<'a>(
 /// "remove(node)": returns nextSibling || parentNode (no prev update).
 fn td_remove_next<'a>(
     node: &ego_tree::NodeRef<'a, Node>,
-    removed: &std::collections::HashSet<NodeId>,
+    removed: &FxHashSet<NodeId>,
 ) -> Option<ego_tree::NodeRef<'a, Node>> {
     skip_next_sibling(node, removed).or_else(|| node.parent())
 }
@@ -256,12 +466,12 @@ fn td_collapse(text: &str) -> String {
     result
 }
 
-type CollapseResult = (HashMap<NodeId, String>, std::collections::HashSet<NodeId>);
+type CollapseResult = (FxHashMap<NodeId, String>, FxHashSet<NodeId>);
 
 fn collapse_whitespace_pass(root: ElementRef) -> CollapseResult {
     let element: ego_tree::NodeRef<Node> = *root;
-    let mut map: HashMap<NodeId, String> = HashMap::new();
-    let mut removed: std::collections::HashSet<NodeId> = std::collections::HashSet::new();
+    let mut map: FxHashMap<NodeId, String> = FxHashMap::default();
+    let mut removed: FxHashSet<NodeId> = FxHashSet::default();
 
     if element.first_child().is_none() || node_is_pre(&element) {
         return (map, removed);
@@ -369,9 +579,106 @@ struct Ctx {
     /// pre-pass (turndown runs this as a mutating DOM pass before any
     /// conversion). Text nodes inside <pre> are never entered and stay raw
     /// (absent from both structures).
-    collapsed: HashMap<NodeId, String>,
+    collapsed: FxHashMap<NodeId, String>,
     /// Text/comment nodes the pre-pass "removed" from the DOM.
-    removed: std::collections::HashSet<NodeId>,
+    removed: FxHashSet<NodeId>,
+    /// Per-element textContent edge summary, precomputed bottom-up. The
+    /// blank/flanking predicates only ever consume these edges, so the
+    /// former per-query subtree walks (O(nodes x depth)) collapse into one
+    /// linear pass.
+    summaries: FxHashMap<NodeId, TextSummary>,
+}
+
+/// Edge summary of an element's post-collapse textContent.
+/// For whitespace-only content, `leading` holds the entire text and
+/// `trailing` is empty — mirroring edge_whitespace's whitespace-only case.
+#[derive(Default, Clone)]
+struct TextSummary {
+    all_ws: bool,
+    leading: String,
+    trailing: String,
+}
+
+impl TextSummary {
+    /// Identity element for fold(): the summary of "".
+    fn empty() -> TextSummary {
+        TextSummary {
+            all_ws: true,
+            leading: String::new(),
+            trailing: String::new(),
+        }
+    }
+
+    fn of_text(s: &str) -> TextSummary {
+        let leading_end = s
+            .char_indices()
+            .find(|(_, c)| !c.is_whitespace())
+            .map(|(i, _)| i)
+            .unwrap_or(s.len());
+        if leading_end == s.len() {
+            return TextSummary {
+                all_ws: true,
+                leading: s.to_string(),
+                trailing: String::new(),
+            };
+        }
+        let trailing_start = s
+            .char_indices()
+            .rev()
+            .find(|(_, c)| !c.is_whitespace())
+            .map(|(i, c)| i + c.len_utf8())
+            .unwrap_or(0);
+        TextSummary {
+            all_ws: false,
+            leading: s[..leading_end].to_string(),
+            trailing: s[trailing_start..].to_string(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.all_ws && self.leading.is_empty()
+    }
+
+    /// Concatenation: summary of `A ++ B`.
+    fn fold(mut self, next: &TextSummary) -> TextSummary {
+        if next.is_empty() {
+            return self;
+        }
+        if self.is_empty() {
+            return next.clone();
+        }
+        match (self.all_ws, next.all_ws) {
+            (true, true) => {
+                self.leading.push_str(&next.leading);
+            }
+            (true, false) => {
+                self.leading.push_str(&next.leading);
+                self.trailing = next.trailing.clone();
+                self.all_ws = false;
+            }
+            (false, true) => {
+                self.trailing.push_str(&next.leading);
+            }
+            (false, false) => {
+                self.trailing = next.trailing.clone();
+            }
+        }
+        self
+    }
+
+    /// textContent.starts_with(' ')
+    fn starts_space(&self) -> bool {
+        self.leading.starts_with(' ')
+    }
+
+    /// textContent.ends_with(' ')
+    fn ends_space(&self) -> bool {
+        if self.all_ws {
+            self.leading.ends_with(' ')
+        } else {
+            self.trailing.ends_with(' ')
+        }
+    }
 }
 
 // ============================== Core: process / join / replacementForNode ==============================
@@ -405,18 +712,18 @@ fn process(parent: ElementRef, ctx: &mut Ctx) -> String {
                     }
                 };
                 if !replacement.is_empty() {
-                    output = join_str(&output, &replacement);
+                    join_into(&mut output, &replacement);
                 }
             }
             Node::Element(_) => {
                 if let Some(child_el) = ElementRef::wrap(child) {
-                    let tag = child_el.value().name().to_lowercase();
+                    let tag = tag_lower(child_el);
                     if tag == "script" || tag == "style" {
                         continue;
                     }
-                    let replacement = replacement_for_node(child_el, ctx);
+                    let replacement = replacement_for_node(child_el, &tag, ctx);
                     if !replacement.is_empty() {
-                        output = join_str(&output, &replacement);
+                        join_into(&mut output, &replacement);
                     }
                 }
             }
@@ -431,15 +738,13 @@ fn process(parent: ElementRef, ctx: &mut Ctx) -> String {
 /// process(), flanking whitespace is extracted for inline nodes (even blank
 /// ones — that is how whitespace-only spans contribute their nbsp back), and
 /// the rule replacement is wrapped between the flanking edges.
-fn replacement_for_node(el: ElementRef, ctx: &mut Ctx) -> String {
-    let tag = el.value().name().to_lowercase();
-
+fn replacement_for_node(el: ElementRef, tag: &str, ctx: &mut Ctx) -> String {
     // Pre-content ctx adjustments (state that must be active while children
     // are processed).
     let saved_pre = ctx.in_pre;
     let saved_code = ctx.in_code;
     let saved_pre_no_code = ctx.pre_no_code;
-    match tag.as_str() {
+    match tag {
         "pre" => {
             ctx.in_pre = true;
             // turndown: text under pre>code is isCode (raw); other pre text is
@@ -462,7 +767,7 @@ fn replacement_for_node(el: ElementRef, ctx: &mut Ctx) -> String {
     ctx.pre_no_code = saved_pre_no_code;
 
     // Flanking whitespace (turndown: none for block nodes).
-    let (leading, trailing) = if td_is_block(&tag) {
+    let (leading, trailing) = if td_is_block(tag) {
         (String::new(), String::new())
     } else {
         flanking_whitespace(el, ctx)
@@ -475,16 +780,20 @@ fn replacement_for_node(el: ElementRef, ctx: &mut Ctx) -> String {
 
     let inner = if is_blank_node(el, ctx) {
         // turndown's blankReplacement.
-        if td_is_block(&tag) {
+        if td_is_block(tag) {
             "\n\n".to_string()
         } else {
             String::new()
         }
     } else {
-        rule_replacement(&tag, content, el, ctx)
+        rule_replacement(tag, content, el, ctx)
     };
 
-    format!("{leading}{inner}{trailing}")
+    if leading.is_empty() && trailing.is_empty() {
+        inner
+    } else {
+        format!("{leading}{inner}{trailing}")
+    }
 }
 
 /// Dispatch to the rule for this element. Content has already been computed.
@@ -519,16 +828,18 @@ fn rule_replacement(tag: &str, content: String, el: ElementRef, ctx: &mut Ctx) -
     }
 }
 
-/// Turndown's join()
-fn join_str(left: &str, right: &str) -> String {
-    let s1 = trim_trailing_newlines(left);
+/// Turndown's join(), appending in place: semantically identical to
+/// `left = join(left, right)` but without re-copying the accumulated left
+/// side, which made sibling concatenation quadratic on large documents.
+fn join_into(left: &mut String, right: &str) {
     let s2 = trim_leading_newlines(right);
-    let left_trailing = left.len() - s1.len();
+    let left_trailing = left.len() - trim_trailing_newlines(left).len();
     let right_leading = right.len() - s2.len();
     let nls = std::cmp::max(left_trailing, right_leading);
     let nls = std::cmp::min(nls, 2);
-    let separator = &"\n\n"[..nls];
-    format!("{}{}{}", s1, separator, s2)
+    left.truncate(left.len() - left_trailing);
+    left.push_str(&"\n\n"[..nls]);
+    left.push_str(s2);
 }
 
 fn trim_trailing_newlines(s: &str) -> &str {
@@ -558,6 +869,52 @@ fn post_process(output: &str) -> String {
 
 // ============================== isBlank & flanking ==============================
 
+/// Post-order pass computing every element's TextSummary. A text node's
+/// contribution is its collapsed text when the pre-pass produced one, raw
+/// text when the pass never visited it, and nothing when it was removed —
+/// exactly what collect_text used to gather per query. (The pre-pass never
+/// enters <pre>, so pre-sanctuary text is always in the raw case.)
+fn build_summaries(
+    node: ego_tree::NodeRef<Node>,
+    collapsed: &FxHashMap<NodeId, String>,
+    removed: &FxHashSet<NodeId>,
+    out: &mut FxHashMap<NodeId, TextSummary>,
+) -> TextSummary {
+    match node.value() {
+        Node::Text(t) => {
+            if let Some(s) = collapsed.get(&node.id()) {
+                TextSummary::of_text(s)
+            } else if removed.contains(&node.id()) {
+                TextSummary::empty()
+            } else {
+                TextSummary::of_text(&t.text)
+            }
+        }
+        Node::Element(_) => {
+            let mut acc = TextSummary::empty();
+            for child in node.children() {
+                let cs = build_summaries(child, collapsed, removed, out);
+                acc = acc.fold(&cs);
+            }
+            out.insert(node.id(), acc.clone());
+            acc
+        }
+        _ => TextSummary::empty(),
+    }
+}
+
+fn summary_of<'c>(el: ElementRef, ctx: &'c Ctx) -> std::borrow::Cow<'c, TextSummary> {
+    match ctx.summaries.get(&el.id()) {
+        Some(s) => std::borrow::Cow::Borrowed(s),
+        // Root of a fragment parse can sit above the summarized subtree;
+        // compute on demand (rare, cold path).
+        None => {
+            let mut tmp = FxHashMap::default();
+            std::borrow::Cow::Owned(build_summaries(*el, &ctx.collapsed, &ctx.removed, &mut tmp))
+        }
+    }
+}
+
 /// turndown's isBlank(node), using post-collapse textContent.
 fn is_blank_node(el: ElementRef, ctx: &Ctx) -> bool {
     let tag = el.value().name().to_lowercase();
@@ -568,8 +925,7 @@ fn is_blank_node(el: ElementRef, ctx: &Ctx) -> bool {
         return false;
     }
     // /^\s*$/i.test(node.textContent)
-    let text = collapsed_text_content(el, ctx);
-    if !text.chars().all(char::is_whitespace) {
+    if !summary_of(el, ctx).all_ws {
         return false;
     }
     if has_void_descendant(el) || has_meaningful_descendant(el) {
@@ -613,8 +969,7 @@ fn has_meaningful_descendant(el: ElementRef) -> bool {
 /// turndown's flankingWhitespace(node): edge whitespace of textContent, with
 /// ASCII edges dropped when the node is already flanked by whitespace.
 fn flanking_whitespace(el: ElementRef, ctx: &Ctx) -> (String, String) {
-    let text = collapsed_text_content(el, ctx);
-    let edges = edge_whitespace(&text);
+    let edges = edge_whitespace_of(&summary_of(el, ctx));
 
     let leading = if !edges.leading_ascii.is_empty() && is_flanked_by_whitespace(el, ctx, false) {
         edges.leading_non_ascii
@@ -638,10 +993,55 @@ struct EdgeWhitespace {
     trailing_non_ascii: String,
 }
 
+/// edge_whitespace consumes only the edge whitespace runs, which the
+/// TextSummary already carries: build EdgeWhitespace straight from it.
+fn edge_whitespace_of(summary: &TextSummary) -> EdgeWhitespace {
+    let is_ascii_ws = |c: char| matches!(c, ' ' | '\t' | '\r' | '\n');
+    let split_leading = |run: &str| -> (String, String) {
+        let ascii_end = run
+            .char_indices()
+            .find(|(_, c)| !is_ascii_ws(*c))
+            .map(|(i, _)| i)
+            .unwrap_or(run.len());
+        (run[..ascii_end].to_string(), run[ascii_end..].to_string())
+    };
+
+    if summary.all_ws {
+        // Whitespace-only: leading = whole string, trailing empty.
+        let (leading_ascii, leading_non_ascii) = split_leading(&summary.leading);
+        return EdgeWhitespace {
+            leading: summary.leading.clone(),
+            leading_ascii,
+            leading_non_ascii,
+            trailing: String::new(),
+            trailing_ascii: String::new(),
+            trailing_non_ascii: String::new(),
+        };
+    }
+
+    let (leading_ascii, leading_non_ascii) = split_leading(&summary.leading);
+    let run = &summary.trailing;
+    let ascii_start = run
+        .char_indices()
+        .rev()
+        .find(|(_, c)| !is_ascii_ws(*c))
+        .map(|(i, c)| i + c.len_utf8())
+        .unwrap_or(0);
+    EdgeWhitespace {
+        leading: summary.leading.clone(),
+        leading_ascii,
+        leading_non_ascii,
+        trailing: run.clone(),
+        trailing_ascii: run[ascii_start..].to_string(),
+        trailing_non_ascii: run[..ascii_start].to_string(),
+    }
+}
+
 /// turndown's edgeWhitespace regex:
 /// ^(([ \t\r\n]*)(\s*))(?:(?=\S)[\s\S]*\S)?((\s*?)([ \t\r\n]*))$
 /// For whitespace-only strings the WHOLE string is "leading" and trailing is
 /// empty.
+#[allow(dead_code)]
 fn edge_whitespace(s: &str) -> EdgeWhitespace {
     let chars: Vec<char> = s.chars().collect();
     let len = chars.len();
@@ -724,11 +1124,11 @@ fn is_flanked_by_whitespace(el: ElementRef, ctx: &Ctx, right: bool) -> bool {
             let Some(se) = ElementRef::wrap(s) else {
                 return false;
             };
-            let text = collapsed_text_content(se, ctx);
+            let summary = summary_of(se, ctx);
             if right {
-                text.starts_with(' ')
+                summary.starts_space()
             } else {
-                text.ends_with(' ')
+                summary.ends_space()
             }
         }
         _ => false,
@@ -991,43 +1391,6 @@ fn rule_li(content: String, el: ElementRef, ctx: &Ctx) -> String {
 //   tableRow:   '\n' + content + border cells when heading row
 //   table:      convert only when rows[0] is a heading row, else keep raw HTML
 //   tableSection: passthrough
-
-/// textContent as turndown sees it post-collapseWhitespace: collapsed map
-/// values for text nodes outside <pre>, raw text inside <pre>.
-fn collapsed_text_content(el: ElementRef, ctx: &Ctx) -> String {
-    let mut out = String::new();
-    // If el itself is a <pre>, its whole subtree is a collapse sanctuary.
-    let mut in_pre_depth = usize::from(el.value().name().eq_ignore_ascii_case("pre"));
-    collect_text(*el, ctx, &mut out, &mut in_pre_depth);
-    out
-}
-
-fn collect_text(node: ego_tree::NodeRef<Node>, ctx: &Ctx, out: &mut String, pre_depth: &mut usize) {
-    for child in node.children() {
-        match child.value() {
-            Node::Text(t) => {
-                if let Some(s) = ctx.collapsed.get(&child.id()) {
-                    out.push_str(s);
-                } else if *pre_depth > 0 || !ctx.removed.contains(&child.id()) {
-                    // Pre-sanctuary text (never visited by the pass) stays raw.
-                    out.push_str(&t.text);
-                }
-            }
-            Node::Element(e) => {
-                let is_pre = e.name().eq_ignore_ascii_case("pre");
-                if is_pre {
-                    *pre_depth += 1;
-                }
-                collect_text(child, ctx, out, pre_depth);
-                if is_pre {
-                    *pre_depth -= 1;
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
 /// Is this child node "removed" by the collapseWhitespace pre-pass?
 /// (Text nodes absent from the map, comments, doctypes.)
 fn is_removed_node(child: &ego_tree::NodeRef<Node>, ctx: &Ctx) -> bool {
@@ -1122,10 +1485,7 @@ fn is_first_tbody(el: ElementRef, ctx: &Ctx) -> bool {
         None => true,
         Some(p) => {
             if tag_of(&p).as_deref() == Some("thead") {
-                let text: String = ElementRef::wrap(p)
-                    .map(|pe| collapsed_text_content(pe, ctx))
-                    .unwrap_or_default();
-                text.trim().is_empty()
+                ElementRef::wrap(p).is_none_or(|pe| summary_of(pe, ctx).all_ws)
             } else {
                 false
             }
@@ -1289,36 +1649,30 @@ fn serialize_node(node: ego_tree::NodeRef<Node>, ctx: &Ctx, out: &mut String, in
 /// turndown's escapes array, applied in order. `^` anchors are per-text-node
 /// string starts (no multiline flag in turndown).
 fn escape_markdown(text: &str) -> String {
-    // [/\\/g, '\\\\']
-    let mut s = text.replace('\\', "\\\\");
-    // [/\*/g, '\\*']
-    s = s.replace('*', "\\*");
-    // [/^-/g, '\\-']
-    if let Some(rest) = s.strip_prefix('-') {
-        s = format!("\\-{rest}");
+    // Single pass over the turndown escape chain. The global replaces
+    // (\\ * ` [ ]) each escape one character; the anchored rules (^-,
+    // ^+ , ^=+, ^#{1,6} , ^~~~) test the string between the earlier
+    // replaces, but none of those replaces can create or destroy a match
+    // at position 0 for these first characters, so testing the original
+    // text is equivalent.
+    let mut s = String::with_capacity(text.len() + 4);
+    let anchored = text.starts_with('-')
+        || text.starts_with("+ ")
+        || text.starts_with('=')
+        || text.starts_with("~~~")
+        || {
+            let hash_count = text.chars().take_while(|&c| c == '#').count();
+            (1..=6).contains(&hash_count) && text.as_bytes().get(hash_count) == Some(&b' ')
+        };
+    if anchored {
+        s.push('\\');
     }
-    // [/^\+ /g, '\\+ ']
-    if let Some(rest) = s.strip_prefix("+ ") {
-        s = format!("\\+ {rest}");
+    for c in text.chars() {
+        if matches!(c, '\\' | '*' | '`' | '[' | ']') {
+            s.push('\\');
+        }
+        s.push(c);
     }
-    // [/^(=+)/g, '\\$1']
-    if s.starts_with('=') {
-        s = format!("\\{s}");
-    }
-    // [/^(#{1,6}) /g, '\\$1 ']
-    let hash_count = s.chars().take_while(|&c| c == '#').count();
-    if (1..=6).contains(&hash_count) && s.as_bytes().get(hash_count) == Some(&b' ') {
-        s = format!("\\{s}");
-    }
-    // [/`/g, '\\`']
-    s = s.replace('`', "\\`");
-    // [/^~~~/g, '\\~~~']
-    if s.starts_with("~~~") {
-        s = format!("\\{s}");
-    }
-    // [/\[/g, '\\['] and [/\]/g, '\\]']
-    s = s.replace('[', "\\[");
-    s = s.replace(']', "\\]");
     // [/^>/g, '\\>']
     if s.starts_with('>') {
         s = format!("\\{s}");
@@ -1353,6 +1707,86 @@ fn strip_p_in_cell(inner: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The scan-based normalize passes must be indistinguishable from the
+    /// regexes they replaced, including the sloppy edges.
+    #[test]
+    fn normalize_scanner_matches_regex_reference() {
+        let re_cell = Regex::new(r"(?is)<(td|th)([\s\S&&[^>]]*)>([\s\S]*?)</(td|th)>").unwrap();
+        let re_table = Regex::new(
+            r"(?is)<table([\s\S&&[^>]]*)>\s*(?:<tbody>\s*)?(<tr[\s\S]*?</tr>)([\s\S]*?)</(?:tbody>\s*</)?table>",
+        )
+        .unwrap();
+        let re_td_open = Regex::new(r"(?i)<td").unwrap();
+        let re_td_close = Regex::new(r"(?i)</td>").unwrap();
+
+        let reference = |html: &str| -> String {
+            let step1 = re_cell.replace_all(html, |caps: &regex::Captures| {
+                let stripped = strip_p_in_cell(&caps[3]);
+                format!("<{}{}>{stripped}</{}>", &caps[1], &caps[2], &caps[4])
+            });
+            re_table
+                .replace_all(&step1, |caps: &regex::Captures| {
+                    let thead_row = re_td_open.replace_all(&caps[2], "<th");
+                    let thead_row = re_td_close.replace_all(&thead_row, "</th>");
+                    format!(
+                        "<table{}><thead>{thead_row}</thead><tbody>{}</tbody></table>",
+                        &caps[1], &caps[3]
+                    )
+                })
+                .into_owned()
+        };
+
+        let cases = [
+            "<table><tr><td>a</td><td>b</td></tr><tr><td>c</td></tr></table>",
+            "<table class=x><tbody><tr><td><p>p1</p><p>p2</p></td></tr><tr><td>d</td></tr></tbody></table>",
+            "<TABLE><TR><TD>caps</TD></TR><tr><td>l</td></tr></TABLE>",
+            "<table><thead><tr><th>h</th></tr></thead><tbody><tr><td>x</td></tr></tbody></table>",
+            "<table><tr><td>unclosed",
+            "<td>orphan cell</td>",
+            "<th data-x='1'>attr</th>",
+            "<thead><th>sloppy thead-as-th match</th></thead>",
+            "<table><tr><td>mixed</th></tr></table>",
+            "<td <td>attr consumed</td>",
+            "no tables at all",
+            "<table>\n  <tbody>\n <tr><td>ws</td></tr>\n</tbody>\n</table>",
+            "<table><tr><td>a</td></tr>trailing</table>extra</table>",
+        ];
+        for html in cases {
+            assert_eq!(
+                normalize_tables_html(html),
+                reference(html),
+                "divergence on: {html}"
+            );
+        }
+    }
+
+    /// noscript rewrite scanner vs its regex reference.
+    #[test]
+    fn noscript_scanner_matches_regex_reference() {
+        let open = Regex::new(r"(?i)<noscript(\s[\s\S&&[^>]]*)?>").unwrap();
+        let close = Regex::new(r"(?i)</noscript>").unwrap();
+        let cases = [
+            "<noscript><img src=x></noscript>",
+            "<NOSCRIPT class='y'>z</NoScript>",
+            "<noscript\n data-a>multi</noscript>",
+            "<noscriptx>not a match</noscript>",
+            "<noscript",
+            "plain",
+        ];
+        for html in cases {
+            let expect = close
+                .replace_all(&open.replace_all(html, "<div$1>"), "</div>")
+                .into_owned();
+            let got = crate::utils::strip_blocks::replace_ci_literal(
+                &rewrite_noscript_open(html),
+                "</noscript>",
+                "</div>",
+            )
+            .into_owned();
+            assert_eq!(got, expect, "divergence on: {html}");
+        }
+    }
 
     #[test]
     fn test_headings() {

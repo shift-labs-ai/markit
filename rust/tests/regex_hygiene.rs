@@ -52,6 +52,10 @@ fn regex_new_is_never_compiled_per_call() {
             if !line.contains("Regex::new") {
                 continue;
             }
+            // Comments may mention Regex::new without compiling anything.
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
             // Compiled-once contexts: the initializer closure of a
             // LazyLock/OnceLock static within the preceding five lines
             // (rustfmt keeps these adjacent), or on the same line.

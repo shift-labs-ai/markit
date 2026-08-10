@@ -1,11 +1,9 @@
-use std::sync::LazyLock;
-
 use anyhow::Result;
-use regex::Regex;
 
 use super::decode_text;
 use crate::types::{ConversionResult, Converter, StreamInfo};
 use crate::utils::html_to_md::{html_to_markdown, normalize_tables_html};
+use crate::utils::strip_blocks::{first_tag_content, strip_tag_blocks};
 
 const EXTENSIONS: &[&str] = &[".html", ".htm"];
 const MIMETYPES: &[&str] = &["text/html", "application/xhtml"];
@@ -32,26 +30,18 @@ impl Converter for HtmlConverter {
     }
 
     fn convert(&self, input: &[u8], _info: &StreamInfo) -> Result<ConversionResult> {
-        static RE_SCRIPT: LazyLock<Regex> =
-            LazyLock::new(|| Regex::new(r"(?is)<script[\s\S]*?</script>").unwrap());
-        static RE_STYLE: LazyLock<Regex> =
-            LazyLock::new(|| Regex::new(r"(?is)<style[\s\S]*?</style>").unwrap());
-        static RE_TITLE: LazyLock<Regex> =
-            LazyLock::new(|| Regex::new(r"(?is)<title[^>]*>([\s\S]*?)</title>").unwrap());
-
         let html = decode_text(input);
 
         // Remove script and style tags before converting
-        let cleaned = RE_SCRIPT.replace_all(&html, "");
-        let cleaned = RE_STYLE.replace_all(&cleaned, "");
+        let cleaned = strip_tag_blocks(&html, "<script", "</script>");
+        let cleaned = strip_tag_blocks(&cleaned, "<style", "</style>");
 
         let normalized = normalize_tables_html(&cleaned);
         let markdown = html_to_markdown(&normalized);
 
         // Extract title
-        let title = RE_TITLE
-            .captures(&html)
-            .map(|c| c[1].trim().to_string())
+        let title = first_tag_content(&html, "<title", "</title>")
+            .map(|t| t.trim().to_string())
             .filter(|t| !t.is_empty());
 
         Ok(ConversionResult {

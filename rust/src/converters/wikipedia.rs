@@ -5,6 +5,7 @@ use regex::Regex;
 
 use crate::types::{ConversionResult, Converter, StreamInfo};
 use crate::utils::html_to_md::html_to_markdown;
+use crate::utils::strip_blocks::strip_tag_blocks;
 
 // Mirrors TS: /^https?:\/\/[a-zA-Z]{2,3}\.wikipedia\.org\//
 static WIKIPEDIA_RE: LazyLock<Regex> =
@@ -63,14 +64,8 @@ impl WikipediaConverter {
 
         // ── Clean up Wikipedia-specific elements ──────────────────────────────
         // Mirrors the TS replace chain exactly: same patterns, same order.
-        // [\s\S] in raw strings: use [^\x00]* trick or rely on (?s) + .*
-        // We use (?s) flag so .* matches newlines too.
-        static RE_SCRIPT: LazyLock<Regex> =
-            LazyLock::new(|| Regex::new(r"(?is)<script.*?</script>").unwrap());
-        static RE_STYLE: LazyLock<Regex> =
-            LazyLock::new(|| Regex::new(r"(?is)<style.*?</style>").unwrap());
-        let re_script = &*RE_SCRIPT;
-        let re_style = &*RE_STYLE;
+        // script/style are literal-tag strips — the scan-based equivalent
+        // replaces the regex passes (see utils::strip_blocks).
         // TS: /<div[^>]*class="[^"]*mw-editsection[^"]*"[\s\S]*?<\/div>/gi
         static RE_EDITSECTION: LazyLock<Regex> = LazyLock::new(|| {
             Regex::new(r#"(?is)<div[^>]*class="[^"]*mw-editsection[^"]*".*?</div>"#).unwrap()
@@ -91,8 +86,8 @@ impl WikipediaConverter {
         });
         let re_sidebar = &*RE_SIDEBAR;
 
-        content = re_script.replace_all(&content, "").into_owned();
-        content = re_style.replace_all(&content, "").into_owned();
+        content = strip_tag_blocks(&content, "<script", "</script>").into_owned();
+        content = strip_tag_blocks(&content, "<style", "</style>").into_owned();
         content = re_editsection.replace_all(&content, "").into_owned();
         content = re_reference.replace_all(&content, "").into_owned();
         content = re_navbox.replace_all(&content, "").into_owned();
