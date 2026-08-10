@@ -31,21 +31,6 @@ impl ConversionResult {
     }
 }
 
-/// Describe an image / transcribe audio: receives raw bytes and mimetype,
-/// returns markdown/text.
-pub type MediaFn = Box<dyn Fn(&[u8], &str) -> Result<String> + Send + Sync>;
-
-/// Options threaded through every conversion.
-#[derive(Default)]
-pub struct MarkitOptions {
-    /// Describe an image, return markdown.
-    pub describe: Option<MediaFn>,
-    /// Transcribe audio, return text.
-    pub transcribe: Option<MediaFn>,
-    /// Extra instructions appended to the image description prompt.
-    pub prompt: Option<String>,
-}
-
 pub trait Converter {
     /// Human-readable name for error messages.
     fn name(&self) -> &'static str;
@@ -54,20 +39,11 @@ pub trait Converter {
     fn accepts(&self, info: &StreamInfo) -> bool;
 
     /// Convert the source to markdown.
-    fn convert(
-        &self,
-        input: &[u8],
-        info: &StreamInfo,
-        options: &MarkitOptions,
-    ) -> Result<ConversionResult>;
+    fn convert(&self, input: &[u8], info: &StreamInfo) -> Result<ConversionResult>;
 
     /// Optional URL-first hook. When Some, called before the default fetch
     /// so the converter can handle URL fetching itself.
-    fn convert_url(
-        &self,
-        _url: &str,
-        _options: &MarkitOptions,
-    ) -> Option<Result<ConversionResult>> {
+    fn convert_url(&self, _url: &str) -> Option<Result<ConversionResult>> {
         None
     }
 }

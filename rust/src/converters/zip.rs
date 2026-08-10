@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use crate::types::{ConversionResult, Converter, MarkitOptions, StreamInfo};
+use crate::types::{ConversionResult, Converter, StreamInfo};
 
 const MIMETYPES: &[&str] = &["application/zip", "application/x-zip-compressed"];
 
@@ -31,12 +31,7 @@ impl Converter for ZipConverter {
                 .is_some_and(|m| MIMETYPES.iter().any(|p| m.starts_with(p)))
     }
 
-    fn convert(
-        &self,
-        input: &[u8],
-        info: &StreamInfo,
-        options: &MarkitOptions,
-    ) -> Result<ConversionResult> {
+    fn convert(&self, input: &[u8], info: &StreamInfo) -> Result<ConversionResult> {
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(input))?;
         let label = info
             .local_path
@@ -78,7 +73,7 @@ impl Converter for ZipConverter {
                 if !converter.accepts(&file_info) {
                     continue;
                 }
-                if let Ok(result) = converter.convert(&buffer, &file_info, options) {
+                if let Ok(result) = converter.convert(&buffer, &file_info) {
                     let md = result.markdown.trim().to_string();
                     if !md.is_empty() {
                         sections.push(format!("## File: {path}\n\n{md}"));

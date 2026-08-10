@@ -1,9 +1,4 @@
-import type {
-  ConversionResult,
-  Converter,
-  MarkitOptions,
-  StreamInfo,
-} from "../types.js";
+import type { ConversionResult, Converter, StreamInfo } from "../types.js";
 
 const EXTENSIONS = [
   ".mp3",
@@ -34,7 +29,6 @@ export class AudioConverter implements Converter {
   async convert(
     input: Buffer,
     streamInfo: StreamInfo,
-    options?: MarkitOptions,
   ): Promise<ConversionResult> {
     const sections: string[] = [];
 
@@ -83,20 +77,6 @@ export class AudioConverter implements Converter {
       // Metadata parsing failed
     }
 
-    // AI transcription
-    if (options?.transcribe) {
-      try {
-        const mimetype =
-          streamInfo.mimetype || guessMimetype(streamInfo.extension);
-        const transcript = await options.transcribe(input, mimetype);
-        if (transcript) {
-          sections.push(`\n## Transcript\n\n${transcript}`);
-        }
-      } catch {
-        // Transcription failed
-      }
-    }
-
     if (sections.length === 0) {
       return { markdown: `*[audio: ${streamInfo.filename || "unknown"}]*` };
     }
@@ -112,18 +92,4 @@ export class AudioConverter implements Converter {
       return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
     return `${m}:${String(s).padStart(2, "0")}`;
   }
-}
-
-function guessMimetype(ext?: string): string {
-  const map: Record<string, string> = {
-    ".mp3": "audio/mpeg",
-    ".wav": "audio/wav",
-    ".m4a": "audio/mp4",
-    ".mp4": "video/mp4",
-    ".ogg": "audio/ogg",
-    ".flac": "audio/flac",
-    ".aac": "audio/aac",
-    ".wma": "audio/x-ms-wma",
-  };
-  return map[ext || ""] || "audio/mpeg";
 }

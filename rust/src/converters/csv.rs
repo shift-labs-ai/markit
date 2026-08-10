@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use super::decode_text;
-use crate::types::{ConversionResult, Converter, MarkitOptions, StreamInfo};
+use crate::types::{ConversionResult, Converter, StreamInfo};
 
 const MIMETYPES: &[&str] = &["text/csv", "text/tab-separated-values"];
 
@@ -20,12 +20,7 @@ impl Converter for CsvConverter {
                 .is_some_and(|m| MIMETYPES.iter().any(|p| m.starts_with(p)))
     }
 
-    fn convert(
-        &self,
-        input: &[u8],
-        info: &StreamInfo,
-        _options: &MarkitOptions,
-    ) -> Result<ConversionResult> {
+    fn convert(&self, input: &[u8], info: &StreamInfo) -> Result<ConversionResult> {
         let text = decode_text(input);
         let delimiter = if info.extension.as_deref() == Some(".tsv") {
             '\t'
@@ -115,7 +110,7 @@ fn parse_rows(text: &str, delimiter: char) -> Vec<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Converter, MarkitOptions, StreamInfo};
+    use crate::types::{Converter, StreamInfo};
 
     fn info(ext: &str) -> StreamInfo {
         StreamInfo {
@@ -129,7 +124,7 @@ mod tests {
         let input =
             "name,age,\"city, state\"\nAlice,30,\"Portland, OR\"\n\"Q \"\"quoted\"\"\",1,\n\n";
         let result = CsvConverter
-            .convert(input.as_bytes(), &info(".csv"), &MarkitOptions::default())
+            .convert(input.as_bytes(), &info(".csv"))
             .unwrap();
         assert_eq!(
             result.markdown,
@@ -140,16 +135,14 @@ mod tests {
     #[test]
     fn tsv_delimiter() {
         let result = CsvConverter
-            .convert(b"a\tb\n1\t2\n", &info(".tsv"), &MarkitOptions::default())
+            .convert(b"a\tb\n1\t2\n", &info(".tsv"))
             .unwrap();
         assert_eq!(result.markdown, "| a | b |\n| --- | --- |\n| 1 | 2 |");
     }
 
     #[test]
     fn empty_input() {
-        let result = CsvConverter
-            .convert(b"", &info(".csv"), &MarkitOptions::default())
-            .unwrap();
+        let result = CsvConverter.convert(b"", &info(".csv")).unwrap();
         assert_eq!(result.markdown, "");
     }
 }

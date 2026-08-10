@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::Path;
 
-use crate::types::{ConversionResult, Converter, MarkitOptions, StreamInfo};
+use crate::types::{ConversionResult, Converter, StreamInfo};
 
 const MIMETYPES: &[&str] =
     &["application/vnd.openxmlformats-officedocument.presentationml.presentation"];
@@ -26,12 +26,7 @@ impl Converter for PptxConverter {
                 .is_some_and(|m| MIMETYPES.iter().any(|p| m.starts_with(p)))
     }
 
-    fn convert(
-        &self,
-        input: &[u8],
-        info: &StreamInfo,
-        _options: &MarkitOptions,
-    ) -> Result<ConversionResult> {
+    fn convert(&self, input: &[u8], info: &StreamInfo) -> Result<ConversionResult> {
         // Read all zip entries into memory so we can access them without
         // fighting the borrow checker across multiple reads.
         let files = read_zip_files(input)?;
@@ -569,9 +564,7 @@ mod tests {
     #[test]
     fn extracts_text_from_shapes() {
         let bytes = build_pptx(false, "");
-        let result = PptxConverter
-            .convert(&bytes, &info_ext(".pptx"), &MarkitOptions::default())
-            .unwrap();
+        let result = PptxConverter.convert(&bytes, &info_ext(".pptx")).unwrap();
         assert!(
             result.markdown.contains("Hello World"),
             "markdown should contain slide text:\n{}",
@@ -582,9 +575,7 @@ mod tests {
     #[test]
     fn emits_image_placeholder_without_image_dir() {
         let bytes = build_pptx(true, "Logo");
-        let result = PptxConverter
-            .convert(&bytes, &info_ext(".pptx"), &MarkitOptions::default())
-            .unwrap();
+        let result = PptxConverter.convert(&bytes, &info_ext(".pptx")).unwrap();
         assert!(
             result.markdown.contains("<!-- image: Logo (slide 1) -->"),
             "expected placeholder comment; got:\n{}",
@@ -602,9 +593,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = PptxConverter
-            .convert(&bytes, &si, &MarkitOptions::default())
-            .unwrap();
+        let result = PptxConverter.convert(&bytes, &si).unwrap();
 
         assert!(
             result.markdown.contains("![Picture 1]"),
@@ -626,9 +615,7 @@ mod tests {
     #[test]
     fn text_only_slides_have_no_image_references() {
         let bytes = build_pptx(false, "");
-        let result = PptxConverter
-            .convert(&bytes, &info_ext(".pptx"), &MarkitOptions::default())
-            .unwrap();
+        let result = PptxConverter.convert(&bytes, &info_ext(".pptx")).unwrap();
         assert!(
             !result.markdown.contains("image"),
             "text-only slide should not reference images:\n{}",
@@ -641,18 +628,14 @@ mod tests {
     #[test]
     fn slide_comment_present() {
         let bytes = build_pptx(false, "");
-        let result = PptxConverter
-            .convert(&bytes, &info_ext(".pptx"), &MarkitOptions::default())
-            .unwrap();
+        let result = PptxConverter.convert(&bytes, &info_ext(".pptx")).unwrap();
         assert!(result.markdown.starts_with("<!-- Slide 1 -->"));
     }
 
     #[test]
     fn first_text_shape_becomes_h1() {
         let bytes = build_pptx(false, "");
-        let result = PptxConverter
-            .convert(&bytes, &info_ext(".pptx"), &MarkitOptions::default())
-            .unwrap();
+        let result = PptxConverter.convert(&bytes, &info_ext(".pptx")).unwrap();
         assert!(
             result.markdown.contains("# Hello World"),
             "first shape should be H1:\n{}",
@@ -688,7 +671,7 @@ mod tests {
         let bytes = zip.finish().unwrap().into_inner();
 
         let err = PptxConverter
-            .convert(&bytes, &info_ext(".pptx"), &MarkitOptions::default())
+            .convert(&bytes, &info_ext(".pptx"))
             .unwrap_err();
         assert!(
             err.to_string()
@@ -760,9 +743,7 @@ mod tests {
         .unwrap();
 
         let bytes = zip.finish().unwrap().into_inner();
-        let result = PptxConverter
-            .convert(&bytes, &info_ext(".pptx"), &MarkitOptions::default())
-            .unwrap();
+        let result = PptxConverter.convert(&bytes, &info_ext(".pptx")).unwrap();
 
         assert!(
             result.markdown.contains("| Name | Age |"),

@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use std::io::{Cursor, Read};
 use zip::ZipArchive;
 
-use crate::types::{ConversionResult, Converter, MarkitOptions, StreamInfo};
+use crate::types::{ConversionResult, Converter, StreamInfo};
 
 const SF_NS: &str = "http://developer.apple.com/namespaces/sf";
 const SFA_NS: &str = "http://developer.apple.com/namespaces/sfa";
@@ -24,12 +24,7 @@ impl Converter for IWorkConverter {
         )
     }
 
-    fn convert(
-        &self,
-        input: &[u8],
-        info: &StreamInfo,
-        _options: &MarkitOptions,
-    ) -> Result<ConversionResult> {
+    fn convert(&self, input: &[u8], info: &StreamInfo) -> Result<ConversionResult> {
         let cursor = Cursor::new(input);
         let mut archive = ZipArchive::new(cursor)?;
 
@@ -464,7 +459,7 @@ fn convert_numbers_fallback(doc: &roxmltree::Document) -> Result<ConversionResul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Converter, MarkitOptions, StreamInfo};
+    use crate::types::{Converter, StreamInfo};
     use std::io::{Cursor, Write};
     use zip::write::SimpleFileOptions;
     use zip::ZipWriter;
@@ -568,9 +563,7 @@ mod tests {
     #[test]
     fn pages_extracts_body_text() {
         let bytes = build_pages(None, false);
-        let result = IWorkConverter
-            .convert(&bytes, &info(".pages"), &MarkitOptions::default())
-            .unwrap();
+        let result = IWorkConverter.convert(&bytes, &info(".pages")).unwrap();
         assert!(
             result.markdown.contains("Hello from Pages"),
             "got: {}",
@@ -581,9 +574,7 @@ mod tests {
     #[test]
     fn pages_detects_title_style() {
         let bytes = build_pages(Some("text-0-paragraphstyle-Title"), false);
-        let result = IWorkConverter
-            .convert(&bytes, &info(".pages"), &MarkitOptions::default())
-            .unwrap();
+        let result = IWorkConverter.convert(&bytes, &info(".pages")).unwrap();
         assert!(
             result.markdown.contains("# Hello from Pages"),
             "got: {}",
@@ -594,9 +585,7 @@ mod tests {
     #[test]
     fn pages_detects_heading_style() {
         let bytes = build_pages(Some("text-11-paragraphstyle-Heading 1"), false);
-        let result = IWorkConverter
-            .convert(&bytes, &info(".pages"), &MarkitOptions::default())
-            .unwrap();
+        let result = IWorkConverter.convert(&bytes, &info(".pages")).unwrap();
         assert!(
             result.markdown.contains("## Hello from Pages"),
             "got: {}",
@@ -607,9 +596,7 @@ mod tests {
     #[test]
     fn pages_image_placeholder() {
         let bytes = build_pages(None, true);
-        let result = IWorkConverter
-            .convert(&bytes, &info(".pages"), &MarkitOptions::default())
-            .unwrap();
+        let result = IWorkConverter.convert(&bytes, &info(".pages")).unwrap();
         assert!(
             result.markdown.contains("<!-- image: photo.png -->"),
             "got: {}",
@@ -626,9 +613,7 @@ mod tests {
         let bytes = build_pages(None, true);
         let mut si = info(".pages");
         si.image_dir = Some(dir_path.clone());
-        let result = IWorkConverter
-            .convert(&bytes, &si, &MarkitOptions::default())
-            .unwrap();
+        let result = IWorkConverter.convert(&bytes, &si).unwrap();
 
         let _ = std::fs::remove_dir_all(&dir);
 
@@ -644,9 +629,7 @@ mod tests {
     #[test]
     fn keynote_slide_text() {
         let bytes = build_keynote();
-        let result = IWorkConverter
-            .convert(&bytes, &info(".key"), &MarkitOptions::default())
-            .unwrap();
+        let result = IWorkConverter.convert(&bytes, &info(".key")).unwrap();
         assert!(
             result.markdown.contains("# Slide Title"),
             "got: {}",
@@ -677,9 +660,7 @@ mod tests {
     #[test]
     fn keynote_title_from_first_slide() {
         let bytes = build_keynote();
-        let result = IWorkConverter
-            .convert(&bytes, &info(".key"), &MarkitOptions::default())
-            .unwrap();
+        let result = IWorkConverter.convert(&bytes, &info(".key")).unwrap();
         assert_eq!(result.title.as_deref(), Some("Slide Title"));
     }
 
@@ -695,9 +676,7 @@ mod tests {
       <sf:t sf:ct="255" sf:f="0" sf:s="s2"><sf:ct sfa:s="Bob"/></sf:t>
       <sf:n sf:f="0" sf:s="s3" sf:v="87"/>"#;
         let bytes = build_numbers(2, cells);
-        let result = IWorkConverter
-            .convert(&bytes, &info(".numbers"), &MarkitOptions::default())
-            .unwrap();
+        let result = IWorkConverter.convert(&bytes, &info(".numbers")).unwrap();
         assert!(
             result.markdown.contains("| Name | Score |"),
             "got: {}",
@@ -724,9 +703,7 @@ mod tests {
       <sf:n sf:f="0" sf:s="s3" sf:v="95"/>"#;
         // numcols=7 but only 4 cells — relayouts to 2 cols
         let bytes = build_numbers(7, cells);
-        let result = IWorkConverter
-            .convert(&bytes, &info(".numbers"), &MarkitOptions::default())
-            .unwrap();
+        let result = IWorkConverter.convert(&bytes, &info(".numbers")).unwrap();
         assert!(
             result.markdown.contains("| Name | Score |"),
             "got: {}",
@@ -753,9 +730,7 @@ mod tests {
         let cursor = Cursor::new(buf);
         let zip = ZipWriter::new(cursor);
         let bytes = zip.finish().unwrap().into_inner();
-        let err = IWorkConverter
-            .convert(&bytes, &info(".pages"), &MarkitOptions::default())
-            .unwrap_err();
+        let err = IWorkConverter.convert(&bytes, &info(".pages")).unwrap_err();
         assert!(
             err.to_string().contains("Invalid iWork file"),
             "got: {}",

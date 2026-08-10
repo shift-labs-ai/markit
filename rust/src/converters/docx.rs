@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{Cursor, Read};
 
-use crate::types::{ConversionResult, Converter, MarkitOptions, StreamInfo};
+use crate::types::{ConversionResult, Converter, StreamInfo};
 use crate::utils::html_to_md::{html_to_markdown, normalize_tables_html};
 
 // ── OOXML namespace URIs ──────────────────────────────────────────────────────
@@ -45,12 +45,7 @@ impl Converter for DocxConverter {
         })
     }
 
-    fn convert(
-        &self,
-        input: &[u8],
-        info: &StreamInfo,
-        _options: &MarkitOptions,
-    ) -> Result<ConversionResult> {
+    fn convert(&self, input: &[u8], info: &StreamInfo) -> Result<ConversionResult> {
         let cursor = Cursor::new(input);
         let mut archive =
             zip::ZipArchive::new(cursor).map_err(|e| anyhow!("Invalid DOCX: {}", e))?;
@@ -575,7 +570,7 @@ fn html_escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Converter, MarkitOptions, StreamInfo};
+    use crate::types::{Converter, StreamInfo};
     use std::io::Write;
     use zip::write::SimpleFileOptions;
 
@@ -729,9 +724,7 @@ mod tests {
     #[test]
     fn extracts_text() {
         let docx = simple_docx("Hello from DOCX");
-        let result = DocxConverter
-            .convert(&docx, &info_ext(".docx"), &MarkitOptions::default())
-            .unwrap();
+        let result = DocxConverter.convert(&docx, &info_ext(".docx")).unwrap();
         assert!(
             result.markdown.contains("Hello from DOCX"),
             "got: {:?}",
@@ -742,9 +735,7 @@ mod tests {
     #[test]
     fn text_only_no_image_references() {
         let docx = simple_docx("Hello from DOCX");
-        let result = DocxConverter
-            .convert(&docx, &info_ext(".docx"), &MarkitOptions::default())
-            .unwrap();
+        let result = DocxConverter.convert(&docx, &info_ext(".docx")).unwrap();
         assert!(
             !result.markdown.contains("image"),
             "unexpected 'image': {:?}",
@@ -757,9 +748,7 @@ mod tests {
     #[test]
     fn emits_placeholder_comment_without_image_dir() {
         let docx = docx_with_image();
-        let result = DocxConverter
-            .convert(&docx, &info_ext(".docx"), &MarkitOptions::default())
-            .unwrap();
+        let result = DocxConverter.convert(&docx, &info_ext(".docx")).unwrap();
         assert!(
             result.markdown.contains("<!-- image:"),
             "expected placeholder comment, got: {:?}",
@@ -777,11 +766,7 @@ mod tests {
 
         let docx = docx_with_image();
         let _result = DocxConverter
-            .convert(
-                &docx,
-                &info_with_dir(".docx", &dir_str),
-                &MarkitOptions::default(),
-            )
+            .convert(&docx, &info_with_dir(".docx", &dir_str))
             .unwrap();
 
         let img_path = dir.join("image_1.png");
@@ -810,9 +795,7 @@ mod tests {
         );
         let rels = base_rels("");
         let docx = build_docx(&doc, &rels, None);
-        let result = DocxConverter
-            .convert(&docx, &info_ext(".docx"), &MarkitOptions::default())
-            .unwrap();
+        let result = DocxConverter.convert(&docx, &info_ext(".docx")).unwrap();
 
         let md = &result.markdown;
         assert!(md.contains("Line 1"), "missing Line 1: {:?}", md);
@@ -839,9 +822,7 @@ mod tests {
         );
         let rels = base_rels("");
         let docx = build_docx(&doc, &rels, None);
-        let result = DocxConverter
-            .convert(&docx, &info_ext(".docx"), &MarkitOptions::default())
-            .unwrap();
+        let result = DocxConverter.convert(&docx, &info_ext(".docx")).unwrap();
         assert!(
             result.markdown.contains("bold italic"),
             "{:?}",
@@ -861,9 +842,7 @@ mod tests {
         );
         let rels = base_rels("");
         let docx = build_docx(&doc, &rels, None);
-        let result = DocxConverter
-            .convert(&docx, &info_ext(".docx"), &MarkitOptions::default())
-            .unwrap();
+        let result = DocxConverter.convert(&docx, &info_ext(".docx")).unwrap();
         assert!(
             result.markdown.contains("Chapter One"),
             "{:?}",
@@ -876,7 +855,7 @@ mod tests {
     #[test]
     fn invalid_zip_is_error() {
         let err = DocxConverter
-            .convert(b"not a zip", &info_ext(".docx"), &MarkitOptions::default())
+            .convert(b"not a zip", &info_ext(".docx"))
             .unwrap_err();
         assert!(err.to_string().contains("Invalid DOCX"), "{}", err);
     }

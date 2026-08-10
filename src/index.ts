@@ -1,4 +1,3 @@
-export type { MarkitConfig } from "./config.js";
 export { AudioConverter } from "./converters/audio.js";
 export { CsvConverter } from "./converters/csv.js";
 export { DocxConverter } from "./converters/docx.js";
@@ -19,22 +18,8 @@ export { XmlConverter } from "./converters/xml.js";
 export { YamlConverter } from "./converters/yaml.js";
 export { ZipConverter } from "./converters/zip.js";
 export { Markit } from "./markit.js";
-export { anthropic } from "./providers/anthropic.js";
-export {
-  createLlmFunctions,
-  getProvider,
-  listProviders,
-  registerProvider,
-} from "./providers/index.js";
-export { openai } from "./providers/openai.js";
-export type {
-  Provider,
-  ProviderConfig,
-  ResolvedConfig,
-} from "./providers/types.js";
 export type {
   ConversionResult,
   Converter,
-  MarkitOptions,
   StreamInfo,
 } from "./types.js";

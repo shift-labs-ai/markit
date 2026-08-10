@@ -14,17 +14,6 @@ export interface ConversionResult {
   title?: string;
 }
 
-export interface MarkitOptions {
-  /** Describe an image, return markdown. Receives raw bytes and mimetype. */
-  describe?: (image: Buffer, mimetype: string) => Promise<string>;
-
-  /** Transcribe audio, return text. Receives raw bytes and mimetype. */
-  transcribe?: (audio: Buffer, mimetype: string) => Promise<string>;
-
-  /** Extra instructions appended to the image description prompt. */
-  prompt?: string;
-}
-
 export interface Converter {
   /** Human-readable name for error messages */
   name: string;
@@ -37,12 +26,8 @@ export interface Converter {
    * so the converter can handle URL fetching itself (e.g. rewrite to a raw
    * content URL or call an API).
    */
-  convertUrl?(url: string, options?: MarkitOptions): Promise<ConversionResult>;
+  convertUrl?(url: string): Promise<ConversionResult>;
 
   /** Convert the source to markdown */
-  convert(
-    input: Buffer,
-    streamInfo: StreamInfo,
-    options?: MarkitOptions,
-  ): Promise<ConversionResult>;
+  convert(input: Buffer, streamInfo: StreamInfo): Promise<ConversionResult>;
 }

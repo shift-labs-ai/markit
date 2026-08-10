@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::io::Cursor;
 
-use crate::types::{ConversionResult, Converter, MarkitOptions, StreamInfo};
+use crate::types::{ConversionResult, Converter, StreamInfo};
 
 const EXTENSIONS: &[&str] = &[
     ".jpg", ".jpeg", ".png", ".gif", ".webp", ".tiff", ".tif", ".bmp", ".svg",
@@ -28,12 +28,7 @@ impl Converter for ImageConverter {
         false
     }
 
-    fn convert(
-        &self,
-        input: &[u8],
-        info: &StreamInfo,
-        options: &MarkitOptions,
-    ) -> Result<ConversionResult> {
+    fn convert(&self, input: &[u8], info: &StreamInfo) -> Result<ConversionResult> {
         let mut sections: Vec<String> = Vec::new();
 
         // Extract EXIF metadata — gracefully skip if format not supported
@@ -42,19 +37,6 @@ impl Converter for ImageConverter {
                 sections.push("## Metadata\n".to_string());
                 for line in exif_lines {
                     sections.push(line);
-                }
-            }
-        }
-
-        // AI description hook
-        if let Some(describe) = &options.describe {
-            let mimetype = info
-                .mimetype
-                .clone()
-                .unwrap_or_else(|| guess_mimetype(info.extension.as_deref()));
-            if let Ok(description) = describe(input, &mimetype) {
-                if !description.is_empty() {
-                    sections.push(format!("\n## Description\n\n{description}"));
                 }
             }
         }
@@ -318,24 +300,9 @@ fn format_float(f: f64) -> String {
     }
 }
 
-fn guess_mimetype(ext: Option<&str>) -> String {
-    match ext.unwrap_or("") {
-        ".jpg" | ".jpeg" => "image/jpeg",
-        ".png" => "image/png",
-        ".gif" => "image/gif",
-        ".webp" => "image/webp",
-        ".tiff" | ".tif" => "image/tiff",
-        ".bmp" => "image/bmp",
-        ".svg" => "image/svg+xml",
-        _ => "image/png",
-    }
-    .to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::MarkitOptions;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
@@ -417,20 +384,16 @@ mod tests {
     }
 
     #[test]
-    fn placeholder_when_no_exif_and_no_describe() {
+    fn placeholder_when_no_exif() {
         let info = make_info(Some(".jpg"), None, Some("photo.jpg"));
-        let result = ImageConverter
-            .convert(&[], &info, &MarkitOptions::default())
-            .unwrap();
+        let result = ImageConverter.convert(&[], &info).unwrap();
         assert_eq!(result.markdown, "*[image: photo.jpg]*");
     }
 
     #[test]
     fn placeholder_uses_unknown_when_no_filename() {
         let info = make_info(Some(".png"), None, None);
-        let result = ImageConverter
-            .convert(&[], &info, &MarkitOptions::default())
-            .unwrap();
+        let result = ImageConverter.convert(&[], &info).unwrap();
         assert_eq!(result.markdown, "*[image: unknown]*");
     }
 
@@ -438,88 +401,8 @@ mod tests {
     fn svg_placeholder() {
         let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\"><rect/></svg>";
         let info = make_info(Some(".svg"), Some("image/svg+xml"), Some("t.svg"));
-        let result = ImageConverter
-            .convert(svg, &info, &MarkitOptions::default())
-            .unwrap();
+        let result = ImageConverter.convert(svg, &info).unwrap();
         assert_eq!(result.markdown, "*[image: t.svg]*");
-    }
-
-    #[test]
-    fn describe_hook_called_with_correct_mimetype() {
-        let called = Arc::new(AtomicBool::new(false));
-        let called2 = Arc::clone(&called);
-        let opts = MarkitOptions {
-            describe: Some(Box::new(move |_bytes, mime| {
-                called2.store(true, Ordering::SeqCst);
-                assert_eq!(mime, "image/jpeg");
-                Ok("A red square.".to_string())
-            })),
-            ..Default::default()
-        };
-        let info = make_info(Some(".jpg"), None, Some("img.jpg"));
-        let result = ImageConverter.convert(&[], &info, &opts).unwrap();
-        assert!(called.load(Ordering::SeqCst));
-        assert!(result.markdown.contains("## Description"));
-        assert!(result.markdown.contains("A red square."));
-    }
-
-    #[test]
-    fn describe_uses_streaminfo_mimetype_when_available() {
-        let captured = Arc::new(std::sync::Mutex::new(String::new()));
-        let captured2 = Arc::clone(&captured);
-        let opts = MarkitOptions {
-            describe: Some(Box::new(move |_bytes, mime| {
-                *captured2.lock().unwrap() = mime.to_string();
-                Ok("desc".to_string())
-            })),
-            ..Default::default()
-        };
-        let info = make_info(None, Some("image/webp"), Some("img.webp"));
-        ImageConverter.convert(&[], &info, &opts).unwrap();
-        assert_eq!(*captured.lock().unwrap(), "image/webp");
-    }
-
-    #[test]
-    fn describe_guesses_mimetype_from_extension() {
-        let captured = Arc::new(std::sync::Mutex::new(String::new()));
-        let captured2 = Arc::clone(&captured);
-        let opts = MarkitOptions {
-            describe: Some(Box::new(move |_bytes, mime| {
-                *captured2.lock().unwrap() = mime.to_string();
-                Ok("desc".to_string())
-            })),
-            ..Default::default()
-        };
-        let info = make_info(Some(".png"), None, Some("img.png"));
-        ImageConverter.convert(&[], &info, &opts).unwrap();
-        assert_eq!(*captured.lock().unwrap(), "image/png");
-    }
-
-    #[test]
-    fn describe_svg_guesses_svg_xml_mimetype() {
-        let captured = Arc::new(std::sync::Mutex::new(String::new()));
-        let captured2 = Arc::clone(&captured);
-        let opts = MarkitOptions {
-            describe: Some(Box::new(move |_bytes, mime| {
-                *captured2.lock().unwrap() = mime.to_string();
-                Ok("desc".to_string())
-            })),
-            ..Default::default()
-        };
-        let info = make_info(Some(".svg"), None, Some("icon.svg"));
-        ImageConverter.convert(&[], &info, &opts).unwrap();
-        assert_eq!(*captured.lock().unwrap(), "image/svg+xml");
-    }
-
-    #[test]
-    fn describe_failure_degrades_to_placeholder() {
-        let opts = MarkitOptions {
-            describe: Some(Box::new(|_bytes, _mime| Err(anyhow::anyhow!("LLM down")))),
-            ..Default::default()
-        };
-        let info = make_info(Some(".jpg"), None, Some("img.jpg"));
-        let result = ImageConverter.convert(&[], &info, &opts).unwrap();
-        assert_eq!(result.markdown, "*[image: img.jpg]*");
     }
 
     /// Build a minimal JPEG with an EXIF block containing Make + Model.
@@ -577,9 +460,7 @@ mod tests {
     fn exif_extracts_make_and_model_as_camera() {
         let jpeg = minimal_jpeg_exif("Canon", "EOS 5D");
         let info = make_info(Some(".jpg"), None, Some("photo.jpg"));
-        let result = ImageConverter
-            .convert(&jpeg, &info, &MarkitOptions::default())
-            .unwrap();
+        let result = ImageConverter.convert(&jpeg, &info).unwrap();
         assert!(
             result.markdown.contains("## Metadata"),
             "missing header: {}",
@@ -604,22 +485,5 @@ mod tests {
         assert_eq!(format_float(2.8), "2.8");
         assert_eq!(format_float(5.6), "5.6");
         assert_eq!(format_float(1.4), "1.4");
-    }
-
-    #[test]
-    fn guess_mimetype_returns_svg_xml() {
-        assert_eq!(guess_mimetype(Some(".svg")), "image/svg+xml");
-    }
-
-    #[test]
-    fn guess_mimetype_jpg_jpeg() {
-        assert_eq!(guess_mimetype(Some(".jpg")), "image/jpeg");
-        assert_eq!(guess_mimetype(Some(".jpeg")), "image/jpeg");
-    }
-
-    #[test]
-    fn guess_mimetype_unknown_falls_back_to_png() {
-        assert_eq!(guess_mimetype(Some(".xyz")), "image/png");
-        assert_eq!(guess_mimetype(None), "image/png");
     }
 }

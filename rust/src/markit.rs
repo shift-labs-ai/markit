@@ -23,7 +23,7 @@ use crate::converters::xml::XmlConverter;
 use crate::converters::yaml::YamlConverter;
 use crate::converters::zip::ZipConverter;
 use crate::discover_markdown_source::discover_markdown_source;
-use crate::types::{ConversionResult, Converter, MarkitOptions, StreamInfo};
+use crate::types::{ConversionResult, Converter, StreamInfo};
 
 const USER_AGENT: &str = "markit/0.1.0";
 
@@ -88,17 +88,16 @@ impl HttpFetch for UreqFetcher {
 
 pub struct Markit {
     converters: Vec<Box<dyn Converter>>,
-    options: MarkitOptions,
     http: Box<dyn HttpFetch>,
 }
 
 impl Markit {
-    pub fn new(options: MarkitOptions) -> Self {
-        Self::with_http(options, Box::new(UreqFetcher))
+    pub fn new() -> Self {
+        Self::with_http(Box::new(UreqFetcher))
     }
 
     /// Constructor with injectable HTTP for testing.
-    pub fn with_http(options: MarkitOptions, http: Box<dyn HttpFetch>) -> Self {
+    pub fn with_http(http: Box<dyn HttpFetch>) -> Self {
         // Built-in converters: specific formats first, generic last.
         // Mirrors the ordering in src/markit.ts constructor.
         let specific: Vec<Box<dyn Converter>> = vec![
@@ -153,11 +152,7 @@ impl Markit {
         converters.extend(generic);
         converters.push(Box::new(PlainTextConverter));
 
-        Self {
-            converters,
-            options,
-            http,
-        }
+        Self { converters, http }
     }
 
     /// Convert a local file to markdown.
@@ -193,7 +188,7 @@ impl Markit {
             if !converter.accepts(&stream_info) {
                 continue;
             }
-            if let Some(result) = converter.convert_url(url, &self.options) {
+            if let Some(result) = converter.convert_url(url) {
                 match result {
                     Ok(r) => return Ok(r),
                     Err(_) => continue, // Fall through to default fetch path
@@ -369,7 +364,7 @@ impl Markit {
             if !converter.accepts(info) {
                 continue;
             }
-            match converter.convert(input, info, &self.options) {
+            match converter.convert(input, info) {
                 Ok(result) => return Ok(result),
                 Err(err) => errors.push((converter.name(), err)),
             }
@@ -538,7 +533,7 @@ mod tests {
     }
 
     fn make_markit(mock: MockHttp) -> Markit {
-        Markit::with_http(MarkitOptions::default(), Box::new(mock))
+        Markit::with_http(Box::new(mock))
     }
 
     /// Prepend a converter to the registry (test-only) to exercise
@@ -566,20 +561,11 @@ mod tests {
                 .is_some_and(|u| u.starts_with(&self.url_prefix))
         }
 
-        fn convert(
-            &self,
-            _input: &[u8],
-            _info: &StreamInfo,
-            _options: &MarkitOptions,
-        ) -> Result<ConversionResult> {
+        fn convert(&self, _input: &[u8], _info: &StreamInfo) -> Result<ConversionResult> {
             Ok(ConversionResult::markdown(&self.result_markdown))
         }
 
-        fn convert_url(
-            &self,
-            url: &str,
-            _options: &MarkitOptions,
-        ) -> Option<Result<ConversionResult>> {
+        fn convert_url(&self, url: &str) -> Option<Result<ConversionResult>> {
             if url.starts_with(&self.url_prefix) {
                 Some(Ok(ConversionResult::markdown(&self.result_markdown)))
             } else {
@@ -604,7 +590,7 @@ Handled by converter hook."
         let mock_http = MockHttp::new();
         // No HTTP mocks needed — the converter hook handles it directly.
 
-        let mut markit = Markit::with_http(MarkitOptions::default(), Box::new(mock_http));
+        let mut markit = Markit::with_http(Box::new(mock_http));
         prepend_converter(&mut markit, Box::new(mock_converter));
         let result = markit
             .convert_url("https://custom.example.com/page")

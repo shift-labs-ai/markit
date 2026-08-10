@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use super::decode_text;
-use crate::types::{ConversionResult, Converter, MarkitOptions, StreamInfo};
+use crate::types::{ConversionResult, Converter, StreamInfo};
 
 const TEXT_EXTENSIONS: &[&str] = &[
     ".txt",
@@ -79,12 +79,7 @@ impl Converter for PlainTextConverter {
         info.extension.is_none() && info.mimetype.is_none()
     }
 
-    fn convert(
-        &self,
-        input: &[u8],
-        info: &StreamInfo,
-        _options: &MarkitOptions,
-    ) -> Result<ConversionResult> {
+    fn convert(&self, input: &[u8], info: &StreamInfo) -> Result<ConversionResult> {
         let text = decode_text(input);
         let ext = info.extension.as_deref();
 

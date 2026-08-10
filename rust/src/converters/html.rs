@@ -2,7 +2,7 @@ use anyhow::Result;
 use regex::Regex;
 
 use super::decode_text;
-use crate::types::{ConversionResult, Converter, MarkitOptions, StreamInfo};
+use crate::types::{ConversionResult, Converter, StreamInfo};
 use crate::utils::html_to_md::{html_to_markdown, normalize_tables_html};
 
 const EXTENSIONS: &[&str] = &[".html", ".htm"];
@@ -29,12 +29,7 @@ impl Converter for HtmlConverter {
         false
     }
 
-    fn convert(
-        &self,
-        input: &[u8],
-        _info: &StreamInfo,
-        _options: &MarkitOptions,
-    ) -> Result<ConversionResult> {
+    fn convert(&self, input: &[u8], _info: &StreamInfo) -> Result<ConversionResult> {
         let html = decode_text(input);
 
         // Remove script and style tags before converting
@@ -90,9 +85,7 @@ mod tests {
     #[test]
     fn test_basic_conversion() {
         let html = b"<h1>Hello</h1><p>World</p>";
-        let result = HtmlConverter
-            .convert(html, &info(".html"), &MarkitOptions::default())
-            .unwrap();
+        let result = HtmlConverter.convert(html, &info(".html")).unwrap();
         assert_eq!(result.markdown, "# Hello\n\nWorld");
         assert_eq!(result.title, None);
     }
@@ -100,18 +93,14 @@ mod tests {
     #[test]
     fn test_strips_script_and_style() {
         let html = b"<style>body { color: red; }</style><script>alert(1);</script><p>Hello</p>";
-        let result = HtmlConverter
-            .convert(html, &info(".html"), &MarkitOptions::default())
-            .unwrap();
+        let result = HtmlConverter.convert(html, &info(".html")).unwrap();
         assert_eq!(result.markdown, "Hello");
     }
 
     #[test]
     fn test_extracts_title() {
         let html = b"<html><head><title>My Page</title></head><body><p>Content</p></body></html>";
-        let result = HtmlConverter
-            .convert(html, &info(".html"), &MarkitOptions::default())
-            .unwrap();
+        let result = HtmlConverter.convert(html, &info(".html")).unwrap();
         assert_eq!(result.title, Some("My Page".to_string()));
         assert!(result.markdown.contains("Content"));
     }
@@ -128,7 +117,7 @@ mod tests {
             "</body></html>"
         );
         let result = HtmlConverter
-            .convert(html.as_bytes(), &info(".html"), &MarkitOptions::default())
+            .convert(html.as_bytes(), &info(".html"))
             .unwrap();
         assert_eq!(result.title, Some("My Page Title".to_string()));
         // turndown keeps <title> text in the body output — the TS CLI does too,
@@ -140,9 +129,7 @@ mod tests {
     fn test_table_normalization() {
         let html =
             b"<table><tr><td>Name</td><td>Age</td></tr><tr><td>Alice</td><td>30</td></tr></table>";
-        let result = HtmlConverter
-            .convert(html, &info(".html"), &MarkitOptions::default())
-            .unwrap();
+        let result = HtmlConverter.convert(html, &info(".html")).unwrap();
         assert_eq!(
             result.markdown,
             "| Name | Age |\n| --- | --- |\n| Alice | 30 |"

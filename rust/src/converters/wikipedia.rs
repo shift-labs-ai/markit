@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 use anyhow::Result;
 use regex::Regex;
 
-use crate::types::{ConversionResult, Converter, MarkitOptions, StreamInfo};
+use crate::types::{ConversionResult, Converter, StreamInfo};
 use crate::utils::html_to_md::html_to_markdown;
 
 // Mirrors TS: /^https?:\/\/[a-zA-Z]{2,3}\.wikipedia\.org\//
@@ -97,12 +97,7 @@ impl Converter for WikipediaConverter {
         WIKIPEDIA_RE.is_match(url)
     }
 
-    fn convert(
-        &self,
-        input: &[u8],
-        info: &StreamInfo,
-        _options: &MarkitOptions,
-    ) -> Result<ConversionResult> {
+    fn convert(&self, input: &[u8], info: &StreamInfo) -> Result<ConversionResult> {
         self.do_convert(input, info)
     }
 }
@@ -116,10 +111,6 @@ mod tests {
             url: Some(url.to_string()),
             ..Default::default()
         }
-    }
-
-    fn opts() -> MarkitOptions {
-        MarkitOptions::default()
     }
 
     // ── accepts() ─────────────────────────────────────────────────────────────
@@ -184,7 +175,6 @@ mod tests {
             .convert(
                 html.as_bytes(),
                 &info_with_url("https://en.wikipedia.org/wiki/Rust"),
-                &opts(),
             )
             .unwrap();
         assert_eq!(result.title.as_deref(), Some("Rust (programming language)"));
@@ -200,7 +190,6 @@ mod tests {
             .convert(
                 html.as_bytes(),
                 &info_with_url("https://en.wikipedia.org/wiki/Rust"),
-                &opts(),
             )
             .unwrap();
         assert_eq!(result.title.as_deref(), Some("Rust"));
@@ -215,7 +204,6 @@ mod tests {
             .convert(
                 html.as_bytes(),
                 &info_with_url("https://en.wikipedia.org/wiki/X"),
-                &opts(),
             )
             .unwrap();
         assert_eq!(result.title.as_deref(), Some("My Custom Title"));
@@ -231,7 +219,6 @@ mod tests {
             .convert(
                 html.as_bytes(),
                 &info_with_url("https://en.wikipedia.org/wiki/X"),
-                &opts(),
             )
             .unwrap();
         assert!(
@@ -249,7 +236,6 @@ mod tests {
             .convert(
                 html.as_bytes(),
                 &info_with_url("https://en.wikipedia.org/wiki/X"),
-                &opts(),
             )
             .unwrap();
         assert!(
@@ -266,7 +252,6 @@ mod tests {
             .convert(
                 html.as_bytes(),
                 &info_with_url("https://en.wikipedia.org/wiki/X"),
-                &opts(),
             )
             .unwrap();
         assert!(
@@ -284,7 +269,6 @@ mod tests {
             .convert(
                 html.as_bytes(),
                 &info_with_url("https://en.wikipedia.org/wiki/X"),
-                &opts(),
             )
             .unwrap();
         assert!(
@@ -303,7 +287,6 @@ mod tests {
             .convert(
                 html.as_bytes(),
                 &info_with_url("https://en.wikipedia.org/wiki/X"),
-                &opts(),
             )
             .unwrap();
         assert!(
@@ -325,7 +308,6 @@ mod tests {
             .convert(
                 html.as_bytes(),
                 &info_with_url("https://en.wikipedia.org/wiki/X"),
-                &opts(),
             )
             .unwrap();
         assert!(
@@ -355,7 +337,6 @@ mod tests {
             .convert(
                 html.as_bytes(),
                 &info_with_url("https://en.wikipedia.org/wiki/Ferris"),
-                &opts(),
             )
             .unwrap();
         assert!(
@@ -378,7 +359,6 @@ mod tests {
             .convert(
                 html.as_bytes(),
                 &info_with_url("https://en.wikipedia.org/wiki/X"),
-                &opts(),
             )
             .unwrap();
         assert!(
@@ -397,7 +377,6 @@ mod tests {
             .convert(
                 html.as_bytes(),
                 &info_with_url("https://en.wikipedia.org/wiki/Test"),
-                &opts(),
             )
             .unwrap();
         assert_eq!(

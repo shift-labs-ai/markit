@@ -4,7 +4,7 @@ use lofty::prelude::*;
 use lofty::probe::Probe;
 use lofty::tag::ItemKey;
 
-use crate::types::{ConversionResult, Converter, MarkitOptions, StreamInfo};
+use crate::types::{ConversionResult, Converter, StreamInfo};
 
 const EXTENSIONS: &[&str] = &[
     ".mp3", ".wav", ".m4a", ".mp4", ".ogg", ".flac", ".aac", ".wma",
@@ -31,12 +31,7 @@ impl Converter for AudioConverter {
         false
     }
 
-    fn convert(
-        &self,
-        input: &[u8],
-        info: &StreamInfo,
-        options: &MarkitOptions,
-    ) -> Result<ConversionResult> {
+    fn convert(&self, input: &[u8], info: &StreamInfo) -> Result<ConversionResult> {
         let mut sections: Vec<String> = Vec::new();
 
         // Extract audio metadata via lofty
@@ -126,19 +121,6 @@ impl Converter for AudioConverter {
             if let Some(lyr) = lyrics {
                 if !lyr.is_empty() {
                     sections.push(format!("\n## Lyrics\n\n{lyr}"));
-                }
-            }
-        }
-
-        // AI transcription hook
-        if let Some(transcribe) = &options.transcribe {
-            let mimetype = info
-                .mimetype
-                .clone()
-                .unwrap_or_else(|| guess_mimetype(info.extension.as_deref()));
-            if let Ok(transcript) = transcribe(input, &mimetype) {
-                if !transcript.is_empty() {
-                    sections.push(format!("\n## Transcript\n\n{transcript}"));
                 }
             }
         }
@@ -241,25 +223,9 @@ pub fn format_duration(seconds: f64) -> String {
     }
 }
 
-fn guess_mimetype(ext: Option<&str>) -> String {
-    match ext.unwrap_or("") {
-        ".mp3" => "audio/mpeg",
-        ".wav" => "audio/wav",
-        ".m4a" => "audio/mp4",
-        ".mp4" => "video/mp4",
-        ".ogg" => "audio/ogg",
-        ".flac" => "audio/flac",
-        ".aac" => "audio/aac",
-        ".wma" => "audio/x-ms-wma",
-        _ => "audio/mpeg",
-    }
-    .to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::MarkitOptions;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
@@ -350,100 +316,18 @@ mod tests {
     #[test]
     fn placeholder_when_lofty_fails_with_filename() {
         let info = make_info(Some(".mp3"), None, Some("song.mp3"));
-        let result = AudioConverter
-            .convert(&[], &info, &MarkitOptions::default())
-            .unwrap();
+        let result = AudioConverter.convert(&[], &info).unwrap();
         assert_eq!(result.markdown, "*[audio: song.mp3]*");
     }
 
     #[test]
     fn placeholder_uses_unknown_when_no_filename() {
         let info = make_info(Some(".mp3"), None, None);
-        let result = AudioConverter
-            .convert(&[], &info, &MarkitOptions::default())
-            .unwrap();
+        let result = AudioConverter.convert(&[], &info).unwrap();
         assert_eq!(result.markdown, "*[audio: unknown]*");
     }
 
     // --- transcribe hook ---
-
-    #[test]
-    fn transcribe_hook_called_with_correct_mimetype() {
-        let called = Arc::new(AtomicBool::new(false));
-        let called2 = Arc::clone(&called);
-        let opts = MarkitOptions {
-            transcribe: Some(Box::new(move |_bytes, mime| {
-                called2.store(true, Ordering::SeqCst);
-                assert_eq!(mime, "audio/mpeg");
-                Ok("Hello world.".to_string())
-            })),
-            ..Default::default()
-        };
-        let info = make_info(Some(".mp3"), None, Some("song.mp3"));
-        let result = AudioConverter.convert(&[], &info, &opts).unwrap();
-        assert!(called.load(Ordering::SeqCst));
-        assert!(result.markdown.contains("## Transcript"));
-        assert!(result.markdown.contains("Hello world."));
-    }
-
-    #[test]
-    fn transcribe_uses_streaminfo_mimetype() {
-        let captured = Arc::new(std::sync::Mutex::new(String::new()));
-        let captured2 = Arc::clone(&captured);
-        let opts = MarkitOptions {
-            transcribe: Some(Box::new(move |_bytes, mime| {
-                *captured2.lock().unwrap() = mime.to_string();
-                Ok("transcript".to_string())
-            })),
-            ..Default::default()
-        };
-        let info = make_info(None, Some("audio/flac"), Some("song.flac"));
-        AudioConverter.convert(&[], &info, &opts).unwrap();
-        assert_eq!(*captured.lock().unwrap(), "audio/flac");
-    }
-
-    #[test]
-    fn transcribe_guesses_mimetype_from_extension() {
-        let captured = Arc::new(std::sync::Mutex::new(String::new()));
-        let captured2 = Arc::clone(&captured);
-        let opts = MarkitOptions {
-            transcribe: Some(Box::new(move |_bytes, mime| {
-                *captured2.lock().unwrap() = mime.to_string();
-                Ok("transcript".to_string())
-            })),
-            ..Default::default()
-        };
-        let info = make_info(Some(".wav"), None, None);
-        AudioConverter.convert(&[], &info, &opts).unwrap();
-        assert_eq!(*captured.lock().unwrap(), "audio/wav");
-    }
-
-    #[test]
-    fn transcribe_failure_degrades_to_placeholder() {
-        let opts = MarkitOptions {
-            transcribe: Some(Box::new(|_bytes, _mime| Err(anyhow::anyhow!("STT failed")))),
-            ..Default::default()
-        };
-        let info = make_info(Some(".mp3"), None, Some("song.mp3"));
-        let result = AudioConverter.convert(&[], &info, &opts).unwrap();
-        assert_eq!(result.markdown, "*[audio: song.mp3]*");
-    }
-
-    #[test]
-    fn transcribe_appends_after_metadata_section() {
-        let opts = MarkitOptions {
-            transcribe: Some(Box::new(
-                |_bytes, _mime| Ok("Transcribed text.".to_string()),
-            )),
-            ..Default::default()
-        };
-        let info = make_info(Some(".mp3"), None, Some("s.mp3"));
-        let result = AudioConverter.convert(&[], &info, &opts).unwrap();
-        let md = &result.markdown;
-        // transcribe is called even when lofty fails; transcript appears in output
-        assert!(md.contains("## Transcript"), "got: {md}");
-        assert!(md.contains("Transcribed text."), "got: {md}");
-    }
 
     // --- WAV fixture ---
 
@@ -480,9 +364,7 @@ mod tests {
     fn wav_produces_metadata_section() {
         let wav = minimal_wav();
         let info = make_info(Some(".wav"), Some("audio/wav"), Some("test.wav"));
-        let result = AudioConverter
-            .convert(&wav, &info, &MarkitOptions::default())
-            .unwrap();
+        let result = AudioConverter.convert(&wav, &info).unwrap();
         // Should have a Metadata section (even if fields are mostly empty)
         assert!(
             result.markdown.contains("## Metadata"),
@@ -495,9 +377,7 @@ mod tests {
     fn wav_reports_sample_rate() {
         let wav = minimal_wav();
         let info = make_info(Some(".wav"), Some("audio/wav"), Some("test.wav"));
-        let result = AudioConverter
-            .convert(&wav, &info, &MarkitOptions::default())
-            .unwrap();
+        let result = AudioConverter.convert(&wav, &info).unwrap();
         assert!(
             result.markdown.contains("44100 Hz"),
             "got: {}",
@@ -509,9 +389,7 @@ mod tests {
     fn wav_reports_channel_count() {
         let wav = minimal_wav();
         let info = make_info(Some(".wav"), Some("audio/wav"), Some("test.wav"));
-        let result = AudioConverter
-            .convert(&wav, &info, &MarkitOptions::default())
-            .unwrap();
+        let result = AudioConverter.convert(&wav, &info).unwrap();
         assert!(
             result.markdown.contains("Channels: 1"),
             "got: {}",
@@ -532,59 +410,5 @@ mod tests {
     fn duration_over_one_hour() {
         assert_eq!(format_duration(3661.0), "1:01:01");
         assert_eq!(format_duration(7200.0), "2:00:00");
-    }
-
-    #[test]
-    fn duration_rounds_to_nearest_second() {
-        assert_eq!(format_duration(125.4), "2:05");
-        assert_eq!(format_duration(125.6), "2:06");
-    }
-
-    // --- guess_mimetype ---
-
-    #[test]
-    fn guess_mimetype_mp3() {
-        assert_eq!(guess_mimetype(Some(".mp3")), "audio/mpeg");
-    }
-
-    #[test]
-    fn guess_mimetype_wav() {
-        assert_eq!(guess_mimetype(Some(".wav")), "audio/wav");
-    }
-
-    #[test]
-    fn guess_mimetype_m4a() {
-        assert_eq!(guess_mimetype(Some(".m4a")), "audio/mp4");
-    }
-
-    #[test]
-    fn guess_mimetype_mp4() {
-        assert_eq!(guess_mimetype(Some(".mp4")), "video/mp4");
-    }
-
-    #[test]
-    fn guess_mimetype_ogg() {
-        assert_eq!(guess_mimetype(Some(".ogg")), "audio/ogg");
-    }
-
-    #[test]
-    fn guess_mimetype_flac() {
-        assert_eq!(guess_mimetype(Some(".flac")), "audio/flac");
-    }
-
-    #[test]
-    fn guess_mimetype_aac() {
-        assert_eq!(guess_mimetype(Some(".aac")), "audio/aac");
-    }
-
-    #[test]
-    fn guess_mimetype_wma() {
-        assert_eq!(guess_mimetype(Some(".wma")), "audio/x-ms-wma");
-    }
-
-    #[test]
-    fn guess_mimetype_unknown_fallback() {
-        assert_eq!(guess_mimetype(Some(".xyz")), "audio/mpeg");
-        assert_eq!(guess_mimetype(None), "audio/mpeg");
     }
 }

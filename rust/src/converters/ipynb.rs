@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde_json::Value;
 
-use crate::types::{ConversionResult, Converter, MarkitOptions, StreamInfo};
+use crate::types::{ConversionResult, Converter, StreamInfo};
 
 pub struct IpynbConverter;
 
@@ -41,12 +41,7 @@ impl Converter for IpynbConverter {
         false
     }
 
-    fn convert(
-        &self,
-        input: &[u8],
-        _info: &StreamInfo,
-        _options: &MarkitOptions,
-    ) -> Result<ConversionResult> {
+    fn convert(&self, input: &[u8], _info: &StreamInfo) -> Result<ConversionResult> {
         let text = std::str::from_utf8(input).context("ipynb: invalid UTF-8")?;
         let notebook: Value = serde_json::from_str(text).context("ipynb: invalid JSON")?;
 
@@ -165,10 +160,6 @@ mod tests {
         }
     }
 
-    fn opts() -> MarkitOptions {
-        MarkitOptions::default()
-    }
-
     #[test]
     fn accepts_ipynb_extension() {
         let c = IpynbConverter;
@@ -187,9 +178,7 @@ mod tests {
     fn empty_notebook() {
         let c = IpynbConverter;
         let nb = r#"{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5}"#;
-        let res = c
-            .convert(nb.as_bytes(), &make_info(".ipynb"), &opts())
-            .unwrap();
+        let res = c.convert(nb.as_bytes(), &make_info(".ipynb")).unwrap();
         assert_eq!(res.markdown, "");
         assert!(res.title.is_none());
     }
@@ -205,7 +194,7 @@ mod tests {
             "metadata": {}
         });
         let res = c
-            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts())
+            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"))
             .unwrap();
         assert_eq!(res.markdown, "# Hello World\nSome text");
         assert_eq!(res.title.as_deref(), Some("Hello World"));
@@ -222,7 +211,7 @@ mod tests {
             "metadata": {}
         });
         let res = c
-            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts())
+            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"))
             .unwrap();
         assert_eq!(res.markdown, "# My Title\nsecond line");
         assert_eq!(res.title.as_deref(), Some("My Title"));
@@ -240,7 +229,7 @@ mod tests {
             "metadata": {}
         });
         let res = c
-            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts())
+            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"))
             .unwrap();
         assert_eq!(res.markdown, "```python\nprint('hello')\n```");
     }
@@ -259,7 +248,7 @@ mod tests {
             }
         });
         let res = c
-            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts())
+            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"))
             .unwrap();
         assert_eq!(res.markdown, "```R\nx <- 1\n```");
     }
@@ -278,7 +267,7 @@ mod tests {
             }
         });
         let res = c
-            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts())
+            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"))
             .unwrap();
         assert_eq!(res.markdown, "```julia\nx = 1\n```");
     }
@@ -298,7 +287,7 @@ mod tests {
             "metadata": {}
         });
         let res = c
-            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts())
+            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"))
             .unwrap();
         assert!(res.markdown.contains("```python\nprint('hi')\n```"));
         assert!(res.markdown.contains("```\nhi\n```"));
@@ -319,7 +308,7 @@ mod tests {
             "metadata": {}
         });
         let res = c
-            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts())
+            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"))
             .unwrap();
         assert!(res.markdown.contains("```\n2\n```"));
     }
@@ -341,7 +330,7 @@ mod tests {
             "metadata": {}
         });
         let res = c
-            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts())
+            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"))
             .unwrap();
         assert!(res.markdown.contains("```\n2\n```"));
     }
@@ -363,7 +352,7 @@ mod tests {
             "metadata": {}
         });
         let res = c
-            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts())
+            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"))
             .unwrap();
         assert!(res.markdown.contains("```\na  b\n1  2\n```"));
     }
@@ -385,7 +374,7 @@ mod tests {
             "metadata": {}
         });
         let res = c
-            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts())
+            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"))
             .unwrap();
         assert!(res
             .markdown
@@ -409,7 +398,7 @@ mod tests {
             "metadata": {}
         });
         let res = c
-            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts())
+            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"))
             .unwrap();
         assert_eq!(res.markdown, "```python\nx\n```");
     }
@@ -425,7 +414,7 @@ mod tests {
             "metadata": {}
         });
         let res = c
-            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts())
+            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"))
             .unwrap();
         assert_eq!(res.markdown, "```\ntitle: My Notebook\nauthor: Alice\n```");
     }
@@ -443,7 +432,7 @@ mod tests {
             }
         });
         let res = c
-            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts())
+            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"))
             .unwrap();
         assert_eq!(res.title.as_deref(), Some("Metadata Title"));
     }
@@ -460,7 +449,7 @@ mod tests {
             "metadata": {}
         });
         let res = c
-            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts())
+            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"))
             .unwrap();
         let parts: Vec<&str> = res.markdown.split("\n\n").collect();
         assert_eq!(parts.len(), 3);
@@ -484,7 +473,7 @@ mod tests {
             "metadata": {}
         });
         let res = c
-            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts())
+            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"))
             .unwrap();
         assert_eq!(res.markdown, "```python\npass\n```");
     }
@@ -493,16 +482,14 @@ mod tests {
     fn missing_cells_field() {
         let c = IpynbConverter;
         let nb = r#"{"metadata":{},"nbformat":4}"#;
-        let res = c
-            .convert(nb.as_bytes(), &make_info(".ipynb"), &opts())
-            .unwrap();
+        let res = c.convert(nb.as_bytes(), &make_info(".ipynb")).unwrap();
         assert_eq!(res.markdown, "");
     }
 
     #[test]
     fn invalid_json_returns_error() {
         let c = IpynbConverter;
-        let res = c.convert(b"not json", &make_info(".ipynb"), &opts());
+        let res = c.convert(b"not json", &make_info(".ipynb"));
         assert!(res.is_err());
         assert!(res.unwrap_err().to_string().contains("invalid JSON"));
     }

@@ -4,7 +4,7 @@
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 
-use crate::types::{ConversionResult, Converter, MarkitOptions, StreamInfo};
+use crate::types::{ConversionResult, Converter, StreamInfo};
 
 const GITHUB_HOSTS: &[&str] = &["github.com", "www.github.com", "gist.github.com"];
 
@@ -241,16 +241,11 @@ impl Converter for GitHubConverter {
         GITHUB_HOSTS.contains(&hostname.as_str())
     }
 
-    fn convert_url(&self, url: &str, _options: &MarkitOptions) -> Option<Result<ConversionResult>> {
+    fn convert_url(&self, url: &str) -> Option<Result<ConversionResult>> {
         Some(self.do_convert_url(url))
     }
 
-    fn convert(
-        &self,
-        _input: &[u8],
-        info: &StreamInfo,
-        _options: &MarkitOptions,
-    ) -> Result<ConversionResult> {
+    fn convert(&self, _input: &[u8], info: &StreamInfo) -> Result<ConversionResult> {
         if let Some(url) = &info.url {
             self.do_convert_url(url)
         } else {

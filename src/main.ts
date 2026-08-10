@@ -2,10 +2,8 @@
 
 import { createRequire } from "node:module";
 import { Command } from "commander";
-import { configGet, configSet, configShow } from "./commands/config.js";
 import { convert } from "./commands/convert.js";
 import { formats } from "./commands/formats.js";
-import { init } from "./commands/init.js";
 import { onboard } from "./commands/onboard.js";
 
 const require = createRequire(import.meta.url);
@@ -19,7 +17,6 @@ program
   .version(`markit ${version}`, "-V, --version")
   .option("--json", "Output as JSON")
   .option("-q, --quiet", "Raw markdown only, no decoration")
-  .option("-p, --prompt <text>", "Extra instructions for image description")
   .option("-o, --output <file>", "Write to file instead of stdout")
   .option("-i, --image-dir <dir>", "Extract images to this directory")
   .addHelpText(
@@ -29,11 +26,9 @@ Examples:
   $ markit report.pdf                  Convert a PDF to markdown
   $ markit document.docx -o doc.md     Convert DOCX, write to file
   $ markit https://example.com         Convert a web page
-  $ markit photo.jpg                    Extract EXIF + AI description
-  $ markit recording.mp3               Metadata + transcription
+  $ markit photo.jpg                   Extract EXIF metadata
+  $ markit recording.mp3               Extract audio metadata
   $ cat file.pdf | markit -            Read from stdin
-  $ markit init                        Create .markit/ config
-  $ markit config show                 Show LLM settings
 
 Docs: https://github.com/Michaelliv/markit`,
   );
@@ -50,45 +45,8 @@ program
       json: globals.json,
       quiet: globals.quiet,
       output: opts.output,
-      prompt: globals.prompt,
       imageDir: globals.imageDir,
     });
-  });
-
-program
-  .command("init")
-  .description("Create .markit/ config directory")
-  .action(async (_opts, cmd) => {
-    const globals = cmd.optsWithGlobals();
-    await init([], { json: globals.json, quiet: globals.quiet });
-  });
-
-const configCmd = program
-  .command("config")
-  .description("Manage markit configuration");
-
-configCmd
-  .command("show")
-  .description("Show current configuration")
-  .action(async (_opts, cmd) => {
-    const globals = cmd.optsWithGlobals();
-    await configShow([], { json: globals.json, quiet: globals.quiet });
-  });
-
-configCmd
-  .command("get <key>")
-  .description("Get a config value")
-  .action(async (key, _opts, cmd) => {
-    const globals = cmd.optsWithGlobals();
-    await configGet(key, { json: globals.json, quiet: globals.quiet });
-  });
-
-configCmd
-  .command("set <key> [value]")
-  .description("Set a config value (secrets read from stdin if no value given)")
-  .action(async (key, value, _opts, cmd) => {
-    const globals = cmd.optsWithGlobals();
-    await configSet(key, value, { json: globals.json, quiet: globals.quiet });
   });
 
 program
@@ -116,7 +74,7 @@ program.on("command:*", async (args) => {
   }
 
   // Check for typos against known subcommands
-  const commands = ["convert", "formats", "onboard", "help", "init", "config"];
+  const commands = ["convert", "formats", "onboard", "help"];
   const close = commands.filter(
     (c) => levenshtein(source, c) <= 2 && source !== c,
   );
@@ -136,7 +94,6 @@ program.on("command:*", async (args) => {
     json: globals.json,
     quiet: globals.quiet,
     output: globals.output,
-    prompt: globals.prompt,
     imageDir: globals.imageDir,
   });
 });
@@ -153,8 +110,6 @@ Examples:
   $ markit https://example.com
 
 Commands:
-  markit init        Create .markit/ config directory
-  markit config      Manage settings (LLM, API keys)
   markit formats     List supported formats
   markit onboard     Add instructions to CLAUDE.md
 

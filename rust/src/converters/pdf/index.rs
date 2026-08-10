@@ -14,7 +14,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use crate::types::{ConversionResult, Converter, MarkitOptions, StreamInfo};
+use crate::types::{ConversionResult, Converter, StreamInfo};
 
 use super::columns::detect_columns;
 use super::extract::{extract_pages, render_image_region};
@@ -72,12 +72,7 @@ impl Converter for PdfConverter {
         false
     }
 
-    fn convert(
-        &self,
-        input: &[u8],
-        info: &StreamInfo,
-        options: &MarkitOptions,
-    ) -> Result<ConversionResult> {
+    fn convert(&self, input: &[u8], info: &StreamInfo) -> Result<ConversionResult> {
         let mut pages = extract_pages(input)?;
 
         // Remove running headers/footers before processing
@@ -110,17 +105,7 @@ impl Converter for PdfConverter {
                                     continue;
                                 }
 
-                                // If describe callback is available, call it
-                                let markdown = if let Some(describe) = &options.describe {
-                                    match describe(&png, "image/png") {
-                                        Ok(desc) => desc,
-                                        Err(_) => {
-                                            format!("![{}]({})", img.id, filepath.display())
-                                        }
-                                    }
-                                } else {
-                                    format!("![{}]({})", img.id, filepath.display())
-                                };
+                                let markdown = format!("![{}]({})", img.id, filepath.display());
 
                                 image_blocks.push(ImageBlock {
                                     top_y: img.top_y,
@@ -294,8 +279,7 @@ mod tests {
                             extension: Some(".pdf".into()),
                             ..Default::default()
                         };
-                        let opts = MarkitOptions::default();
-                        let result = c.convert(&buf, &info, &opts);
+                        let result = c.convert(&buf, &info);
                         assert!(result.is_ok());
                     }
                     Err(e) => {
@@ -324,8 +308,7 @@ mod tests {
             local_path: Some(fixture.into()),
             ..Default::default()
         };
-        let opts = MarkitOptions::default();
-        let result = c.convert(&buf, &info, &opts).unwrap();
+        let result = c.convert(&buf, &info).unwrap();
 
         assert!(!result.markdown.is_empty());
         assert!(

@@ -1,7 +1,7 @@
 {
   "name": "markit-ai",
   "version": "0.5.3",
-  "description": "Convert anything to markdown. PDF, DOCX, PPTX, XLSX, HTML, EPUB, Jupyter, RSS, images, audio, URLs, and more. Built-in LLM providers for image description and audio transcription. Works as a CLI and as a library.",
+  "description": "Convert anything to markdown. PDF, DOCX, PPTX, XLSX, HTML, EPUB, Jupyter, RSS, images, audio, URLs, and more. Works as a CLI and as a library.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

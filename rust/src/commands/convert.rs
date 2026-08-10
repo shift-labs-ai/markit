@@ -12,23 +12,11 @@ pub struct ConvertOptions {
     pub json: bool,
     pub quiet: bool,
     pub output_file: Option<String>,
-    pub prompt: Option<String>,
     pub image_dir: Option<String>,
 }
 
 pub fn convert(source: &str, opts: &ConvertOptions) -> u8 {
-    let config = crate::config::load_config();
-
-    // LLM describe/transcribe closures from config (mirrors createLlmFunctions).
-    let mut options = match crate::providers::create_llm_functions(&config, opts.prompt.clone()) {
-        Ok(o) => o,
-        Err(e) => {
-            error(&e.to_string());
-            return EXIT_ERROR;
-        }
-    };
-    options.prompt = opts.prompt.clone();
-    let markit = Markit::new(options);
+    let markit = Markit::new();
 
     // Auto-create a temp dir for images if not explicitly provided
     let image_dir = opts.image_dir.clone().unwrap_or_else(|| {

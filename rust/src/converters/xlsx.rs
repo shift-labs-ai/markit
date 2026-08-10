@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::io::{Cursor, Read, Seek};
 use zip::ZipArchive;
 
-use crate::types::{ConversionResult, Converter, MarkitOptions, StreamInfo};
+use crate::types::{ConversionResult, Converter, StreamInfo};
 
 const EXTENSIONS: &[&str] = &[".xlsx"];
 const MIMETYPES: &[&str] = &["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"];
@@ -32,12 +32,7 @@ impl Converter for XlsxConverter {
         false
     }
 
-    fn convert(
-        &self,
-        input: &[u8],
-        _info: &StreamInfo,
-        _options: &MarkitOptions,
-    ) -> Result<ConversionResult> {
+    fn convert(&self, input: &[u8], _info: &StreamInfo) -> Result<ConversionResult> {
         let cursor = Cursor::new(input);
         let mut archive = ZipArchive::new(cursor)?;
 
@@ -287,7 +282,7 @@ fn get_cell_value(c: roxmltree::Node, shared: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{MarkitOptions, StreamInfo};
+    use crate::types::StreamInfo;
     use std::io::Write;
     use zip::write::SimpleFileOptions;
     use zip::ZipWriter;
@@ -359,9 +354,7 @@ mod tests {
         let str_refs: Vec<&str> = strings.iter().map(|s| s.as_str()).collect();
         let data = build_xlsx(&str_refs);
 
-        let result = XlsxConverter
-            .convert(&data, &info_ext(".xlsx"), &MarkitOptions::default())
-            .unwrap();
+        let result = XlsxConverter.convert(&data, &info_ext(".xlsx")).unwrap();
         assert!(
             result.markdown.contains("val&ue_0"),
             "should contain val&ue_0"
@@ -388,9 +381,7 @@ mod tests {
         ];
         let data = build_xlsx(strings);
 
-        let result = XlsxConverter
-            .convert(&data, &info_ext(".xlsx"), &MarkitOptions::default())
-            .unwrap();
+        let result = XlsxConverter.convert(&data, &info_ext(".xlsx")).unwrap();
         assert!(result.markdown.contains("AT&T"), "AT&T");
         assert!(result.markdown.contains("x < y"), "x < y");
         assert!(result.markdown.contains("a > b"), "a > b");
@@ -413,7 +404,7 @@ mod tests {
         let data = zip.finish().unwrap().into_inner();
 
         let err = XlsxConverter
-            .convert(&data, &info_ext(".xlsx"), &MarkitOptions::default())
+            .convert(&data, &info_ext(".xlsx"))
             .unwrap_err();
         assert!(
             err.to_string()
@@ -477,9 +468,7 @@ mod tests {
         zip.write_all(rels_xml.as_bytes()).unwrap();
 
         let data = zip.finish().unwrap().into_inner();
-        let result = XlsxConverter
-            .convert(&data, &info_ext(".xlsx"), &MarkitOptions::default())
-            .unwrap();
+        let result = XlsxConverter.convert(&data, &info_ext(".xlsx")).unwrap();
 
         let expected = "## Sheet1\n\n| Name | Age |\n| --- | --- |\n| Alice | 30 |";
         assert_eq!(result.markdown, expected);
@@ -509,9 +498,7 @@ mod tests {
         zip.write_all(rels_xml.as_bytes()).unwrap();
 
         let data = zip.finish().unwrap().into_inner();
-        let result = XlsxConverter
-            .convert(&data, &info_ext(".xlsx"), &MarkitOptions::default())
-            .unwrap();
+        let result = XlsxConverter.convert(&data, &info_ext(".xlsx")).unwrap();
 
         assert!(result.markdown.contains("TRUE"), "TRUE");
         assert!(result.markdown.contains("FALSE"), "FALSE");

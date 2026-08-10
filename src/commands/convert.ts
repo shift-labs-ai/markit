@@ -1,9 +1,7 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig } from "../config.js";
 import { Markit } from "../markit.js";
-import { createLlmFunctions } from "../providers/index.js";
 import { EXIT_ERROR, EXIT_UNSUPPORTED } from "../utils/exit-codes.js";
 import type { OutputOptions } from "../utils/output.js";
 import { dim, error, output, success } from "../utils/output.js";
@@ -20,13 +18,10 @@ export async function convert(
   source: string,
   options: OutputOptions & {
     output?: string;
-    prompt?: string;
     imageDir?: string;
   },
 ): Promise<void> {
-  const config = loadConfig();
-  const llmFunctions = createLlmFunctions(config, options.prompt);
-  const markit = new Markit(llmFunctions);
+  const markit = new Markit();
 
   // Auto-create a temp dir for images if not explicitly provided
   const imageDir =

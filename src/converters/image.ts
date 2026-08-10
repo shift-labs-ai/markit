@@ -1,9 +1,4 @@
-import type {
-  ConversionResult,
-  Converter,
-  MarkitOptions,
-  StreamInfo,
-} from "../types.js";
+import type { ConversionResult, Converter, StreamInfo } from "../types.js";
 
 const EXTENSIONS = [
   ".jpg",
@@ -35,7 +30,6 @@ export class ImageConverter implements Converter {
   async convert(
     input: Buffer,
     streamInfo: StreamInfo,
-    options?: MarkitOptions,
   ): Promise<ConversionResult> {
     const sections: string[] = [];
 
@@ -110,39 +104,10 @@ export class ImageConverter implements Converter {
       // EXIF parsing failed — not all images have EXIF
     }
 
-    // AI description
-    if (options?.describe) {
-      try {
-        const mimetype =
-          streamInfo.mimetype || guessMimetype(streamInfo.extension);
-        const description = await options.describe(input, mimetype);
-        if (description) {
-          sections.push(`\n## Description\n\n${description}`);
-        }
-      } catch {
-        // Description failed — continue without it
-      }
-    }
-
     if (sections.length === 0) {
       return { markdown: `*[image: ${streamInfo.filename || "unknown"}]*` };
     }
 
     return { markdown: sections.join("\n").trim() };
   }
-}
-
-function guessMimetype(ext?: string): string {
-  const map: Record<string, string> = {
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".png": "image/png",
-    ".gif": "image/gif",
-    ".webp": "image/webp",
-    ".tiff": "image/tiff",
-    ".tif": "image/tiff",
-    ".bmp": "image/bmp",
-    ".svg": "image/svg+xml",
-  };
-  return map[ext || ""] || "image/png";
 }

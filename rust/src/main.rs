@@ -1,9 +1,7 @@
 mod commands;
-mod config;
 mod converters;
 mod discover_markdown_source;
 mod markit;
-mod providers;
 mod types;
 mod utils;
 
@@ -11,10 +9,8 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use crate::commands::config::{config_get, config_set, config_show};
 use crate::commands::convert::{convert, ConvertOptions};
 use crate::commands::formats::formats;
-use crate::commands::init::init;
 use crate::commands::onboard::onboard;
 use crate::utils::output::{error, OutputOptions};
 
@@ -31,11 +27,9 @@ const VERSION: &str = "0.5.3";
   $ markit report.pdf                  Convert a PDF to markdown
   $ markit document.docx -o doc.md     Convert DOCX, write to file
   $ markit https://example.com         Convert a web page
-  $ markit photo.jpg                    Extract EXIF + AI description
-  $ markit recording.mp3               Metadata + transcription
+  $ markit photo.jpg                   Extract EXIF metadata
+  $ markit recording.mp3               Extract audio metadata
   $ cat file.pdf | markit -            Read from stdin
-  $ markit init                        Create .markit/ config
-  $ markit config show                 Show LLM settings
 
 Docs: https://github.com/Michaelliv/markit"#
 )]
@@ -53,10 +47,6 @@ struct Cli {
     /// Raw markdown only, no decoration
     #[arg(short, long, global = true)]
     quiet: bool,
-
-    /// Extra instructions for image description
-    #[arg(short, long, global = true)]
-    prompt: Option<String>,
 
     /// Write to file instead of stdout
     #[arg(short, long, global = true)]
@@ -81,33 +71,8 @@ enum Commands {
     },
     /// List supported formats
     Formats,
-    /// Create .markit/ config directory
-    Init,
-    /// Manage markit configuration
-    Config {
-        #[command(subcommand)]
-        action: ConfigAction,
-    },
     /// Add markit instructions to CLAUDE.md or AGENTS.md
     Onboard,
-}
-
-#[derive(Subcommand)]
-enum ConfigAction {
-    /// Show current configuration
-    Show,
-    /// Get a config value
-    Get {
-        /// Config key (e.g. llm.provider)
-        key: String,
-    },
-    /// Set a config value (secrets read from stdin if no value given)
-    Set {
-        /// Config key (e.g. llm.apiKey)
-        key: String,
-        /// Value to set
-        value: Option<String>,
-    },
 }
 
 const NO_ARGS_HELP: &str = "markit — convert anything to markdown
@@ -120,15 +85,13 @@ Examples:
   $ markit https://example.com
 
 Commands:
-  markit init        Create .markit/ config directory
-  markit config      Manage settings (LLM, API keys)
   markit formats     List supported formats
   markit onboard     Add instructions to CLAUDE.md
 
 Run markit --help for all options.
 Docs: https://github.com/Michaelliv/markit";
 
-const KNOWN_COMMANDS: &[&str] = &["convert", "formats", "onboard", "help", "init", "config"];
+const KNOWN_COMMANDS: &[&str] = &["convert", "formats", "onboard", "help"];
 
 fn levenshtein(a: &str, b: &str) -> usize {
     let m = a.len();
@@ -173,7 +136,7 @@ fn main() -> ExitCode {
             // Check if it's NOT a known command/alias — if so check for typos
             let is_known = matches!(
                 first_arg.as_str(),
-                "convert" | "c" | "formats" | "init" | "config" | "onboard" | "help"
+                "convert" | "c" | "formats" | "onboard" | "help"
             );
             if !is_known {
                 let close: Vec<&&str> = KNOWN_COMMANDS
@@ -202,26 +165,6 @@ fn main() -> ExitCode {
             formats(&opts);
             ExitCode::SUCCESS
         }
-        Some(Commands::Init) => {
-            let opts = OutputOptions {
-                json: cli.json,
-                quiet: cli.quiet,
-            };
-            init(&opts);
-            ExitCode::SUCCESS
-        }
-        Some(Commands::Config { action }) => {
-            let opts = OutputOptions {
-                json: cli.json,
-                quiet: cli.quiet,
-            };
-            match action {
-                ConfigAction::Show => config_show(&opts),
-                ConfigAction::Get { key } => config_get(&key, &opts),
-                ConfigAction::Set { key, value } => config_set(&key, value.as_deref(), &opts),
-            }
-            ExitCode::SUCCESS
-        }
         Some(Commands::Onboard) => {
             let opts = OutputOptions {
                 json: cli.json,
@@ -240,7 +183,6 @@ fn main() -> ExitCode {
                     json: cli.json,
                     quiet: cli.quiet,
                     output_file: out_override.or(cli.output),
-                    prompt: cli.prompt,
                     image_dir: cli.image_dir,
                 },
             );
@@ -256,7 +198,6 @@ fn main() -> ExitCode {
                             json: cli.json,
                             quiet: cli.quiet,
                             output_file: cli.output,
-                            prompt: cli.prompt,
                             image_dir: cli.image_dir,
                         },
                     );
@@ -322,21 +263,13 @@ mod tests {
     }
 
     #[test]
-    fn levenshtein_typo_inot_init() {
-        assert_eq!(levenshtein("inot", "init"), 1);
-    }
-
-    #[test]
     fn levenshtein_too_far() {
         assert!(levenshtein("xyz", "formats") > 2);
     }
 
     #[test]
     fn known_commands_match_ts() {
-        assert_eq!(
-            KNOWN_COMMANDS,
-            &["convert", "formats", "onboard", "help", "init", "config"]
-        );
+        assert_eq!(KNOWN_COMMANDS, &["convert", "formats", "onboard", "help"]);
     }
 
     #[test]
@@ -347,8 +280,6 @@ mod tests {
     #[test]
     fn no_args_help_contains_key_lines() {
         assert!(NO_ARGS_HELP.contains("Usage:  markit <file-or-url> [options]"));
-        assert!(NO_ARGS_HELP.contains("markit init"));
-        assert!(NO_ARGS_HELP.contains("markit config"));
         assert!(NO_ARGS_HELP.contains("markit formats"));
         assert!(NO_ARGS_HELP.contains("markit onboard"));
         assert!(NO_ARGS_HELP.contains("Run markit --help for all options."));

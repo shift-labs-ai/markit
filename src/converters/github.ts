@@ -1,9 +1,4 @@
-import type {
-  ConversionResult,
-  Converter,
-  MarkitOptions,
-  StreamInfo,
-} from "../types.js";
+import type { ConversionResult, Converter, StreamInfo } from "../types.js";
 
 const GITHUB_HOSTS = new Set([
   "github.com",
@@ -35,10 +30,7 @@ export class GitHubConverter implements Converter {
     }
   }
 
-  async convertUrl(
-    url: string,
-    _options?: MarkitOptions,
-  ): Promise<ConversionResult> {
+  async convertUrl(url: string): Promise<ConversionResult> {
     const parsed = new URL(url);
 
     if (parsed.hostname === "gist.github.com") {

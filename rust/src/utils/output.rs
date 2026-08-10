@@ -76,10 +76,6 @@ pub fn dim(s: &str) -> String {
     dim_ansi(s)
 }
 
-pub fn cmd(s: &str) -> String {
-    cyan_str(s)
-}
-
 // Public output functions matching TS
 pub fn success(msg: &str) {
     println!("{} {}", green("✓"), msg);
@@ -97,10 +93,6 @@ pub fn warn(msg: &str) {
 
 pub fn error(msg: &str) {
     eprintln!("{} {}", red("✗"), msg);
-}
-
-pub fn hint(msg: &str) {
-    println!("  {}", dim_ansi(msg));
 }
 
 #[allow(dead_code)]
@@ -167,11 +159,5 @@ mod tests {
     fn dim_wraps_text_when_color_disabled() {
         let result = dim("faded");
         assert_eq!(result, "faded");
-    }
-
-    #[test]
-    fn cmd_wraps_text_when_color_disabled() {
-        let result = cmd("run this");
-        assert_eq!(result, "run this");
     }
 }

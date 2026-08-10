@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use super::decode_text;
-use crate::types::{ConversionResult, Converter, MarkitOptions, StreamInfo};
+use crate::types::{ConversionResult, Converter, StreamInfo};
 
 const MIMETYPES: &[&str] = &["text/xml", "application/xml"];
 
@@ -20,12 +20,7 @@ impl Converter for XmlConverter {
                 .is_some_and(|m| MIMETYPES.iter().any(|p| m.starts_with(p)))
     }
 
-    fn convert(
-        &self,
-        input: &[u8],
-        info: &StreamInfo,
-        _options: &MarkitOptions,
-    ) -> Result<ConversionResult> {
+    fn convert(&self, input: &[u8], info: &StreamInfo) -> Result<ConversionResult> {
         let text = decode_text(input);
         let ext = info
             .extension

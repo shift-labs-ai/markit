@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 use std::io::Read;
 
-use crate::types::{ConversionResult, Converter, MarkitOptions, StreamInfo};
+use crate::types::{ConversionResult, Converter, StreamInfo};
 use crate::utils::html_to_md::{html_to_markdown, normalize_tables_html};
 
 const EXTENSIONS: &[&str] = &[".epub"];
@@ -35,12 +35,7 @@ impl Converter for EpubConverter {
         false
     }
 
-    fn convert(
-        &self,
-        input: &[u8],
-        _info: &StreamInfo,
-        _options: &MarkitOptions,
-    ) -> Result<ConversionResult> {
+    fn convert(&self, input: &[u8], _info: &StreamInfo) -> Result<ConversionResult> {
         let cursor = std::io::Cursor::new(input);
         let mut archive = zip::ZipArchive::new(cursor)?;
 
@@ -374,7 +369,7 @@ mod tests {
         let epub_bytes = zip.finish().unwrap().into_inner();
 
         let err = EpubConverter
-            .convert(&epub_bytes, &info_epub(), &MarkitOptions::default())
+            .convert(&epub_bytes, &info_epub())
             .unwrap_err();
         assert!(
             err.to_string().contains("missing container.xml"),
@@ -400,7 +395,7 @@ mod tests {
         let epub_bytes = zip.finish().unwrap().into_inner();
 
         let err = EpubConverter
-            .convert(&epub_bytes, &info_epub(), &MarkitOptions::default())
+            .convert(&epub_bytes, &info_epub())
             .unwrap_err();
         assert!(
             err.to_string().contains("missing rootfile path"),
@@ -422,7 +417,7 @@ mod tests {
         let epub_bytes = zip.finish().unwrap().into_inner();
 
         let err = EpubConverter
-            .convert(&epub_bytes, &info_epub(), &MarkitOptions::default())
+            .convert(&epub_bytes, &info_epub())
             .unwrap_err();
         assert!(
             err.to_string().contains("missing content.opf"),
@@ -440,9 +435,7 @@ mod tests {
         let opf = simple_opf("My Great Book", &["Alice"], &chapters);
         let epub = build_epub(&container, "content.opf", &opf, &chapters);
 
-        let result = EpubConverter
-            .convert(&epub, &info_epub(), &MarkitOptions::default())
-            .unwrap();
+        let result = EpubConverter.convert(&epub, &info_epub()).unwrap();
 
         assert_eq!(result.title.as_deref(), Some("My Great Book"));
     }
@@ -454,9 +447,7 @@ mod tests {
         let opf = simple_opf("Test Book", &[], &chapters);
         let epub = build_epub(&container, "content.opf", &opf, &chapters);
 
-        let result = EpubConverter
-            .convert(&epub, &info_epub(), &MarkitOptions::default())
-            .unwrap();
+        let result = EpubConverter.convert(&epub, &info_epub()).unwrap();
 
         assert!(
             result.markdown.contains("**Title:** Test Book"),
@@ -477,9 +468,7 @@ mod tests {
         let opf = simple_opf("Multi-Author", &["Alice", "Bob"], &chapters);
         let epub = build_epub(&container, "content.opf", &opf, &chapters);
 
-        let result = EpubConverter
-            .convert(&epub, &info_epub(), &MarkitOptions::default())
-            .unwrap();
+        let result = EpubConverter.convert(&epub, &info_epub()).unwrap();
 
         assert!(
             result.markdown.contains("**Authors:** Alice, Bob"),
@@ -506,9 +495,7 @@ mod tests {
         let opf = simple_opf("Ordered Book", &[], &chapters);
         let epub = build_epub(&container, "content.opf", &opf, &chapters);
 
-        let result = EpubConverter
-            .convert(&epub, &info_epub(), &MarkitOptions::default())
-            .unwrap();
+        let result = EpubConverter.convert(&epub, &info_epub()).unwrap();
 
         let pos_ch1 = result
             .markdown
@@ -531,9 +518,7 @@ mod tests {
         let opf = simple_opf("Simple", &[], &chapters);
         let epub = build_epub(&container, "content.opf", &opf, &chapters);
 
-        let result = EpubConverter
-            .convert(&epub, &info_epub(), &MarkitOptions::default())
-            .unwrap();
+        let result = EpubConverter.convert(&epub, &info_epub()).unwrap();
 
         assert!(
             result.markdown.contains("Hello World"),
@@ -552,9 +537,7 @@ mod tests {
         let opf = simple_opf("Strip Test", &[], &chapters);
         let epub = build_epub(&container, "content.opf", &opf, &chapters);
 
-        let result = EpubConverter
-            .convert(&epub, &info_epub(), &MarkitOptions::default())
-            .unwrap();
+        let result = EpubConverter.convert(&epub, &info_epub()).unwrap();
 
         assert!(
             result.markdown.contains("Visible text"),
@@ -613,9 +596,7 @@ mod tests {
 
         let epub_bytes = zip.finish().unwrap().into_inner();
 
-        let result = EpubConverter
-            .convert(&epub_bytes, &info_epub(), &MarkitOptions::default())
-            .unwrap();
+        let result = EpubConverter.convert(&epub_bytes, &info_epub()).unwrap();
 
         assert!(
             result.markdown.contains("Sub-dir chapter"),
@@ -641,9 +622,7 @@ mod tests {
 
         let epub = build_epub(&container, "content.opf", opf, &[]);
 
-        let result = EpubConverter
-            .convert(&epub, &info_epub(), &MarkitOptions::default())
-            .unwrap();
+        let result = EpubConverter.convert(&epub, &info_epub()).unwrap();
 
         assert_eq!(result.title.as_deref(), Some("Empty Book"));
         assert!(result.markdown.contains("**Title:** Empty Book"));

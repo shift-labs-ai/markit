@@ -19,22 +19,14 @@ import { XlsxConverter } from "./converters/xlsx.js";
 import { XmlConverter } from "./converters/xml.js";
 import { YamlConverter } from "./converters/yaml.js";
 import { ZipConverter } from "./converters/zip.js";
-import type {
-  ConversionResult,
-  Converter,
-  MarkitOptions,
-  StreamInfo,
-} from "./types.js";
+import type { ConversionResult, Converter, StreamInfo } from "./types.js";
 
 const USER_AGENT = "markit/0.1.0";
 
 export class Markit {
   private converters: Converter[] = [];
-  private options: MarkitOptions;
 
-  constructor(options: MarkitOptions = {}) {
-    this.options = options;
-
+  constructor() {
     // Built-in converters: specific formats first, generic last.
     const specific: Converter[] = [
       new PdfConverter(),
@@ -94,7 +86,7 @@ export class Markit {
     for (const converter of this.converters) {
       if (!converter.convertUrl || !converter.accepts(streamInfo)) continue;
       try {
-        return await converter.convertUrl(url, this.options);
+        return await converter.convertUrl(url);
       } catch {
         // Fall through to default fetch path
       }
@@ -252,7 +244,7 @@ export class Markit {
       if (!converter.accepts(streamInfo)) continue;
 
       try {
-        return await converter.convert(input, streamInfo, this.options);
+        return await converter.convert(input, streamInfo);
       } catch (err) {
         errors.push({
           converter: converter.name,

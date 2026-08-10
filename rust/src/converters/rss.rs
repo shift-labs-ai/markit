@@ -8,7 +8,7 @@
 use anyhow::{anyhow, Result};
 use regex::Regex;
 
-use crate::types::{ConversionResult, Converter, MarkitOptions, StreamInfo};
+use crate::types::{ConversionResult, Converter, StreamInfo};
 use crate::utils::html_to_md::html_to_markdown;
 
 pub struct RssConverter;
@@ -192,12 +192,7 @@ impl Converter for RssConverter {
         false
     }
 
-    fn convert(
-        &self,
-        input: &[u8],
-        _info: &StreamInfo,
-        _options: &MarkitOptions,
-    ) -> Result<ConversionResult> {
+    fn convert(&self, input: &[u8], _info: &StreamInfo) -> Result<ConversionResult> {
         let text = std::str::from_utf8(input).map_err(|e| anyhow!("RSS: invalid UTF-8: {e}"))?;
 
         if text.contains("<rss") {
@@ -226,10 +221,6 @@ mod tests {
     fn conv() -> RssConverter {
         RssConverter
     }
-    fn opts() -> MarkitOptions {
-        MarkitOptions::default()
-    }
-
     fn info_ext(ext: &str) -> StreamInfo {
         StreamInfo {
             extension: Some(ext.into()),
@@ -244,7 +235,7 @@ mod tests {
     }
     fn go(xml: &str) -> ConversionResult {
         conv()
-            .convert(xml.as_bytes(), &StreamInfo::default(), &opts())
+            .convert(xml.as_bytes(), &StreamInfo::default())
             .unwrap()
     }
 
@@ -289,7 +280,7 @@ mod tests {
     fn rejects_plain_xml() {
         let xml = r#"<?xml version="1.0"?><root><item>hello</item></root>"#;
         let err = conv()
-            .convert(xml.as_bytes(), &StreamInfo::default(), &opts())
+            .convert(xml.as_bytes(), &StreamInfo::default())
             .unwrap_err();
         assert!(
             err.to_string().contains("Not an RSS or Atom feed"),
