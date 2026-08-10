@@ -8,7 +8,7 @@
 
 use anyhow::{anyhow, Result};
 use mupdf::pdf::PdfDocument;
-use mupdf::{Document, TextBlockContent, TextPageFlags};
+use mupdf::{Document, TextPageFlags};
 
 use super::types::{Bounds, ImageRegion, PageContent, Rect, Segment, TextBox};
 
@@ -89,11 +89,13 @@ fn merge_into_words(raws: &[RawTextItem]) -> Vec<RawTextItem> {
 /// StructuredText.asJSON(). All coordinates and the font size are C
 /// "(int)"-truncated by that serializer, which is exactly the precision the
 /// TS pipeline sees.
+#[cfg(test)]
 #[derive(serde::Deserialize)]
 struct StextJson {
     blocks: Vec<StextBlock>,
 }
 
+#[cfg(test)]
 #[derive(serde::Deserialize)]
 struct StextBlock {
     #[serde(rename = "type")]
@@ -102,6 +104,7 @@ struct StextBlock {
     lines: Vec<StextLine>,
 }
 
+#[cfg(test)]
 #[derive(serde::Deserialize)]
 struct StextLine {
     bbox: StextBbox,
@@ -111,6 +114,7 @@ struct StextLine {
     text: String,
 }
 
+#[cfg(test)]
 #[derive(serde::Deserialize)]
 struct StextBbox {
     x: f64,
@@ -119,6 +123,7 @@ struct StextBbox {
     h: f64,
 }
 
+#[cfg(test)]
 #[derive(serde::Deserialize)]
 struct StextFont {
     #[serde(default)]
@@ -129,12 +134,152 @@ struct StextFont {
     size: f64,
 }
 
+/// One stext device run serving both text boxes and image regions.
+///
+/// The TS pipeline ran the device twice (text-only flags, then with
+/// preserve-images). Text output is line-based and image emission only
+/// affects block partitioning, so a single combined-flag run yields
+/// byte-identical results at half the device cost — pinned by
+/// combined_flags_match_split_runs on the fixture corpus.
+fn extract_page_content(
+    page: &mupdf::Page,
+    page_number: u32,
+    page_height: f64,
+) -> (Vec<TextBox>, Vec<ImageRegion>) {
+    let flags = TextPageFlags::PRESERVE_WHITESPACE | TextPageFlags::PRESERVE_IMAGES;
+    let Ok(text_page) = page.to_text_page(flags) else {
+        return (Vec::new(), Vec::new());
+    };
+
+    let text_boxes =
+        text_boxes_from_text_page(&text_page, page_number, page_height).unwrap_or_default();
+
+    let bboxes: Vec<(f32, f32, f32, f32)> = text_page
+        .blocks()
+        .filter(|b| b.r#type() == mupdf::text_page::TextBlockType::Image)
+        .map(|b| {
+            let r = b.bounds();
+            (r.x0, r.y0, r.x1, r.y1)
+        })
+        .collect();
+    let images = image_regions_from_bboxes(&bboxes, page_number, page_height);
+
+    (text_boxes, images)
+}
+
+#[cfg(test)]
 fn extract_text_boxes(
     page: &mupdf::Page,
     page_number: u32,
     page_height: f64,
 ) -> Result<Vec<TextBox>> {
-    // TS: page.toStructuredText("preserve-whitespace").asJSON()
+    // TS: page.toStructuredText("preserve-whitespace").asJSON(), then JSON
+    // parsing. This walks the stext structs natively instead, replicating
+    // mupdf's as_json serializer value-for-value (stext-output.c): C
+    // "(int)"-truncated bbox and size, the first char's font per line, and
+    // the raw char concatenation the JSON escape/unescape round-trip
+    // preserves. parse_text_boxes_json remains as the differential-test
+    // reference for this equivalence.
+    extract_text_boxes_flags(
+        page,
+        page_number,
+        page_height,
+        TextPageFlags::PRESERVE_WHITESPACE,
+    )
+}
+
+/// Text-box extraction with explicit stext flags (test reference).
+#[cfg(test)]
+fn extract_text_boxes_flags(
+    page: &mupdf::Page,
+    page_number: u32,
+    page_height: f64,
+    flags: TextPageFlags,
+) -> Result<Vec<TextBox>> {
+    let text_page = page
+        .to_text_page(flags)
+        .map_err(|e| anyhow!("Failed to extract text: {}", e))?;
+    text_boxes_from_text_page(&text_page, page_number, page_height)
+}
+
+/// Native stext walk over an existing text page (see extract_text_boxes'
+/// serializer-equivalence notes).
+fn text_boxes_from_text_page(
+    text_page: &mupdf::TextPage,
+    page_number: u32,
+    page_height: f64,
+) -> Result<Vec<TextBox>> {
+    let mut raws: Vec<RawTextItem> = Vec::new();
+
+    for block in text_page.blocks() {
+        if block.r#type() != mupdf::text_page::TextBlockType::Text {
+            continue;
+        }
+        for line in block.lines() {
+            let mut text = String::new();
+            let mut first_char: Option<(f32, Option<mupdf::Font>)> = None;
+            for ch in line.chars() {
+                if first_char.is_none() {
+                    first_char = Some((ch.size(), ch.font()));
+                }
+                if let Some(c) = ch.char() {
+                    text.push(c);
+                }
+            }
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            // as_json: font info comes from the line's first char.
+            let (font_size, is_bold) = match &first_char {
+                Some((size, font)) => {
+                    let size = (*size as i32) as f64;
+                    let (weight_bold, name_lower) = match font {
+                        Some(f) => (f.is_bold(), f.name().to_lowercase()),
+                        None => (false, String::new()),
+                    };
+                    let is_bold = weight_bold
+                        || name_lower.contains("bold")
+                        || name_lower.contains("black")
+                        || name_lower.contains("heavy");
+                    (size, is_bold)
+                }
+                None => (0.0, false),
+            };
+
+            // as_json bbox: x/y/w/h are (int)-truncated from the f32 rect.
+            let b = line.bounds();
+            let x = (b.x0 as i32) as f64;
+            let y = (b.y0 as i32) as f64;
+            let w = ((b.x1 - b.x0) as i32) as f64;
+            let h = ((b.y1 - b.y0) as i32) as f64;
+
+            // Convert top-left to bottom-left: pdf_y = page_height - (y + h)
+            let pdf_y = page_height - (y + h);
+
+            raws.push(RawTextItem {
+                text: trimmed.to_string(),
+                x,
+                y: pdf_y,
+                width: w,
+                height: h,
+                font_size,
+                is_bold,
+            });
+        }
+    }
+
+    finish_text_boxes(raws, page_number)
+}
+
+/// JSON-path equivalent of extract_text_boxes (differential-test reference).
+#[cfg(test)]
+fn extract_text_boxes_via_json(
+    page: &mupdf::Page,
+    page_number: u32,
+    page_height: f64,
+) -> Result<Vec<TextBox>> {
     let flags = TextPageFlags::PRESERVE_WHITESPACE;
     let text_page = page
         .to_text_page(flags)
@@ -142,7 +287,15 @@ fn extract_text_boxes(
     let json = text_page
         .to_json(1.0)
         .map_err(|e| anyhow!("Failed to serialize text: {}", e))?;
-    let stext: StextJson = serde_json::from_str(&json)
+    parse_text_boxes_json(&json, page_number, page_height)
+}
+
+/// Shared JSON → text-box parsing, used by both the sequential (safe API)
+/// and parallel (independent-context FFI) paths. The JSON is produced by
+/// the same mupdf serializer in both, so parsing here keeps them identical.
+#[cfg(test)]
+fn parse_text_boxes_json(json: &str, page_number: u32, page_height: f64) -> Result<Vec<TextBox>> {
+    let stext: StextJson = serde_json::from_str(json)
         .map_err(|e| anyhow!("Failed to parse structured text JSON: {}", e))?;
 
     let mut raws: Vec<RawTextItem> = Vec::new();
@@ -186,6 +339,11 @@ fn extract_text_boxes(
         }
     }
 
+    finish_text_boxes(raws, page_number)
+}
+
+/// Shared tail of text-box extraction: word merging and TextBox assembly.
+fn finish_text_boxes(raws: Vec<RawTextItem>, page_number: u32) -> Result<Vec<TextBox>> {
     let words = merge_into_words(&raws);
 
     Ok(words
@@ -206,6 +364,32 @@ fn extract_text_boxes(
         })
         .filter(|b| !b.text.is_empty())
         .collect())
+}
+
+/// Count pages where text boxes differ between text-only and combined
+/// text+image stext flags (test reference for extract_page_content).
+#[cfg(test)]
+fn probe_flags_equivalence(input: &[u8]) -> Result<(i32, i32)> {
+    let doc = Document::from_bytes(input, "application/pdf").map_err(|e| anyhow!("open: {e}"))?;
+    let n = doc.page_count().map_err(|e| anyhow!("count: {e}"))?;
+    let mut diffs = 0;
+    for i in 0..n {
+        let page = doc.load_page(i).map_err(|e| anyhow!("load: {e}"))?;
+        let bounds = page.bounds().map_err(|e| anyhow!("bounds: {e}"))?;
+        let h = (bounds.y1 - bounds.y0) as f64;
+        let a = extract_text_boxes(&page, (i + 1) as u32, h).unwrap_or_default();
+        let b = extract_text_boxes_flags(
+            &page,
+            (i + 1) as u32,
+            h,
+            TextPageFlags::PRESERVE_WHITESPACE | TextPageFlags::PRESERVE_IMAGES,
+        )
+        .unwrap_or_default();
+        if format!("{a:?}") != format!("{b:?}") {
+            diffs += 1;
+        }
+    }
+    Ok((n, diffs))
 }
 
 /// Minimum aspect ratio for a filled rect to be considered a line.
@@ -629,31 +813,21 @@ fn tokenize_content_stream(raw: &str) -> Vec<String> {
 
 const MIN_IMAGE_AREA: f64 = 5000.0;
 
-fn extract_image_regions(
-    page: &mupdf::Page,
+/// Shared bbox → image-region conversion (both extraction paths).
+fn image_regions_from_bboxes(
+    bboxes: &[(f32, f32, f32, f32)],
     page_number: u32,
     page_height: f64,
-) -> Result<Vec<ImageRegion>> {
-    let flags = TextPageFlags::PRESERVE_WHITESPACE | TextPageFlags::PRESERVE_IMAGES;
-    let text_page = page
-        .to_text_page(flags)
-        .map_err(|e| anyhow!("Failed to extract text for images: {}", e))?;
-    let stext = text_page.structured();
-
+) -> Vec<ImageRegion> {
     let mut regions: Vec<ImageRegion> = Vec::new();
 
-    for block in &stext.blocks {
-        if !matches!(&block.content, TextBlockContent::Image { .. }) {
-            continue;
-        }
-
+    for &(x0, y0, x1, y1) in bboxes {
         // TS reads image bboxes from the stext JSON, whose C serializer
         // "(int)"-truncates x0, y0, x1-x0, y1-y0 — replicate that precision.
-        let bbox = &block.bounds;
-        let x = (bbox.x0 as i32) as f64;
-        let y = (bbox.y0 as i32) as f64;
-        let w = ((bbox.x1 - bbox.x0) as i32) as f64;
-        let h = ((bbox.y1 - bbox.y0) as i32) as f64;
+        let x = (x0 as i32) as f64;
+        let y = (y0 as i32) as f64;
+        let w = ((x1 - x0) as i32) as f64;
+        let h = ((y1 - y0) as i32) as f64;
 
         if w * h < MIN_IMAGE_AREA {
             continue;
@@ -669,7 +843,7 @@ fn extract_image_regions(
         });
     }
 
-    Ok(regions)
+    regions
 }
 
 // ---------------------------------------------------------------------------
@@ -730,11 +904,8 @@ pub fn extract_pages(input: &[u8]) -> Result<Vec<PageContent>> {
             .map_err(|e| anyhow!("Failed to get page bounds: {}", e))?;
         let page_height = (bounds.y1 - bounds.y0) as f64;
 
-        // Extract text boxes
-        let text_boxes = extract_text_boxes(&page, page_number, page_height).unwrap_or_default();
-
-        // Extract image regions
-        let images = extract_image_regions(&page, page_number, page_height).unwrap_or_default();
+        // Extract text boxes and image regions from one stext run
+        let (text_boxes, images) = extract_page_content(&page, page_number, page_height);
 
         // Extract vector segments from raw content stream
         let segments = extract_segments_from_pdf_page(&pdf_doc, i, page_number);
@@ -786,7 +957,12 @@ fn extract_segments_from_pdf_page(
         }
     };
 
-    let raw = String::from_utf8_lossy(&raw_bytes);
+    segments_from_content_bytes(&raw_bytes, page_number)
+}
+
+/// Shared content-stream bytes → segments (both extraction paths).
+fn segments_from_content_bytes(raw_bytes: &[u8], page_number: u32) -> Vec<Segment> {
+    let raw = String::from_utf8_lossy(raw_bytes);
     extract_segments_from_content_stream(&raw, page_number)
 }
 
@@ -794,6 +970,57 @@ fn extract_segments_from_pdf_page(
 mod tests {
     use super::*;
     use std::path::Path;
+
+    /// One combined stext run must yield the same text boxes as the
+    /// split text-only run (see extract_page_content).
+    #[test]
+    fn combined_flags_match_split_runs() {
+        let mut checked = 0;
+        for name in ["intel-743621-007.pdf", "intel-743835-004.pdf"] {
+            if !has_fixture(name) {
+                continue;
+            }
+            let input = std::fs::read(fixture_path(name)).unwrap();
+            let (pages, diffs) = probe_flags_equivalence(&input).unwrap();
+            assert_eq!(diffs, 0, "{name}: {diffs} of {pages} pages diverged");
+            checked += 1;
+        }
+        if checked == 0 {
+            eprintln!("Skipping: no PDF fixtures found");
+        }
+    }
+
+    /// The native stext walk must be indistinguishable from the JSON
+    /// round-trip it replaced (mupdf as_json serializer equivalence).
+    #[test]
+    fn native_walk_matches_json_path() {
+        let mut checked = 0;
+        for name in ["intel-743621-007.pdf", "intel-743835-004.pdf"] {
+            if !has_fixture(name) {
+                continue;
+            }
+            let input = std::fs::read(fixture_path(name)).unwrap();
+            let doc = Document::from_bytes(&input, "application/pdf").unwrap();
+            let n = doc.page_count().unwrap();
+            for i in 0..n {
+                let page = doc.load_page(i).unwrap();
+                let bounds = page.bounds().unwrap();
+                let h = (bounds.y1 - bounds.y0) as f64;
+                let native = extract_text_boxes(&page, (i + 1) as u32, h).unwrap();
+                let json = extract_text_boxes_via_json(&page, (i + 1) as u32, h).unwrap();
+                assert_eq!(
+                    format!("{native:?}"),
+                    format!("{json:?}"),
+                    "{name} page {} diverged",
+                    i + 1
+                );
+            }
+            checked += 1;
+        }
+        if checked == 0 {
+            eprintln!("Skipping: no PDF fixtures found");
+        }
+    }
 
     const FIXTURE_DIR: &str = "../test/fixtures/pdfs";
 

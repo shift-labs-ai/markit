@@ -9,6 +9,10 @@ license = "MIT"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 ego-tree = "0.11"
+# Not used directly: pins zip's flate2 to the zlib-rs backend, the fastest
+# inflate for the ZIP-based formats (docx/pptx/xlsx/epub). Output bytes are
+# identical; only decompression speed changes.
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 kamadak-exif = "0.6.1"
 lofty = "0.25.0"
 memchr = "2"

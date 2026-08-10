@@ -907,6 +907,7 @@ dependencies = [
  "anyhow",
  "clap",
  "ego-tree",
+ "flate2",
  "kamadak-exif",
  "lofty",
  "memchr",

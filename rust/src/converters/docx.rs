@@ -14,7 +14,7 @@ use std::fs;
 use std::io::{Cursor, Read};
 
 use crate::types::{ConversionResult, Converter, StreamInfo};
-use crate::utils::html_to_md::{html_to_markdown, normalize_tables_html};
+use crate::utils::html_to_md::{html_to_markdown_generated, normalize_tables_html};
 
 // ── OOXML namespace URIs ──────────────────────────────────────────────────────
 const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
@@ -81,7 +81,9 @@ impl Converter for DocxConverter {
         )?;
 
         let normalized = normalize_tables_html(&html);
-        let mut markdown = html_to_markdown(&normalized);
+        // Generated HTML cannot contain <noscript> (fixed tag set,
+        // entity-escaped text), so the noscript-rewrite scans are skipped.
+        let mut markdown = html_to_markdown_generated(&normalized);
 
         // Replace image tokens with placeholder comments (no-imageDir path).
         // The HTML engine may escape underscores (MARKIT_IMG → MARKIT\_IMG),
@@ -234,6 +236,8 @@ fn doc_to_html(
 
     let mut html = String::new();
     let mut list_stack: Vec<(String, u32, bool)> = Vec::new();
+    // One scratch buffer reused for every paragraph's inner HTML.
+    let mut scratch = String::new();
 
     for node in body.children().filter(|n| n.is_element()) {
         if is_wn(node, "p") {
@@ -246,10 +250,19 @@ fn doc_to_html(
                 image_count,
                 &mut html,
                 &mut list_stack,
+                &mut scratch,
             );
         } else if is_wn(node, "tbl") {
             close_all_lists(&mut list_stack, &mut html);
-            emit_table(node, rels, images, image_dir, image_count, &mut html);
+            emit_table(
+                node,
+                rels,
+                images,
+                image_dir,
+                image_count,
+                &mut html,
+                &mut scratch,
+            );
         }
     }
 
@@ -269,6 +282,7 @@ fn emit_paragraph(
     image_count: &mut usize,
     html: &mut String,
     list_stack: &mut Vec<(String, u32, bool)>,
+    scratch: &mut String,
 ) {
     let ppr = find_wchild(para, "pPr");
 
@@ -291,13 +305,15 @@ fn emit_paragraph(
         .and_then(|v| v.parse::<u32>().ok())
         .unwrap_or(0);
 
-    let inner = para_content_html(para, rels, images, image_dir, image_count);
+    scratch.clear();
+    para_content_html(para, rels, images, image_dir, image_count, scratch);
+    let inner = scratch.as_str();
 
     if let Some(ref nid) = num_id {
         let is_ordered = *num_types.get(nid.as_str()).unwrap_or(&false);
         manage_list(nid, ilvl, is_ordered, html, list_stack);
         html.push_str("<li>");
-        html.push_str(&inner);
+        html.push_str(inner);
         html.push_str("</li>\n");
     } else {
         close_all_lists(list_stack, html);
@@ -307,7 +323,7 @@ fn emit_paragraph(
         html.push('<');
         html.push_str(tag);
         html.push('>');
-        html.push_str(&inner);
+        html.push_str(inner);
         html.push_str("</");
         html.push_str(tag);
         html.push_str(">\n");
@@ -373,6 +389,7 @@ fn close_all_lists(stack: &mut Vec<(String, u32, bool)>, html: &mut String) {
 
 // ── Table ─────────────────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn emit_table(
     tbl: roxmltree::Node,
     rels: &HashMap<String, (String, String)>,
@@ -380,14 +397,28 @@ fn emit_table(
     image_dir: Option<&str>,
     image_count: &mut usize,
     html: &mut String,
+    scratch: &mut String,
 ) {
     html.push_str("<table>\n");
     for tr in tbl.children().filter(|n| is_wn(*n, "tr")) {
         html.push_str("<tr>\n");
         for tc in tr.children().filter(|n| is_wn(*n, "tc")) {
-            let cell_html = cell_content_html(tc, rels, images, image_dir, image_count);
             html.push_str("<td>");
-            html.push_str(&cell_html);
+            // Join non-blank paragraphs with <br>, writing directly into
+            // html via per-paragraph scratch (needed for the blank check).
+            let mut first = true;
+            for p in tc.children().filter(|n| is_wn(*n, "p")) {
+                scratch.clear();
+                para_content_html(p, rels, images, image_dir, image_count, scratch);
+                if scratch.trim().is_empty() {
+                    continue;
+                }
+                if !first {
+                    html.push_str("<br>");
+                }
+                html.push_str(scratch);
+                first = false;
+            }
             html.push_str("</td>\n");
         }
         html.push_str("</tr>\n");
@@ -395,35 +426,21 @@ fn emit_table(
     html.push_str("</table>\n");
 }
 
-fn cell_content_html(
-    cell: roxmltree::Node,
-    rels: &HashMap<String, (String, String)>,
-    images: &HashMap<String, (Vec<u8>, String)>,
-    image_dir: Option<&str>,
-    image_count: &mut usize,
-) -> String {
-    let parts: Vec<String> = cell
-        .children()
-        .filter(|n| is_wn(*n, "p"))
-        .map(|p| para_content_html(p, rels, images, image_dir, image_count))
-        .filter(|s| !s.trim().is_empty())
-        .collect();
-    parts.join("<br>")
-}
-
 // ── Paragraph content ─────────────────────────────────────────────────────────
 
+/// Append a paragraph's content HTML into `out` (callers reuse one scratch
+/// buffer across paragraphs instead of allocating per paragraph).
 fn para_content_html(
     para: roxmltree::Node,
     rels: &HashMap<String, (String, String)>,
     images: &HashMap<String, (Vec<u8>, String)>,
     image_dir: Option<&str>,
     image_count: &mut usize,
-) -> String {
-    let mut out = String::new();
+    out: &mut String,
+) {
     for child in para.children().filter(|n| n.is_element()) {
         if is_wn(child, "r") {
-            out.push_str(&run_html(child, images, image_dir, image_count));
+            run_html(child, images, image_dir, image_count, out);
         } else if is_wn(child, "hyperlink") {
             let href = child
                 .attribute((R, "id"))
@@ -433,30 +450,32 @@ fn para_content_html(
                 .map(|(_, target)| target.as_str())
                 .unwrap_or("");
 
-            let inner: String = child
-                .children()
-                .filter(|n| is_wn(*n, "r"))
-                .map(|r| run_html(r, images, image_dir, image_count))
-                .collect();
-
-            if href.is_empty() {
-                out.push_str(&inner);
-            } else {
-                out.push_str(&format!("<a href=\"{}\">{}</a>", html_escape(href), inner));
+            if !href.is_empty() {
+                out.push_str("<a href=\"");
+                out.push_str(&html_escape(href));
+                out.push_str("\">");
+            }
+            for r in child.children().filter(|n| is_wn(*n, "r")) {
+                run_html(r, images, image_dir, image_count, out);
+            }
+            if !href.is_empty() {
+                out.push_str("</a>");
             }
         }
     }
-    out
 }
 
 // ── Run ───────────────────────────────────────────────────────────────────────
 
+/// Append a run's HTML into `out`. Formatting wraps splice their open tag
+/// at the run's start position, so no intermediate String is built.
 fn run_html(
     run: roxmltree::Node,
     images: &HashMap<String, (Vec<u8>, String)>,
     image_dir: Option<&str>,
     image_count: &mut usize,
-) -> String {
+    out: &mut String,
+) {
     // Inline image via w:drawing
     let drawing = find_wchild(run, "drawing").or_else(|| {
         run.children()
@@ -471,56 +490,61 @@ fn run_html(
                     *image_count += 1;
                     let n = *image_count;
                     let ext_out = if ext == "jpeg" { "jpg" } else { ext.as_str() };
-                    let filename = format!("image_{}.{}", n, ext_out);
-                    let alt = format!("image_{}", n);
 
                     if let Some(dir) = image_dir {
-                        let path = format!("{}/{}", dir, filename);
+                        let path = format!("{}/image_{}.{}", dir, n, ext_out);
                         let _ = fs::write(&path, img_bytes);
-                        return format!("<img src=\"{}\" alt=\"{}\">", path, alt);
+                        out.push_str("<img src=\"");
+                        out.push_str(&path);
+                        out.push_str("\" alt=\"image_");
+                        out.push_str(&n.to_string());
+                        out.push_str("\">");
                     } else {
-                        return format!("{}{}", IMG_TOKEN_PREFIX, n);
+                        out.push_str(IMG_TOKEN_PREFIX);
+                        out.push_str(&n.to_string());
                     }
                 }
             }
         }
-        return String::new();
+        return;
     }
 
     // Text content
-    let mut inner = String::new();
+    let start = out.len();
     for child in run.children().filter(|n| n.is_element()) {
         if is_wn(child, "t") {
-            inner.push_str(&html_escape(child.text().unwrap_or("")));
+            out.push_str(&html_escape(child.text().unwrap_or("")));
         } else if is_wn(child, "tab") {
-            inner.push('\t');
+            out.push('\t');
         } else if is_wn(child, "br") {
-            inner.push_str("<br>");
+            out.push_str("<br>");
         }
     }
 
-    if inner.is_empty() {
-        return String::new();
+    if out.len() == start {
+        return;
     }
 
-    // Character formatting
+    // Character formatting (innermost first, so each open tag splices at
+    // the same start position: <strong><em><s>…</s></em></strong>).
     if let Some(rpr) = find_wchild(run, "rPr") {
         let bold = find_wchild(rpr, "b").is_some();
         let italic = find_wchild(rpr, "i").is_some();
         let strike = find_wchild(rpr, "strike").is_some();
 
         if strike {
-            inner = format!("<s>{}</s>", inner);
+            out.insert_str(start, "<s>");
+            out.push_str("</s>");
         }
         if italic {
-            inner = format!("<em>{}</em>", inner);
+            out.insert_str(start, "<em>");
+            out.push_str("</em>");
         }
         if bold {
-            inner = format!("<strong>{}</strong>", inner);
+            out.insert_str(start, "<strong>");
+            out.push_str("</strong>");
         }
     }
-
-    inner
 }
 
 // ── XML helpers ───────────────────────────────────────────────────────────────
@@ -558,11 +582,33 @@ fn find_descendant_ns<'a, 'input>(
     None
 }
 
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
+/// Single-pass HTML escaping; borrows when nothing needs escaping (the
+/// overwhelmingly common case for document text runs).
+fn html_escape(s: &str) -> std::borrow::Cow<'_, str> {
+    let bytes = s.as_bytes();
+    let Some(first) = bytes
+        .iter()
+        .position(|b| matches!(b, b'&' | b'<' | b'>' | b'"'))
+    else {
+        return std::borrow::Cow::Borrowed(s);
+    };
+    let mut out = String::with_capacity(s.len() + 8);
+    out.push_str(&s[..first]);
+    let mut start = first;
+    for (i, &b) in bytes.iter().enumerate().skip(first) {
+        let rep = match b {
+            b'&' => "&amp;",
+            b'<' => "&lt;",
+            b'>' => "&gt;",
+            b'"' => "&quot;",
+            _ => continue,
+        };
+        out.push_str(&s[start..i]);
+        out.push_str(rep);
+        start = i + 1;
+    }
+    out.push_str(&s[start..]);
+    std::borrow::Cow::Owned(out)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

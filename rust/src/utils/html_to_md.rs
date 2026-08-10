@@ -23,10 +23,19 @@ pub fn html_to_markdown(html: &str) -> String {
     // (?i)<noscript(\s[^>]*)?> → <div$1> and (?i)</noscript> → </div>.
     let html = rewrite_noscript_open(html);
     let html = crate::utils::strip_blocks::replace_ci_literal(&html, "</noscript>", "</div>");
-    let html = html.as_ref();
+    html_to_markdown_generated(&html)
+}
 
-    let has_html_tag =
-        html.contains("<html") || html.contains("<!DOCTYPE") || html.contains("<!doctype");
+/// html_to_markdown for converter-generated HTML that provably cannot
+/// contain <noscript> (fixed tag set, entity-escaped text): the noscript
+/// rewrite is the identity there, so its scans are skipped.
+pub fn html_to_markdown_generated(html: &str) -> String {
+    let html: &str = html;
+
+    let hay = html.as_bytes();
+    let has_html_tag = memchr::memmem::find(hay, b"<html").is_some()
+        || memchr::memmem::find(hay, b"<!DOCTYPE").is_some()
+        || memchr::memmem::find(hay, b"<!doctype").is_some();
     let doc = if has_html_tag {
         Html::parse_document(html)
     } else {
@@ -1655,7 +1664,6 @@ fn escape_markdown(text: &str) -> String {
     // replaces, but none of those replaces can create or destroy a match
     // at position 0 for these first characters, so testing the original
     // text is equivalent.
-    let mut s = String::with_capacity(text.len() + 4);
     let anchored = text.starts_with('-')
         || text.starts_with("+ ")
         || text.starts_with('=')
@@ -1664,15 +1672,23 @@ fn escape_markdown(text: &str) -> String {
             let hash_count = text.chars().take_while(|&c| c == '#').count();
             (1..=6).contains(&hash_count) && text.as_bytes().get(hash_count) == Some(&b' ')
         };
+
+    // Copy clean spans in bulk; only the five escapable bytes break a span.
+    // (All five are ASCII, so byte scanning is UTF-8 safe.)
+    let bytes = text.as_bytes();
+    let mut s = String::with_capacity(text.len() + 4);
     if anchored {
         s.push('\\');
     }
-    for c in text.chars() {
-        if matches!(c, '\\' | '*' | '`' | '[' | ']') {
+    let mut start = 0usize;
+    for (i, &b) in bytes.iter().enumerate() {
+        if matches!(b, b'\\' | b'*' | b'`' | b'[' | b']') {
+            s.push_str(&text[start..i]);
             s.push('\\');
+            start = i;
         }
-        s.push(c);
     }
+    s.push_str(&text[start..]);
     // [/^>/g, '\\>']
     if s.starts_with('>') {
         s = format!("\\{s}");

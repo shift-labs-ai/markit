@@ -7,6 +7,13 @@
 //! only 9% and >=3 threads were slower than sequential (10 threads: 2x
 //! slower). Real PDF parallelism needs a lock-free parser (cf. anydoc's
 //! lopdf+rayon), not more threads on MuPDF.
+//!
+//! Also tried and reverted: fully independent per-thread base contexts via
+//! mupdf-sys (mupdf_new_base_context per worker). MuPDF's process-global
+//! state (harfbuzz/freetype locks) assumes a single shared lock set;
+//! independent lock sets deadlock inside glyph handling (observed: all
+//! workers parked in pthread_mutex_lock under stext, forever). Both
+//! parallelism strategies are structurally closed with MuPDF in-process.
 use markit::converters::pdf::extract::extract_pages;
 use markit::converters::pdf::headers::strip_headers_footers;
 use markit::types::{Converter, StreamInfo};
