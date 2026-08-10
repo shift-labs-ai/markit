@@ -179,6 +179,12 @@ impl Markit {
 
     /// Convert a local file to markdown.
     pub fn convert_file(&self, path: &str) -> Result<ConversionResult> {
+        self.convert_file_with(path, StreamInfo::default())
+    }
+
+    /// Convert a local file to markdown with extra StreamInfo fields
+    /// (TS: convertFile(path, extra) — e.g. imageDir).
+    pub fn convert_file_with(&self, path: &str, extra: StreamInfo) -> Result<ConversionResult> {
         let buffer = std::fs::read(path)?;
         let p = Path::new(path);
         let info = StreamInfo {
@@ -187,7 +193,7 @@ impl Markit {
                 .extension()
                 .map(|e| format!(".{}", e.to_string_lossy().to_lowercase())),
             filename: p.file_name().map(|f| f.to_string_lossy().into_owned()),
-            ..Default::default()
+            ..extra
         };
         self.convert(&buffer, &info)
     }

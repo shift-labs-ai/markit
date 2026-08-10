@@ -267,26 +267,26 @@ const MIN_BODY_FONT_SIZE: f64 = 7.0;
 /// Compute the most frequent font size among text boxes, ignoring very small
 /// text that likely comes from diagrams, footnotes, or superscripts.
 fn modal_font_size(text_boxes: &[TextBox]) -> f64 {
-    use std::collections::BTreeMap;
-    let mut counts: BTreeMap<i64, usize> = BTreeMap::new();
+    // JS Map iterates in INSERTION order — on count ties the size that was
+    // first encountered in text-box order wins, not the smallest.
+    let mut counts: Vec<(i64, usize)> = Vec::new();
     for tb in text_boxes {
         let size = (tb.font_size * 10.0).round() / 10.0;
         if size < MIN_BODY_FONT_SIZE {
             continue;
         }
-        // Use fixed-point key to avoid float hashing issues
         let key = (size * 10.0).round() as i64;
-        *counts.entry(key).or_insert(0) += 1;
+        match counts.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, c)) => *c += 1,
+            None => counts.push((key, 1)),
+        }
     }
     let mut modal = 0.0;
     let mut max_count = 0;
-    // BTreeMap iterates in key order (ascending size), matching TS Map insertion order
-    // where smaller sizes are typically encountered first. On ties, the first (smallest) wins.
-    for (&key, &count) in &counts {
-        let size = key as f64 / 10.0;
+    for &(key, count) in &counts {
         if count > max_count {
             max_count = count;
-            modal = size;
+            modal = key as f64 / 10.0;
         }
     }
     modal
@@ -302,16 +302,15 @@ fn group_free_text_into_lines(text_boxes: &[TextBox]) -> Vec<TextLine> {
     // Sort: higher Y first (top of page), then left-to-right
     // TS: dy = yb - ya; if abs(dy) > tolerance return dy; else left-to-left
     // yb - ya > 0 means a comes first (higher midY)
-    sorted.sort_by(|a, b| {
+    // Tolerance-band comparator (not a total order) — see js_stable_sort.
+    super::js_stable_sort(&mut sorted, |a, b| {
         let ya = (a.bounds.top + a.bounds.bottom) / 2.0;
         let yb = (b.bounds.top + b.bounds.bottom) / 2.0;
         let dy = yb - ya;
         if dy.abs() > TEXT_LINE_Y_TOLERANCE {
-            // TS returns dy for sort — positive dy means b>a, so a before b
-            // That means sort descending by Y
-            dy.partial_cmp(&0.0f64)
-                .map(|o| o.reverse())
-                .unwrap_or(std::cmp::Ordering::Equal)
+            // TS returns dy (JS: negative ⇒ a first). dy < 0 ⇔ a higher on the
+            // page ⇔ a sorts first — i.e. plain partial_cmp, NO reversal.
+            dy.partial_cmp(&0.0f64).unwrap_or(std::cmp::Ordering::Equal)
         } else {
             a.bounds.left.partial_cmp(&b.bounds.left).unwrap_or(std::cmp::Ordering::Equal)
         }
@@ -473,7 +472,8 @@ fn merge_paragraph_wraps(blocks: Vec<ContentBlock>, body_fs: f64) -> Vec<Content
             && !next.is_tabular
             && gap > 0.0
             && gap <= max_gap
-            && cur.content.len() > min_wrap_length
+            // TS .length is UTF-16 code units — not bytes ("—" is 1 unit, 3 bytes)
+            && cur.content.encode_utf16().count() > min_wrap_length
             && !sentence_end_re.is_match(&cur.content);
 
         if is_wrap {

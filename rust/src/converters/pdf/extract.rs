@@ -39,16 +39,22 @@ fn merge_into_words(raws: &[RawTextItem]) -> Vec<RawTextItem> {
         return Vec::new();
     }
 
-    // Sort by Y descending (top-first in bottom-left coords), then X ascending
-    let mut sorted: Vec<RawTextItem> = raws.to_vec();
-    sorted.sort_by(|a, b| {
+    // Sort by Y descending (top-first in bottom-left coords), then X ascending.
+    // The tolerance-band comparator is intentionally NOT a total order (same
+    // as the TS version): items within SAME_LINE_Y_TOLERANCE compare by X even
+    // when their transitive Y chain drifts past the tolerance. JS Array#sort
+    // tolerates inconsistent comparators; Rust's driftsort panics on them, so
+    // we use a stable insertion sort that accepts the comparator as-is.
+    let cmp = |a: &RawTextItem, b: &RawTextItem| {
         let dy = b.y - a.y;
         if dy.abs() > SAME_LINE_Y_TOLERANCE {
             dy.partial_cmp(&0.0).unwrap_or(std::cmp::Ordering::Equal)
         } else {
             a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal)
         }
-    });
+    };
+    let mut sorted: Vec<RawTextItem> = raws.to_vec();
+    super::js_stable_sort(&mut sorted, cmp);
 
     let mut merged: Vec<RawTextItem> = Vec::new();
     let mut cur = sorted[0].clone();
@@ -78,135 +84,129 @@ fn merge_into_words(raws: &[RawTextItem]) -> Vec<RawTextItem> {
 ///
 /// mupdf's structured text uses top-left origin; we convert to
 /// bottom-left (standard PDF coordinates) using the page height.
+/// JSON structured-text shapes emitted by mupdf's C serializer
+/// (fz_print_stext_page_as_json) — the same path the TS version consumes via
+/// StructuredText.asJSON(). All coordinates and the font size are C
+/// "(int)"-truncated by that serializer, which is exactly the precision the
+/// TS pipeline sees.
+#[derive(serde::Deserialize)]
+struct StextJson {
+    blocks: Vec<StextBlock>,
+}
+
+#[derive(serde::Deserialize)]
+struct StextBlock {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default)]
+    lines: Vec<StextLine>,
+}
+
+#[derive(serde::Deserialize)]
+struct StextLine {
+    bbox: StextBbox,
+    #[serde(default)]
+    font: Option<StextFont>,
+    #[serde(default)]
+    text: String,
+}
+
+#[derive(serde::Deserialize)]
+struct StextBbox {
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+}
+
+#[derive(serde::Deserialize)]
+struct StextFont {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    weight: String,
+    #[serde(default)]
+    size: f64,
+}
+
 fn extract_text_boxes(
     page: &mupdf::Page,
     page_number: u32,
     page_height: f64,
 ) -> Result<Vec<TextBox>> {
-    let flags = TextPageFlags::PRESERVE_WHITESPACE | TextPageFlags::PRESERVE_IMAGES;
+    // TS: page.toStructuredText("preserve-whitespace").asJSON()
+    let flags = TextPageFlags::PRESERVE_WHITESPACE;
     let text_page = page
         .to_text_page(flags)
         .map_err(|e| anyhow!("Failed to extract text: {}", e))?;
-    let stext = text_page.structured();
+    let json = text_page
+        .to_json(1.0)
+        .map_err(|e| anyhow!("Failed to serialize text: {}", e))?;
+    let stext: StextJson = serde_json::from_str(&json)
+        .map_err(|e| anyhow!("Failed to parse structured text JSON: {}", e))?;
 
     let mut raws: Vec<RawTextItem> = Vec::new();
 
     for block in &stext.blocks {
-        let lines = match &block.content {
-            TextBlockContent::Text { lines } => lines,
-            _ => continue,
-        };
-
-        for line in lines {
+        if block.kind != "text" {
+            continue;
+        }
+        for line in &block.lines {
             let text = line.text.trim();
             if text.is_empty() {
                 continue;
             }
 
-            // Determine font size and bold from chars
-            let mut font_size: f64 = 0.0;
-            let mut is_bold = false;
+            let font_size = line.font.as_ref().map(|f| f.size).unwrap_or(0.0);
+            let weight = line
+                .font
+                .as_ref()
+                .map(|f| f.weight.as_str())
+                .unwrap_or("normal");
+            let font_name = line.font.as_ref().map(|f| f.name.as_str()).unwrap_or("");
+            let lower_name = font_name.to_lowercase();
+            let is_bold = weight == "bold"
+                || lower_name.contains("bold")
+                || lower_name.contains("black")
+                || lower_name.contains("heavy");
 
-            for ch in &line.chars {
-                let sz = ch.size as f64;
-                if sz > font_size {
-                    font_size = sz;
-                }
-                if ch.flags.contains(TextCharFlags::BOLD) {
-                    is_bold = true;
-                }
-            }
-
-            // mupdf bbox uses top-left origin: Rect { x0, y0 (top), x1, y1 (bottom) }
-            // Convert to bottom-left: pdf_y = page_height - bbox.y1
-            let bbox = &line.bounds;
-            let bbox_y = bbox.y0 as f64;
-            let bbox_h = (bbox.y1 - bbox.y0) as f64;
-            let pdf_y = page_height - (bbox_y + bbox_h);
+            // mupdf bbox: {x, y, w, h} in top-left coords.
+            // Convert to bottom-left: pdf_y = page_height - (bbox.y + bbox.h)
+            let pdf_y = page_height - (line.bbox.y + line.bbox.h);
 
             raws.push(RawTextItem {
                 text: text.to_string(),
-                x: bbox.x0 as f64,
+                x: line.bbox.x,
                 y: pdf_y,
-                width: (bbox.x1 - bbox.x0) as f64,
-                height: bbox_h,
+                width: line.bbox.w,
+                height: line.bbox.h,
                 font_size,
                 is_bold,
             });
         }
     }
 
-    // Also check font names for bold detection using raw API
-    // Do a second pass with the raw block/line/char iterators to get Font objects
-    {
-        let text_page2 = page
-            .to_text_page(flags)
-            .map_err(|e| anyhow!("Failed to extract text (pass 2): {}", e))?;
-
-        let mut raw_idx = 0;
-        for block in text_page2.blocks() {
-            if block.r#type() != mupdf::text_page::TextBlockType::Text {
-                continue;
-            }
-            for line in block.lines() {
-                let text = line.chars().filter_map(|c| c.char()).collect::<String>();
-                let trimmed = text.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-
-                // Find the matching raw item
-                if raw_idx < raws.len() && !raws[raw_idx].is_bold {
-                    // Check font name on first char
-                    for ch in line.chars() {
-                        if let Some(font) = ch.font() {
-                            let name = font.name();
-                            if font.is_bold()
-                                || name.to_lowercase().contains("bold")
-                                || name.contains("Black")
-                                || name.contains("Heavy")
-                            {
-                                raws[raw_idx].is_bold = true;
-                            }
-                            break;
-                        }
-                    }
-                }
-                raw_idx += 1;
-            }
-        }
-    }
-
     let words = merge_into_words(&raws);
 
     Ok(words
-        .iter()
+        .into_iter()
         .enumerate()
-        .filter_map(|(i, w)| {
-            let text = w.text.trim().to_string();
-            if text.is_empty() {
-                return None;
-            }
-            Some(TextBox {
-                id: format!("p{}-t{}", page_number, i),
-                text,
-                page_number,
-                font_size: w.font_size,
-                is_bold: w.is_bold,
-                bounds: Bounds {
-                    left: w.x,
-                    right: w.x + w.width,
-                    bottom: w.y,
-                    top: w.y + w.height,
-                },
-            })
+        .map(|(i, w)| TextBox {
+            id: format!("p{}-t{}", page_number, i),
+            text: w.text.trim().to_string(),
+            page_number,
+            font_size: w.font_size,
+            is_bold: w.is_bold,
+            bounds: Bounds {
+                left: w.x,
+                right: w.x + w.width,
+                bottom: w.y,
+                top: w.y + w.height,
+            },
         })
+        .filter(|b| !b.text.is_empty())
         .collect())
 }
-
-// ---------------------------------------------------------------------------
-// Vector segment extraction from raw content stream
-// ---------------------------------------------------------------------------
 
 /// Minimum aspect ratio for a filled rect to be considered a line.
 const LINE_ASPECT_THRESHOLD: f64 = 6.0;
@@ -402,6 +402,11 @@ fn extract_segments_from_content_stream(raw: &str, page_number: u32) -> Vec<Segm
                 }
             }
         }
+        // TS clears BOTH pending arrays at the end of every flushPath call,
+        // including fill mode (lines discarded) and thick strokes (everything
+        // discarded). Without this, unpainted paths leak into later flushes.
+        pending_rects.clear();
+        pending_lines.clear();
     }
 
     while idx < tokens.len() {
@@ -649,11 +654,13 @@ fn extract_image_regions(
             continue;
         }
 
+        // TS reads image bboxes from the stext JSON, whose C serializer
+        // "(int)"-truncates x0, y0, x1-x0, y1-y0 — replicate that precision.
         let bbox = &block.bounds;
-        let x = bbox.x0 as f64;
-        let y = bbox.y0 as f64;
-        let w = (bbox.x1 - bbox.x0) as f64;
-        let h = (bbox.y1 - bbox.y0) as f64;
+        let x = (bbox.x0 as i32) as f64;
+        let y = (bbox.y0 as i32) as f64;
+        let w = ((bbox.x1 - bbox.x0) as i32) as f64;
+        let h = ((bbox.y1 - bbox.y0) as i32) as f64;
 
         if w * h < MIN_IMAGE_AREA {
             continue;
@@ -1259,5 +1266,27 @@ mod tests {
                 eprintln!("Could not create page: {}", e);
             }
         }
+    }
+    #[test]
+    fn zz_dump_extract_json() {
+        if !has_fixture("intel-743835-004.pdf") { return; }
+        let buf = std::fs::read(fixture_path("intel-743835-004.pdf")).unwrap();
+        let pages = extract_pages(&buf).unwrap();
+        let mut out = String::from("[");
+        for (i, p) in pages.iter().enumerate() {
+            if i > 0 { out.push(','); }
+            out.push_str(&format!("{{\"n\":{},\"tb\":[", p.page_number));
+            for (j, t) in p.text_boxes.iter().enumerate() {
+                if j > 0 { out.push(','); }
+                out.push_str(&serde_json::json!({
+                    "text": t.text, "x": (t.bounds.left * 100.0).round() / 100.0,
+                    "y": (t.bounds.bottom * 100.0).round() / 100.0,
+                    "fs": (t.font_size * 100.0).round() / 100.0, "b": t.is_bold
+                }).to_string());
+            }
+            out.push_str(&format!("],\"seg\":{},\"img\":{}}}", p.segments.len(), p.images.len()));
+        }
+        out.push(']');
+        std::fs::write("/tmp/extract_rs.json", out).unwrap();
     }
 }

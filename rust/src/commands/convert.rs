@@ -81,7 +81,13 @@ pub fn convert(source: &str, opts: &ConvertOptions) -> u8 {
             );
             return EXIT_ERROR;
         }
-        markit.convert_file(source)
+        markit.convert_file_with(
+            source,
+            StreamInfo {
+                image_dir: Some(image_dir.clone()),
+                ..Default::default()
+            },
+        )
     };
 
     let out_opts = OutputOptions {

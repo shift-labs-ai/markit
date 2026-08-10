@@ -297,11 +297,9 @@ fn collapse_whitespace_pass(root: ElementRef) -> CollapseResult {
 
 #[derive(Default)]
 struct Ctx {
-    list_stack: Vec<ListCtx>,
     in_pre: bool,
     in_code: bool,
     pre_no_code: bool,
-    in_heading: bool,
     /// Collapsed text per text-node, produced by the collapseWhitespace
     /// pre-pass (turndown runs this as a mutating DOM pass before any
     /// conversion). Text nodes inside <pre> are never entered and stay raw
@@ -309,12 +307,6 @@ struct Ctx {
     collapsed: HashMap<NodeId, String>,
     /// Text/comment nodes the pre-pass "removed" from the DOM.
     removed: std::collections::HashSet<NodeId>,
-}
-
-struct ListCtx {
-    ordered: bool,
-    start: usize,
-    item_index: usize,
 }
 
 // ============================== Core: process / join / replacementForNode ==============================
@@ -1264,64 +1256,6 @@ fn escape_markdown(text: &str) -> String {
 
 fn escape_url_parens(url: &str) -> String {
     url.replace('(', r"\(").replace(')', r"\)")
-}
-
-fn is_block_or_br(tag: &str) -> bool {
-    tag == "br"
-        || matches!(
-            tag,
-            "h1" | "h2"
-                | "h3"
-                | "h4"
-                | "h5"
-                | "h6"
-                | "p"
-                | "pre"
-                | "blockquote"
-                | "table"
-                | "thead"
-                | "tbody"
-                | "tfoot"
-                | "tr"
-                | "td"
-                | "th"
-                | "ul"
-                | "ol"
-                | "li"
-                | "hr"
-        )
-        || is_block_tag(tag)
-}
-
-fn is_block_tag(tag: &str) -> bool {
-    matches!(
-        tag,
-        "address"
-            | "article"
-            | "aside"
-            | "center"
-            | "dd"
-            | "details"
-            | "dialog"
-            | "dir"
-            | "div"
-            | "dl"
-            | "dt"
-            | "fieldset"
-            | "figcaption"
-            | "figure"
-            | "footer"
-            | "form"
-            | "header"
-            | "hgroup"
-            | "main"
-            | "nav"
-            | "ol"
-            | "output"
-            | "section"
-            | "summary"
-            | "ul"
-    )
 }
 
 fn strip_p_in_cell(inner: &str) -> String {

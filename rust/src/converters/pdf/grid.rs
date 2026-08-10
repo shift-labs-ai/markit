@@ -488,15 +488,17 @@ fn split_cross_column_boxes(text_boxes: &[TextBox], x_lines: &[f64]) -> Vec<Text
                         // Find how many words fit in this column segment proportionally
                         let segment_width = segment_right - current_left;
                         let fraction_of_total = segment_width / total_width;
-                        let approx_chars =
-                            (fraction_of_total * tb.text.len() as f64).round() as usize;
+                        // TS .length is UTF-16 code units, not bytes.
+                        let approx_chars = (fraction_of_total
+                            * tb.text.encode_utf16().count() as f64)
+                            .round() as usize;
 
                         // Walk words to find the split closest to the proportional point
                         let mut char_count: usize = 0;
                         let mut split_idx: usize = 0;
                         for w in 0..remaining_words.len() {
                             let next_count = char_count
-                                + remaining_words[w].len()
+                                + remaining_words[w].encode_utf16().count()
                                 + if w > 0 { 1 } else { 0 };
                             if next_count > approx_chars && split_idx > 0 {
                                 break;
@@ -850,7 +852,8 @@ fn build_h_line_only_table(
     }
 
     let mut sorted_indices: Vec<usize> = (0..all_boxes.len()).collect();
-    sorted_indices.sort_by(|&a, &b| {
+    // Tolerance-band comparator (not a total order) — see js_stable_sort.
+    super::js_stable_sort(&mut sorted_indices, |&a, &b| {
         let ya = (all_boxes[a].bounds.top + all_boxes[a].bounds.bottom) / 2.0;
         let yb = (all_boxes[b].bounds.top + all_boxes[b].bounds.bottom) / 2.0;
         if (ya - yb).abs() > 0.5 {
