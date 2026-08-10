@@ -3,7 +3,7 @@
 //! placed image XObject itself is extracted at native resolution:
 //! DCTDecode streams pass through as JPEG files, JPXDecode as JP2;
 //! CCITT decodes to grayscale PNG; FlateDecode (and raw) bitmaps
-//! re-encode as PNG. JBIG2 stays on the rasterization fallback.
+//! re-encode as PNG; JBIG2 decodes through hayro-jbig2 (pure Rust).
 
 use anyhow::{anyhow, bail, Result};
 
@@ -38,6 +38,57 @@ pub fn extract_image_region_fast(input: &[u8], region: &ImageRegion) -> Result<E
     }
 
     extract_xobject(&pdf, &dict, raw)
+}
+
+/// JBIG2Decode → grayscale PNG (pure-Rust hayro-jbig2).
+fn extract_jbig2(data: &[u8], globals: Option<&[u8]>) -> Result<ExtractedImage> {
+    struct Sink {
+        rows: Vec<u8>,
+        width: usize,
+        row: Vec<u8>,
+    }
+    impl hayro_jbig2::Decoder for Sink {
+        fn push_pixel(&mut self, black: bool) {
+            self.row.push(if black { 0 } else { 255 });
+        }
+        fn push_pixel_chunk(&mut self, black: bool, chunk_count: u32) {
+            let v = if black { 0 } else { 255 };
+            self.row
+                .extend(std::iter::repeat_n(v, chunk_count as usize * 8));
+        }
+        fn next_line(&mut self) {
+            self.row.resize(self.width, 255);
+            self.rows.extend_from_slice(&self.row);
+            self.row.clear();
+        }
+    }
+
+    let img =
+        hayro_jbig2::Image::new_embedded(data, globals).map_err(|e| anyhow!("jbig2: {e:?}"))?;
+    let (w, h) = (img.width() as usize, img.height() as usize);
+    if w == 0 || h == 0 || w.saturating_mul(h) > 100_000_000 {
+        bail!("jbig2: bad dimensions");
+    }
+    let mut sink = Sink {
+        rows: Vec::with_capacity(w * h),
+        width: w,
+        row: Vec::with_capacity(w),
+    };
+    img.decode(&mut sink).map_err(|e| anyhow!("jbig2: {e:?}"))?;
+    sink.rows.resize(w * h, 255);
+
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, w as u32, h as u32);
+        enc.set_color(png::ColorType::Grayscale);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut wr = enc.write_header()?;
+        wr.write_image_data(&sink.rows)?;
+    }
+    Ok(ExtractedImage {
+        bytes: png,
+        ext: "png",
+    })
 }
 
 /// CCITTFaxDecode → grayscale PNG.
@@ -109,6 +160,33 @@ fn extract_xobject(pdf: &Pdf, dict: &Dict, raw: &[u8]) -> Result<ExtractedImage>
             .collect(),
         _ => Vec::new(),
     };
+
+    if filter_names.last().map(|n| n.as_slice()) == Some(b"JBIG2Decode") {
+        let mut bytes = pdf.decrypt_stream_pub(raw)?;
+        for f in &filter_names[..filter_names.len() - 1] {
+            if f.as_slice() == b"FlateDecode" {
+                bytes = super::own_pdf::inflate_pub(&bytes)?;
+            } else {
+                bail!("unsupported pre-JBIG2 filter");
+            }
+        }
+        // JBIG2Globals stream from DecodeParms, when present.
+        let globals: Option<Vec<u8>> = (|| {
+            let parms = match pdf.dict_get(dict, b"DecodeParms").ok()?? {
+                Val::Dict(d) => Some(d),
+                Val::Array(a) => a.iter().find_map(|v| match pdf.resolve(v) {
+                    Ok(Val::Dict(d)) => Some(d),
+                    _ => None,
+                }),
+                _ => None,
+            }?;
+            match pdf.dict_get(&parms, b"JBIG2Globals").ok()?? {
+                Val::Stream(gd, graw) => decode_stream(&gd, graw, pdf).ok(),
+                _ => None,
+            }
+        })();
+        return extract_jbig2(&bytes, globals.as_deref());
+    }
 
     if filter_names.last().map(|n| n.as_slice()) == Some(b"JPXDecode") {
         // A JPXDecode payload is a complete JP2/J2K codestream.
