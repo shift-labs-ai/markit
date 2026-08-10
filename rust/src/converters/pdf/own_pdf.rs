@@ -57,6 +57,8 @@ pub struct Pdf<'a> {
     pub trailer: Dict<'a>,
     /// Decompressed object streams, keyed by their object number.
     objstm_cache: RefCell<FxHashMap<u32, ObjStm>>,
+    /// AES-256 stream decryption (V5 standard handler), when active.
+    decrypt: Option<Decryptor>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -80,11 +82,26 @@ impl<'a> Pdf<'a> {
             xref: FxHashMap::default(),
             trailer: Vec::new(),
             objstm_cache: RefCell::new(FxHashMap::default()),
+            decrypt: None,
         };
         pdf.load_xref_chain(start)?;
-        if dget(&pdf.trailer, b"Encrypt").is_some() {
-            bail!("encrypted");
-        }
+        // Empty-password AES-256 documents decrypt transparently; anything
+        // else errors here and the caller falls back to MuPDF.
+        pdf.setup_decryption()?;
+        Ok(pdf)
+    }
+
+    /// Parse without rejecting encryption (decryption setup / probing).
+    pub fn parse_allow_encrypted(data: &'a [u8]) -> Result<Pdf<'a>> {
+        let start = find_startxref(data)?;
+        let mut pdf = Pdf {
+            data,
+            xref: FxHashMap::default(),
+            trailer: Vec::new(),
+            objstm_cache: RefCell::new(FxHashMap::default()),
+            decrypt: None,
+        };
+        pdf.load_xref_chain(start)?;
         Ok(pdf)
     }
 
@@ -329,6 +346,16 @@ fn find_startxref(data: &[u8]) -> Result<usize> {
 // ── Stream decoding ─────────────────────────────────────────────────────────
 
 pub fn decode_stream<'a>(dict: &Dict<'a>, raw: &[u8], pdf: &Pdf<'a>) -> Result<Vec<u8>> {
+    // Decryption applies to the raw bytes, before any filter. Streams
+    // reached before setup (the xref stream itself) are never encrypted.
+    let decrypted;
+    let raw: &[u8] = if pdf.decrypt.is_some() {
+        decrypted = pdf.decrypt_stream(raw)?;
+        &decrypted
+    } else {
+        raw
+    };
+
     let filter = pdf.dict_get(dict, b"Filter")?;
     let mut out = match filter {
         None => raw.to_vec(),
@@ -373,8 +400,97 @@ pub fn decode_stream<'a>(dict: &Dict<'a>, raw: &[u8], pdf: &Pdf<'a>) -> Result<V
 fn apply_filter(name: &[u8], data: &[u8]) -> Result<Vec<u8>> {
     match name {
         b"FlateDecode" | b"Fl" => inflate(data),
+        b"ASCIIHexDecode" | b"AHx" => {
+            let mut out = Vec::with_capacity(data.len() / 2);
+            let mut hi: Option<u8> = None;
+            for &b in data {
+                if b == b'>' {
+                    break;
+                }
+                let v = match b {
+                    b'0'..=b'9' => b - b'0',
+                    b'a'..=b'f' => b - b'a' + 10,
+                    b'A'..=b'F' => b - b'A' + 10,
+                    _ => continue,
+                };
+                match hi.take() {
+                    Some(h) => out.push((h << 4) | v),
+                    None => hi = Some(v),
+                }
+            }
+            if let Some(h) = hi {
+                out.push(h << 4);
+            }
+            Ok(out)
+        }
+        b"ASCII85Decode" | b"A85" => ascii85(data),
+        b"RunLengthDecode" | b"RL" => {
+            let mut out = Vec::with_capacity(data.len() * 2);
+            let mut i = 0usize;
+            while i < data.len() {
+                let l = data[i];
+                i += 1;
+                match l {
+                    0..=127 => {
+                        let n = l as usize + 1;
+                        if i + n > data.len() {
+                            break;
+                        }
+                        out.extend_from_slice(&data[i..i + n]);
+                        i += n;
+                    }
+                    128 => break, // EOD
+                    _ => {
+                        if i >= data.len() {
+                            break;
+                        }
+                        out.extend(std::iter::repeat_n(data[i], 257 - l as usize));
+                        i += 1;
+                    }
+                }
+            }
+            Ok(out)
+        }
         _ => bail!("unsupported filter {}", String::from_utf8_lossy(name)),
     }
+}
+
+fn ascii85(data: &[u8]) -> Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(data.len() * 4 / 5);
+    let mut group = [0u8; 5];
+    let mut n = 0usize;
+    let mut i = 0usize;
+    // optional <~ prefix
+    if data.starts_with(b"<~") {
+        i = 2;
+    }
+    while i < data.len() {
+        let b = data[i];
+        i += 1;
+        match b {
+            b'~' => break, // ~> EOD
+            b'z' if n == 0 => out.extend_from_slice(&[0, 0, 0, 0]),
+            b'!'..=b'u' => {
+                group[n] = b - b'!';
+                n += 1;
+                if n == 5 {
+                    let v = group.iter().fold(0u32, |a, &d| a * 85 + d as u32);
+                    out.extend_from_slice(&v.to_be_bytes());
+                    n = 0;
+                }
+            }
+            _ => {} // whitespace
+        }
+    }
+    if n > 0 {
+        // Partial group: pad with 'u' (84), emit n-1 bytes.
+        for g in group.iter_mut().skip(n) {
+            *g = 84;
+        }
+        let v = group.iter().fold(0u32, |a, &d| a * 85 + d as u32);
+        out.extend_from_slice(&v.to_be_bytes()[..n - 1]);
+    }
+    Ok(out)
 }
 
 fn inflate(data: &[u8]) -> Result<Vec<u8>> {
@@ -731,4 +847,219 @@ impl<'a> ObjLexer<'a> {
         let s = &self.data[start..self.pos];
         crate::converters::pdf::content_lex::fast_float_pub(s)
     }
+}
+
+/// Debug helper: describe a document's /Encrypt dictionary.
+pub fn probe_encrypt_dict(data: &[u8]) -> Result<String> {
+    let pdf = Pdf::parse_allow_encrypted(data)?;
+    let Some(enc) = dget(&pdf.trailer, b"Encrypt") else {
+        return Ok("not encrypted".into());
+    };
+    let Val::Dict(enc) = pdf.resolve(enc)? else {
+        bail!("bad Encrypt");
+    };
+    let mut out = String::new();
+    for (k, v) in &enc {
+        let vs = match pdf.resolve(v)? {
+            Val::Name(n) => String::from_utf8_lossy(n).into_owned(),
+            Val::Num(n) => n.to_string(),
+            Val::Str(s) => format!("<{} bytes>", s.len()),
+            Val::Dict(d) => {
+                let keys: Vec<String> = d
+                    .iter()
+                    .map(|(k, v)| {
+                        format!(
+                            "{}:{:?}",
+                            String::from_utf8_lossy(k),
+                            match v {
+                                Val::Dict(inner) => inner
+                                    .iter()
+                                    .map(|(ik, iv)| format!(
+                                        "{}={}",
+                                        String::from_utf8_lossy(ik),
+                                        match iv {
+                                            Val::Name(n) => String::from_utf8_lossy(n).into_owned(),
+                                            Val::Num(n) => n.to_string(),
+                                            _ => "?".into(),
+                                        }
+                                    ))
+                                    .collect::<Vec<_>>()
+                                    .join(","),
+                                _ => "?".to_string(),
+                            }
+                        )
+                    })
+                    .collect();
+                keys.join(" ")
+            }
+            other => format!("{other:?}"),
+        };
+        out.push_str(&format!("{} = {vs}\n", String::from_utf8_lossy(k)));
+    }
+    Ok(out)
+}
+
+// ── Standard security handler, V5 (AES-256, revisions 5 and 6) ─────────────
+//
+// Empty-password documents only (the common "encrypted for permissions"
+// case). Anything else — user passwords, RC4/AESV2 revisions — errors out
+// to the MuPDF fallback.
+
+pub(crate) struct Decryptor {
+    key: [u8; 32],
+}
+
+impl<'a> Pdf<'a> {
+    fn setup_decryption(&mut self) -> Result<()> {
+        let Some(enc) = dget(&self.trailer, b"Encrypt") else {
+            return Ok(());
+        };
+        let Val::Dict(enc) = self.resolve(enc)? else {
+            bail!("bad Encrypt");
+        };
+        let g = |key: &[u8]| -> Result<Option<Val<'a>>> { self.dict_get(&enc, key) };
+
+        if !matches!(g(b"Filter")?, Some(Val::Name(b"Standard"))) {
+            bail!("non-standard security handler");
+        }
+        let v = g(b"V")?.and_then(|v| v.as_num()).unwrap_or(0.0) as i64;
+        let r = g(b"R")?.and_then(|v| v.as_num()).unwrap_or(0.0) as i64;
+        if v != 5 || !(r == 5 || r == 6) {
+            bail!("unsupported encryption V={v} R={r}");
+        }
+        // Stream crypt filter must be AESV3 (or Identity = nothing to do).
+        match g(b"StmF")? {
+            None | Some(Val::Name(b"Identity")) => return Ok(()),
+            Some(Val::Name(b"StdCF")) => {}
+            _ => bail!("unsupported StmF"),
+        }
+        if let Some(Val::Dict(cf)) = g(b"CF")? {
+            if let Some(Val::Dict(stdcf)) = self.dict_get(&cf, b"StdCF")? {
+                match self.dict_get(&stdcf, b"CFM")? {
+                    Some(Val::Name(b"AESV3")) => {}
+                    other => bail!("unsupported CFM {other:?}"),
+                }
+            }
+        }
+
+        let get_str = |k: &[u8]| -> Result<Vec<u8>> {
+            match self.dict_get(&enc, k)? {
+                Some(Val::Str(s)) => Ok(s),
+                _ => bail!("missing {}", String::from_utf8_lossy(k)),
+            }
+        };
+        let u = get_str(b"U")?;
+        let ue = get_str(b"UE")?;
+        let o = get_str(b"O")?;
+        let oe = get_str(b"OE")?;
+        if u.len() < 48 || o.len() < 48 || ue.len() < 32 || oe.len() < 32 {
+            bail!("short U/O/UE/OE");
+        }
+
+        // Empty USER password (ISO 32000-2, 7.6.4.3.3/4).
+        if hash_2b(b"", &u[32..40], b"", r) == u[0..32] {
+            let ik = hash_2b(b"", &u[40..48], b"", r);
+            let key = aes256_cbc_nopad_decrypt(&ik, &[0u8; 16], &ue[..32])?;
+            self.decrypt = Some(Decryptor {
+                key: key.try_into().map_err(|_| anyhow!("bad UE"))?,
+            });
+            return Ok(());
+        }
+        // Empty OWNER password (uses U as extra hash data).
+        if hash_2b(b"", &o[32..40], &u[..48], r) == o[0..32] {
+            let ik = hash_2b(b"", &o[40..48], &u[..48], r);
+            let key = aes256_cbc_nopad_decrypt(&ik, &[0u8; 16], &oe[..32])?;
+            self.decrypt = Some(Decryptor {
+                key: key.try_into().map_err(|_| anyhow!("bad OE"))?,
+            });
+            return Ok(());
+        }
+        bail!("password required");
+    }
+
+    pub(crate) fn decrypt_stream(&self, raw: &[u8]) -> Result<Vec<u8>> {
+        let Some(d) = &self.decrypt else {
+            return Ok(raw.to_vec());
+        };
+        if raw.len() < 16 {
+            bail!("encrypted stream too short");
+        }
+        let mut out = aes256_cbc_nopad_decrypt(&d.key, &raw[..16], &raw[16..])?;
+        // PKCS#7 unpadding (tolerant: some producers pad wrong).
+        if let Some(&pad) = out.last() {
+            if pad >= 1 && pad as usize <= 16 && pad as usize <= out.len() {
+                let n = out.len() - pad as usize;
+                if out[n..].iter().all(|&b| b == pad) {
+                    out.truncate(n);
+                }
+            }
+        }
+        Ok(out)
+    }
+}
+
+/// ISO 32000-2 Algorithm 2.B (revision 6 hardened hash; revision 5 is a
+/// single SHA-256).
+fn hash_2b(pw: &[u8], salt: &[u8], udata: &[u8], r: i64) -> [u8; 32] {
+    use sha2::{Digest, Sha256, Sha384, Sha512};
+
+    let mut k: Vec<u8> = {
+        let mut h = Sha256::new();
+        h.update(pw);
+        h.update(salt);
+        h.update(udata);
+        h.finalize().to_vec()
+    };
+    if r == 5 {
+        return k[..32].try_into().unwrap();
+    }
+
+    let mut round = 0usize;
+    loop {
+        // K1 = (pw ‖ K ‖ udata) × 64
+        let unit_len = pw.len() + k.len() + udata.len();
+        let mut k1 = Vec::with_capacity(unit_len * 64);
+        for _ in 0..64 {
+            k1.extend_from_slice(pw);
+            k1.extend_from_slice(&k);
+            k1.extend_from_slice(udata);
+        }
+        let e = aes128_cbc_nopad_encrypt(&k[..16], &k[16..32], &k1);
+        let sum: u32 = e[..16].iter().map(|&b| b as u32).sum();
+        k = match sum % 3 {
+            0 => Sha256::digest(&e).to_vec(),
+            1 => Sha384::digest(&e).to_vec(),
+            _ => Sha512::digest(&e).to_vec(),
+        };
+        round += 1;
+        if round >= 64 && (*e.last().unwrap() as usize) <= round - 32 {
+            break;
+        }
+    }
+    k[..32].try_into().unwrap()
+}
+
+fn aes128_cbc_nopad_encrypt(key: &[u8], iv: &[u8], data: &[u8]) -> Vec<u8> {
+    use aes::cipher::{BlockEncryptMut, KeyIvInit};
+    type Enc = cbc::Encryptor<aes::Aes128>;
+    let mut buf = data.to_vec();
+    let mut enc = Enc::new(key.into(), iv.into());
+    for chunk in buf.chunks_exact_mut(16) {
+        enc.encrypt_block_mut(chunk.into());
+    }
+    buf
+}
+
+fn aes256_cbc_nopad_decrypt(key: &[u8], iv: &[u8], data: &[u8]) -> Result<Vec<u8>> {
+    use aes::cipher::{BlockDecryptMut, KeyIvInit};
+    type Dec = cbc::Decryptor<aes::Aes256>;
+    if !data.len().is_multiple_of(16) {
+        bail!("ciphertext not block-aligned");
+    }
+    let mut buf = data.to_vec();
+    let mut dec = Dec::new(key.into(), iv.into());
+    for chunk in buf.chunks_exact_mut(16) {
+        dec.decrypt_block_mut(chunk.into());
+    }
+    Ok(buf)
 }

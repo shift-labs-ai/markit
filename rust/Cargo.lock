@@ -1065,7 +1065,9 @@ dependencies = [
 name = "markit"
 version = "0.5.3"
 dependencies = [
+ "aes 0.8.4",
  "anyhow",
+ "cbc",
  "clap",
  "ego-tree",
  "flate2",
@@ -1083,6 +1085,7 @@ dependencies = [
  "scraper",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "ureq",
  "zip",
 ]

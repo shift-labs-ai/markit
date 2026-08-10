@@ -6,7 +6,9 @@ description = "Convert anything to markdown."
 license = "MIT"
 
 [dependencies]
+aes = "0.8"
 anyhow = "1"
+cbc = "0.1"
 clap = { version = "4", features = ["derive"] }
 ego-tree = "0.11"
 # Not used directly: pins zip's flate2 to the zlib-rs backend, the fastest
@@ -30,6 +32,7 @@ rustc-hash = "2"
 scraper = { version = "0.27.0", features = ["deterministic"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
 ureq = "3.4.0"
 zip = "8.6.0"
 
