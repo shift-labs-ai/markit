@@ -72,6 +72,11 @@ pub fn onboard(options: &OutputOptions) {
             })
         },
         None::<fn()>,
-        || success(&format!("Added markit instructions to {}", target_file.display())),
+        || {
+            success(&format!(
+                "Added markit instructions to {}",
+                target_file.display()
+            ))
+        },
     );
 }

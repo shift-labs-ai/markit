@@ -117,10 +117,7 @@ pub fn load_all_plugins() -> Result<Vec<Box<dyn crate::types::Converter>>> {
                 }
             }
             Err(e) => {
-                eprintln!(
-                    "Warning: failed to load plugin at {}: {}",
-                    plugin_path, e
-                );
+                eprintln!("Warning: failed to load plugin at {}: {}", plugin_path, e);
             }
         }
     }
@@ -172,11 +169,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         let markit_dir = tmp.join(".markit");
         std::fs::create_dir_all(&markit_dir).unwrap();
-        std::fs::write(
-            markit_dir.join("plugins.json"),
-            r#"{"plugins":[]}"#,
-        )
-        .unwrap();
+        std::fs::write(markit_dir.join("plugins.json"), r#"{"plugins":[]}"#).unwrap();
 
         let original = std::env::current_dir().unwrap();
         std::env::set_current_dir(&tmp).unwrap();
@@ -239,11 +232,7 @@ mod tests {
         let main_file = tmp.join("dist").join("main.js");
         std::fs::create_dir_all(tmp.join("dist")).unwrap();
         std::fs::write(&main_file, "module.exports = {}").unwrap();
-        std::fs::write(
-            tmp.join("package.json"),
-            r#"{"main": "dist/main.js"}"#,
-        )
-        .unwrap();
+        std::fs::write(tmp.join("package.json"), r#"{"main": "dist/main.js"}"#).unwrap();
 
         let result = find_entry_point(&tmp);
         assert_eq!(result, Some(main_file));

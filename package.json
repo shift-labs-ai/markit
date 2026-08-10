@@ -29,8 +29,12 @@
     "build:bun-mac-x64": "bun build --compile --target=bun-darwin-x64 src/main.ts --outfile mill-darwin-x64",
     "test": "bun test",
     "format": "bunx biome format --write src/",
+    "format:rust": "cd rust && cargo fmt",
     "lint": "bunx biome lint src/",
-    "check": "bunx biome check src/"
+    "lint:rust": "cd rust && cargo clippy",
+    "check": "bunx biome check src/",
+    "check:rust": "cd rust && cargo fmt --check && cargo clippy -- -D warnings",
+    "check:all": "npm run check && npm run check:rust"
   },
   "repository": {
     "type": "git",

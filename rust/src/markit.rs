@@ -39,24 +39,14 @@ pub struct HttpResponse {
 
 /// Injectable HTTP interface so tests never hit the network.
 pub trait HttpFetch: Send + Sync {
-    fn request(
-        &self,
-        method: &str,
-        url: &str,
-        headers: &[(&str, &str)],
-    ) -> Result<HttpResponse>;
+    fn request(&self, method: &str, url: &str, headers: &[(&str, &str)]) -> Result<HttpResponse>;
 }
 
 /// Default ureq-backed fetcher.
 pub struct UreqFetcher;
 
 impl HttpFetch for UreqFetcher {
-    fn request(
-        &self,
-        method: &str,
-        url: &str,
-        headers: &[(&str, &str)],
-    ) -> Result<HttpResponse> {
+    fn request(&self, method: &str, url: &str, headers: &[(&str, &str)]) -> Result<HttpResponse> {
         // We only need GET and HEAD for URL conversion.
         // POST has a different type (WithBody) — not needed here.
         let mut builder = if method == "HEAD" {
@@ -133,13 +123,12 @@ impl Markit {
             Box::new(AudioConverter),
         ];
 
-        let generic: Vec<Box<dyn Converter>> = vec![
-            Box::new(XmlConverter),
-            Box::new(HtmlConverter),
-        ];
+        let generic: Vec<Box<dyn Converter>> =
+            vec![Box::new(XmlConverter), Box::new(HtmlConverter)];
 
         // Build zip parent list from fresh builtin instances
         // (plugins would need a factory pattern to duplicate into zip's list)
+        #[allow(clippy::arc_with_non_send_sync)] // single-threaded; Arc only for shared ownership
         let zip_parent_converters: Arc<Vec<Box<dyn Converter>>> = Arc::new(vec![
             Box::new(PdfConverter),
             Box::new(DocxConverter),
@@ -178,6 +167,7 @@ impl Markit {
     }
 
     /// Convert a local file to markdown.
+    #[allow(dead_code)] // Library-API parity with TS Markit.convertFile(path)
     pub fn convert_file(&self, path: &str) -> Result<ConversionResult> {
         self.convert_file_with(path, StreamInfo::default())
     }
@@ -229,21 +219,25 @@ impl Markit {
             "GET",
             url,
             &[
-                ("Accept", "text/markdown, text/html;q=0.9, text/plain;q=0.8, */*;q=0.1"),
+                (
+                    "Accept",
+                    "text/markdown, text/html;q=0.9, text/plain;q=0.8, */*;q=0.1",
+                ),
                 ("User-Agent", USER_AGENT),
             ],
         )?;
 
         if !response.ok {
-            return Err(anyhow!(
-                "Failed to fetch {}: {}",
-                url,
-                response.status
-            ));
+            return Err(anyhow!("Failed to fetch {}: {}", url, response.status));
         }
 
         let content_type = &response.content_type;
-        let mimetype = content_type.split(';').next().unwrap_or("").trim().to_string();
+        let mimetype = content_type
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
         let url_path = extract_path(url);
         let ext = path_extname(&url_path);
 
@@ -256,7 +250,11 @@ impl Markit {
                     url: Some(url.to_string()),
                     mimetype: Some("text/markdown".to_string()),
                     extension: Some(".md".to_string()),
-                    filename: if filename.is_empty() { None } else { Some(filename) },
+                    filename: if filename.is_empty() {
+                        None
+                    } else {
+                        Some(filename)
+                    },
                     ..Default::default()
                 },
             );
@@ -274,9 +272,17 @@ impl Markit {
             &response.body,
             &StreamInfo {
                 url: Some(url.to_string()),
-                mimetype: if mimetype.is_empty() { None } else { Some(mimetype) },
+                mimetype: if mimetype.is_empty() {
+                    None
+                } else {
+                    Some(mimetype)
+                },
                 extension: if ext.is_empty() { None } else { Some(ext) },
-                filename: if filename.is_empty() { None } else { Some(filename) },
+                filename: if filename.is_empty() {
+                    None
+                } else {
+                    Some(filename)
+                },
                 ..Default::default()
             },
         )
@@ -294,12 +300,7 @@ impl Markit {
             return None;
         }
 
-        let ct = response
-            .content_type
-            .split(';')
-            .next()
-            .unwrap_or("")
-            .trim();
+        let ct = response.content_type.split(';').next().unwrap_or("").trim();
         if !ct.contains("markdown") && !ct.contains("text/plain") && !ct.contains("text/html") {
             return None;
         }
@@ -343,12 +344,7 @@ impl Markit {
             return None;
         }
 
-        let ct = response
-            .content_type
-            .split(';')
-            .next()
-            .unwrap_or("")
-            .trim();
+        let ct = response.content_type.split(';').next().unwrap_or("").trim();
         if !ct.contains("markdown") && !ct.contains("text/plain") {
             return None;
         }
@@ -421,9 +417,7 @@ fn extract_origin(url: &str) -> Option<String> {
     let (host_and_path, _) = after_scheme.split_once('?').unwrap_or((after_scheme, ""));
     let (host_and_path, _) = host_and_path.split_once('#').unwrap_or((host_and_path, ""));
 
-    let (host, path) = host_and_path
-        .split_once('/')
-        .unwrap_or((host_and_path, ""));
+    let (host, path) = host_and_path.split_once('/').unwrap_or((host_and_path, ""));
 
     // Only for root URLs
     if !path.is_empty() && path != "/" {
@@ -462,10 +456,7 @@ fn path_extname(path: &str) -> String {
 
 /// Get basename from a path (e.g., "/foo/bar.html" -> "bar.html").
 fn path_basename(path: &str) -> String {
-    path.rsplit('/')
-        .next()
-        .unwrap_or("")
-        .to_string()
+    path.rsplit('/').next().unwrap_or("").to_string()
 }
 
 #[cfg(test)]
@@ -606,7 +597,8 @@ mod tests {
             url_prefix: "https://custom.example.com/".to_string(),
             result_markdown: "# Hook Result
 
-Handled by converter hook.".to_string(),
+Handled by converter hook."
+                .to_string(),
         };
 
         let mock_http = MockHttp::new();
@@ -652,13 +644,7 @@ Handled by converter hook.".to_string(),
     #[test]
     fn convert_url_skips_llms_txt_when_head_returns_404() {
         let mut mock = MockHttp::new();
-        mock.add(
-            "HEAD",
-            "https://example.com/llms.txt",
-            404,
-            "",
-            "",
-        );
+        mock.add("HEAD", "https://example.com/llms.txt", 404, "", "");
         // Falls through to fetching the URL itself
         mock.add(
             "GET",
@@ -739,7 +725,9 @@ Handled by converter hook.".to_string(),
         mock.add("GET", "https://example.com/missing", 404, "", "");
 
         let markit = make_markit(mock);
-        let err = markit.convert_url("https://example.com/missing").unwrap_err();
+        let err = markit
+            .convert_url("https://example.com/missing")
+            .unwrap_err();
         assert!(err.to_string().contains("Failed to fetch"));
         assert!(err.to_string().contains("404"));
     }
@@ -769,9 +757,7 @@ Handled by converter hook.".to_string(),
         );
 
         let markit = make_markit(mock);
-        let result = markit
-            .convert_url("https://blog.example.com/post")
-            .unwrap();
+        let result = markit.convert_url("https://blog.example.com/post").unwrap();
         assert!(result.markdown.contains("Original markdown content"));
     }
 
@@ -809,13 +795,7 @@ Handled by converter hook.".to_string(),
         let html = r#"<html><body><h1>Regular Page</h1><p>No markdown source.</p></body></html>"#;
 
         let mut mock = MockHttp::new();
-        mock.add(
-            "GET",
-            "https://example.com/page",
-            200,
-            "text/html",
-            html,
-        );
+        mock.add("GET", "https://example.com/page", 200, "text/html", html);
 
         let markit = make_markit(mock);
         let result = markit.convert_url("https://example.com/page").unwrap();
@@ -829,13 +809,7 @@ Handled by converter hook.".to_string(),
         </head><body><h1>Post</h1></body></html>"#;
 
         let mut mock = MockHttp::new();
-        mock.add(
-            "GET",
-            "https://example.com/post",
-            200,
-            "text/html",
-            html,
-        );
+        mock.add("GET", "https://example.com/post", 200, "text/html", html);
         // The .md URL returns HTML (wrong content type)
         mock.add(
             "GET",
@@ -858,20 +832,8 @@ Handled by converter hook.".to_string(),
         </head><body><h1>Page</h1></body></html>"#;
 
         let mut mock = MockHttp::new();
-        mock.add(
-            "GET",
-            "https://example.com/page",
-            200,
-            "text/html",
-            html,
-        );
-        mock.add(
-            "GET",
-            "https://example.com/missing.md",
-            404,
-            "",
-            "",
-        );
+        mock.add("GET", "https://example.com/page", 200, "text/html", html);
+        mock.add("GET", "https://example.com/missing.md", 404, "", "");
 
         let markit = make_markit(mock);
         let result = markit.convert_url("https://example.com/page").unwrap();

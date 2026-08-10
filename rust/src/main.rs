@@ -12,10 +12,10 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+use crate::commands::config::{config_get, config_set, config_show};
 use crate::commands::convert::{convert, ConvertOptions};
 use crate::commands::formats::formats;
 use crate::commands::init::init;
-use crate::commands::config::{config_get, config_set, config_show};
 use crate::commands::onboard::onboard;
 use crate::utils::output::{error, OutputOptions};
 
@@ -242,9 +242,7 @@ fn main() -> ExitCode {
             match action {
                 ConfigAction::Show => config_show(&opts),
                 ConfigAction::Get { key } => config_get(&key, &opts),
-                ConfigAction::Set { key, value } => {
-                    config_set(&key, value.as_deref(), &opts)
-                }
+                ConfigAction::Set { key, value } => config_set(&key, value.as_deref(), &opts),
             }
             ExitCode::SUCCESS
         }
@@ -256,9 +254,7 @@ fn main() -> ExitCode {
                 PluginAction::Remove { name } => {
                     crate::commands::plugin::remove(&name, cli.json, cli.quiet)
                 }
-                PluginAction::List => {
-                    crate::commands::plugin::list(cli.json, cli.quiet)
-                }
+                PluginAction::List => crate::commands::plugin::list(cli.json, cli.quiet),
             };
             match result {
                 Ok(()) => ExitCode::SUCCESS,
@@ -276,7 +272,10 @@ fn main() -> ExitCode {
             onboard(&opts);
             ExitCode::SUCCESS
         }
-        Some(Commands::Convert { source, output: out_override }) => {
+        Some(Commands::Convert {
+            source,
+            output: out_override,
+        }) => {
             let code = convert(
                 &source,
                 &ConvertOptions {

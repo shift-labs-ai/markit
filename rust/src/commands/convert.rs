@@ -2,7 +2,7 @@ use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
 
 use crate::markit::Markit;
-use crate::types::{MarkitOptions, StreamInfo};
+use crate::types::StreamInfo;
 use crate::utils::output::{dim, error, output, success, write_stdout, OutputOptions};
 
 const EXIT_ERROR: u8 = 1;
@@ -159,7 +159,10 @@ pub fn convert(source: &str, opts: &ConvertOptions) -> u8 {
                     None::<fn()>,
                     || {
                         error(&msg);
-                        println!("{}", dim("  Run 'markit formats' to see supported formats."));
+                        println!(
+                            "{}",
+                            dim("  Run 'markit formats' to see supported formats.")
+                        );
                     },
                 );
                 return EXIT_UNSUPPORTED;

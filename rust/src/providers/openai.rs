@@ -88,12 +88,21 @@ pub struct OpenAiProvider {
 impl OpenAiProvider {
     /// Create with the production ureq HTTP client.
     pub fn new(config: ResolvedConfig, prompt: String) -> Self {
-        Self { config, prompt, http: Arc::new(UreqHttpClient) }
+        Self {
+            config,
+            prompt,
+            http: Arc::new(UreqHttpClient),
+        }
     }
 
     /// Create with an injectable HTTP client (for tests).
+    #[cfg(test)]
     pub fn with_http(config: ResolvedConfig, prompt: String, http: Arc<dyn HttpPost>) -> Self {
-        Self { config, prompt, http }
+        Self {
+            config,
+            prompt,
+            http,
+        }
     }
 
     /// Build the JSON body for the chat completions endpoint.
@@ -178,11 +187,16 @@ impl OpenAiProvider {
         let url = format!("{}/audio/transcriptions", self.config.api_base);
         let headers = vec![("Authorization", format!("Bearer {}", self.config.api_key))];
 
-        let res =
-            self.http.post_multipart(&url, headers, &content_type, multipart_body)?;
+        let res = self
+            .http
+            .post_multipart(&url, headers, &content_type, multipart_body)?;
 
         if !res.ok {
-            return Err(anyhow!("Transcription API error {}: {}", res.status, res.body));
+            return Err(anyhow!(
+                "Transcription API error {}: {}",
+                res.status,
+                res.body
+            ));
         }
 
         let data: Value = serde_json::from_str(&res.body)
@@ -210,8 +224,8 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Mutex;
 
-    use super::*;
     use super::super::types::HttpPostResponse;
+    use super::*;
 
     // ── Mock HTTP client ────────────────────────────────────────────────────
 
@@ -219,8 +233,8 @@ mod tests {
     struct MockHttpPost {
         json_responses: Mutex<HashMap<String, (u16, String)>>,
         multipart_responses: Mutex<HashMap<String, (u16, String)>>,
-        json_calls: Mutex<Vec<(String, String)>>,         // (url, body)
-        multipart_calls: Mutex<Vec<(String, Vec<u8>)>>,  // (url, body)
+        json_calls: Mutex<Vec<(String, String)>>, // (url, body)
+        multipart_calls: Mutex<Vec<(String, Vec<u8>)>>, // (url, body)
     }
 
     impl MockHttpPost {
@@ -260,7 +274,11 @@ mod tests {
                 .push((url.to_string(), body.to_string()));
             let responses = self.json_responses.lock().unwrap();
             if let Some((status, resp)) = responses.get(url) {
-                Ok(HttpPostResponse { status: *status, ok: *status < 400, body: resp.clone() })
+                Ok(HttpPostResponse {
+                    status: *status,
+                    ok: *status < 400,
+                    body: resp.clone(),
+                })
             } else {
                 Err(anyhow!("MockHttpPost: no json response for {url}"))
             }
@@ -279,7 +297,11 @@ mod tests {
                 .push((url.to_string(), body));
             let responses = self.multipart_responses.lock().unwrap();
             if let Some((status, resp)) = responses.get(url) {
-                Ok(HttpPostResponse { status: *status, ok: *status < 400, body: resp.clone() })
+                Ok(HttpPostResponse {
+                    status: *status,
+                    ok: *status < 400,
+                    body: resp.clone(),
+                })
             } else {
                 Err(anyhow!("MockHttpPost: no multipart response for {url}"))
             }
@@ -351,8 +373,9 @@ mod tests {
         assert!(url.starts_with("data:image/png;base64,"), "url: {url}");
         // Verify the base64 roundtrips
         let b64_part = url.strip_prefix("data:image/png;base64,").unwrap();
-        let decoded =
-            base64::engine::general_purpose::STANDARD.decode(b64_part).unwrap();
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(b64_part)
+            .unwrap();
         assert_eq!(decoded, image);
     }
 
@@ -399,7 +422,10 @@ mod tests {
         let mp = provider.build_transcribe_multipart(audio, "audio/mpeg", boundary);
         let text = String::from_utf8_lossy(&mp);
         assert!(text.contains("name=\"file\""), "should have file field");
-        assert!(text.contains("filename=\"audio.mp3\""), "should have .mp3 extension");
+        assert!(
+            text.contains("filename=\"audio.mp3\""),
+            "should have .mp3 extension"
+        );
         assert!(text.contains("Content-Type: audio/mpeg"));
     }
 
@@ -407,8 +433,7 @@ mod tests {
     fn transcribe_multipart_uses_correct_extension_for_wav() {
         let mock = Arc::new(MockHttpPost::default());
         let provider = make_provider(mock);
-        let mp =
-            provider.build_transcribe_multipart(b"wav data", "audio/wav", "boundary-abc");
+        let mp = provider.build_transcribe_multipart(b"wav data", "audio/wav", "boundary-abc");
         let text = String::from_utf8_lossy(&mp);
         assert!(text.contains("filename=\"audio.wav\""));
     }
@@ -442,7 +467,10 @@ mod tests {
 
     #[test]
     fn transcribe_falls_back_to_default_transcription_model_when_none() {
-        let config = ResolvedConfig { transcription_model: None, ..make_config() };
+        let config = ResolvedConfig {
+            transcription_model: None,
+            ..make_config()
+        };
         let provider = OpenAiProvider::with_http(
             config,
             "prompt".to_string(),
@@ -479,7 +507,11 @@ mod tests {
     #[test]
     fn describe_errors_on_non_2xx() {
         let mock = Arc::new(MockHttpPost::default());
-        mock.add_json("https://api.openai.com/v1/chat/completions", 401, "Unauthorized");
+        mock.add_json(
+            "https://api.openai.com/v1/chat/completions",
+            401,
+            "Unauthorized",
+        );
         let provider = make_provider(Arc::clone(&mock));
         let err = provider.describe(b"img", "image/png").unwrap_err();
         assert!(

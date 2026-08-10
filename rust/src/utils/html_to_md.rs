@@ -43,7 +43,6 @@ pub fn html_to_markdown(html: &str) -> String {
     post_process(&output)
 }
 
-
 /// Normalize HTML tables so the table converter can handle them:
 /// - Strip <p> tags inside <td>/<th> cells (join multiple paragraphs with space)
 /// - Promote first row to <thead>/<th> when <thead> is missing
@@ -78,7 +77,6 @@ pub fn normalize_tables_html(html: &str) -> String {
     step2.into_owned()
 }
 
-
 // ============================== collapseWhitespace pre-pass ==============================
 // Exact port of turndown's collapseWhitespace (collapse-whitespace package):
 // a single document-order traversal carrying prevText/keepLeadingWs state.
@@ -89,12 +87,55 @@ pub fn normalize_tables_html(html: &str) -> String {
 fn td_is_block(tag: &str) -> bool {
     matches!(
         tag,
-        "address" | "article" | "aside" | "audio" | "blockquote" | "body" | "canvas"
-            | "center" | "dd" | "dir" | "div" | "dl" | "dt" | "fieldset" | "figcaption"
-            | "figure" | "footer" | "form" | "frameset" | "h1" | "h2" | "h3" | "h4" | "h5"
-            | "h6" | "header" | "hgroup" | "hr" | "html" | "isindex" | "li" | "main" | "menu"
-            | "nav" | "noframes" | "noscript" | "ol" | "output" | "p" | "pre" | "section"
-            | "table" | "tbody" | "td" | "tfoot" | "th" | "thead" | "tr" | "ul"
+        "address"
+            | "article"
+            | "aside"
+            | "audio"
+            | "blockquote"
+            | "body"
+            | "canvas"
+            | "center"
+            | "dd"
+            | "dir"
+            | "div"
+            | "dl"
+            | "dt"
+            | "fieldset"
+            | "figcaption"
+            | "figure"
+            | "footer"
+            | "form"
+            | "frameset"
+            | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+            | "header"
+            | "hgroup"
+            | "hr"
+            | "html"
+            | "isindex"
+            | "li"
+            | "main"
+            | "menu"
+            | "nav"
+            | "noframes"
+            | "noscript"
+            | "ol"
+            | "output"
+            | "p"
+            | "pre"
+            | "section"
+            | "table"
+            | "tbody"
+            | "td"
+            | "tfoot"
+            | "th"
+            | "thead"
+            | "tr"
+            | "ul"
     )
 }
 
@@ -102,8 +143,22 @@ fn td_is_block(tag: &str) -> bool {
 fn td_is_void(tag: &str) -> bool {
     matches!(
         tag,
-        "area" | "base" | "br" | "col" | "command" | "embed" | "hr" | "img" | "input"
-            | "keygen" | "link" | "meta" | "param" | "source" | "track" | "wbr"
+        "area"
+            | "base"
+            | "br"
+            | "col"
+            | "command"
+            | "embed"
+            | "hr"
+            | "img"
+            | "input"
+            | "keygen"
+            | "link"
+            | "meta"
+            | "param"
+            | "source"
+            | "track"
+            | "wbr"
     )
 }
 
@@ -486,8 +541,8 @@ fn trim_leading_newlines(s: &str) -> &str {
 
 fn post_process(output: &str) -> String {
     let s = output
-        .trim_start_matches(|c: char| c == '\t' || c == '\r' || c == '\n')
-        .trim_end_matches(|c: char| c == '\t' || c == '\r' || c == '\n' || c == ' ');
+        .trim_start_matches(['\t', '\r', '\n'])
+        .trim_end_matches(['\t', '\r', '\n', ' ']);
     s.to_string()
 }
 
@@ -516,8 +571,16 @@ fn is_blank_node(el: ElementRef, ctx: &Ctx) -> bool {
 fn is_meaningful_when_blank(tag: &str) -> bool {
     matches!(
         tag,
-        "a" | "table" | "thead" | "tbody" | "tfoot" | "th" | "td"
-            | "iframe" | "script" | "audio" | "video"
+        "a" | "table"
+            | "thead"
+            | "tbody"
+            | "tfoot"
+            | "th"
+            | "td"
+            | "iframe"
+            | "script"
+            | "audio"
+            | "video"
     )
 }
 
@@ -628,7 +691,11 @@ fn is_flanked_by_whitespace(el: ElementRef, ctx: &Ctx, right: bool) -> bool {
         if !is_removed_node(&s, ctx) {
             break;
         }
-        sibling = if right { s.next_sibling() } else { s.prev_sibling() };
+        sibling = if right {
+            s.next_sibling()
+        } else {
+            s.prev_sibling()
+        };
     }
     let Some(s) = sibling else { return false };
     match s.value() {
@@ -644,7 +711,9 @@ fn is_flanked_by_whitespace(el: ElementRef, ctx: &Ctx, right: bool) -> bool {
             if td_is_block(&e.name().to_lowercase()) {
                 return false;
             }
-            let Some(se) = ElementRef::wrap(s) else { return false };
+            let Some(se) = ElementRef::wrap(s) else {
+                return false;
+            };
             let text = collapsed_text_content(se, ctx);
             if right {
                 text.starts_with(' ')
@@ -718,7 +787,11 @@ fn rule_img(el: ElementRef) -> String {
 fn rule_code(content: String, el: ElementRef, ctx: &Ctx) -> String {
     let is_code_block = el
         .parent()
-        .and_then(|p| p.value().as_element().map(|e| e.name().eq_ignore_ascii_case("pre")))
+        .and_then(|p| {
+            p.value()
+                .as_element()
+                .map(|e| e.name().eq_ignore_ascii_case("pre"))
+        })
         .unwrap_or(false)
         && !has_real_sibling(el, ctx);
     if is_code_block {
@@ -739,7 +812,10 @@ fn rule_code(content: String, el: ElementRef, ctx: &Ctx) -> String {
     };
     let mut delimiter = "`".to_string();
     let backtick_re = Regex::new(r"`+").unwrap();
-    let matches: Vec<&str> = backtick_re.find_iter(&content).map(|m| m.as_str()).collect();
+    let matches: Vec<&str> = backtick_re
+        .find_iter(&content)
+        .map(|m| m.as_str())
+        .collect();
     while matches.contains(&delimiter.as_str()) {
         delimiter.push('`');
     }
@@ -776,7 +852,11 @@ fn rule_pre(content: String, el: ElementRef) -> String {
     let first_child_code = el
         .children()
         .next()
-        .and_then(|c| c.value().as_element().map(|e| e.name().eq_ignore_ascii_case("code")))
+        .and_then(|c| {
+            c.value()
+                .as_element()
+                .map(|e| e.name().eq_ignore_ascii_case("code"))
+        })
         .unwrap_or(false);
 
     if first_child_code {
@@ -981,7 +1061,9 @@ fn table_rows<'a>(table: ElementRef<'a>, ctx: &Ctx) -> Vec<ElementRef<'a>> {
     let mut foot: Vec<ElementRef> = Vec::new();
     for child in child_nodes(table, ctx) {
         let Some(tag) = tag_of(&child) else { continue };
-        let Some(el) = ElementRef::wrap(child) else { continue };
+        let Some(el) = ElementRef::wrap(child) else {
+            continue;
+        };
         match tag.as_str() {
             "thead" => {
                 for c in child_nodes(el, ctx) {
@@ -1044,7 +1126,7 @@ fn is_heading_row(tr: ElementRef, ctx: &Ctx) -> bool {
     let Some(parent) = tr.parent().and_then(ElementRef::wrap) else {
         return false;
     };
-    let parent_tag = tag_of(&*parent).unwrap_or_default();
+    let parent_tag = tag_of(&parent).unwrap_or_default();
     if parent_tag == "thead" {
         return true;
     }
@@ -1086,7 +1168,9 @@ fn rule_tr(content: String, el: ElementRef, ctx: &Ctx) -> String {
     let mut border_cells = String::new();
     if is_heading_row(el, ctx) {
         for child in child_nodes(el, ctx) {
-            let Some(cell_el) = ElementRef::wrap(child) else { continue };
+            let Some(cell_el) = ElementRef::wrap(child) else {
+                continue;
+            };
             let align = cell_el
                 .value()
                 .attr("align")
@@ -1189,23 +1273,6 @@ fn serialize_node(node: ego_tree::NodeRef<Node>, ctx: &Ctx, out: &mut String, in
 }
 
 // ============================== Helpers ==============================
-
-fn collapse_whitespace(text: &str) -> String {
-    let mut result = String::with_capacity(text.len());
-    let mut last_was_ws = false;
-    for ch in text.chars() {
-        if ch.is_ascii_whitespace() {
-            if !last_was_ws {
-                result.push(' ');
-                last_was_ws = true;
-            }
-        } else {
-            result.push(ch);
-            last_was_ws = false;
-        }
-    }
-    result
-}
 
 /// turndown's escapes array, applied in order. `^` anchors are per-text-node
 /// string starts (no multiline flag in turndown).
@@ -1507,10 +1574,13 @@ Content"
     #[test]
     fn test_link_in_table_cell() {
         let html = normalize_tables_html(
-            r#"<table><tr><td><a href="https://example.com" title="Ex">Paradigms</a></td><td>val</td></tr></table>"#
+            r#"<table><tr><td><a href="https://example.com" title="Ex">Paradigms</a></td><td>val</td></tr></table>"#,
         );
         let result = html_to_markdown(&html);
-        assert!(result.contains(r#"[Paradigms](https://example.com "Ex")"#), "got: {result}");
+        assert!(
+            result.contains(r#"[Paradigms](https://example.com "Ex")"#),
+            "got: {result}"
+        );
     }
 
     #[test]
@@ -1523,17 +1593,18 @@ Content"
     #[test]
     fn test_footnote_brackets_escaped() {
         let html = r##"<a href="#cite"><span class="cite-bracket">[</span>1<span class="cite-bracket">]</span></a>"##;
-        assert_eq!(
-            html_to_markdown(html),
-            "[\\[1\\]](#cite)"
-        );
+        assert_eq!(html_to_markdown(html), "[\\[1\\]](#cite)");
     }
 
     #[test]
     fn test_div_inside_link() {
         let html = r##"<a href="#"><div>Top</div></a>"##;
         let result = html_to_markdown(html);
-        assert!(!result.contains("\t"), "Output should not contain tabs: {:?}", result);
+        assert!(
+            !result.contains("\t"),
+            "Output should not contain tabs: {:?}",
+            result
+        );
         assert!(result.contains("["), "Should contain link: {:?}", result);
     }
 
@@ -1541,7 +1612,9 @@ Content"
     fn test_pre_without_code_escapes() {
         let html = r#"<pre><span>let x = 10;</span></pre>"#;
         let result = html_to_markdown(html);
-        assert!(result.contains(r"="), "Expected escaped = in pre without code, got: {result}");
+        assert!(
+            result.contains(r"="),
+            "Expected escaped = in pre without code, got: {result}"
+        );
     }
-
 }

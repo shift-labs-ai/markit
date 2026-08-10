@@ -60,10 +60,7 @@ impl Converter for IpynbConverter {
 
         for cell in cells {
             let cell_type = cell.get("cell_type").and_then(Value::as_str).unwrap_or("");
-            let source = cell
-                .get("source")
-                .map(join_source)
-                .unwrap_or_default();
+            let source = cell.get("source").map(join_source).unwrap_or_default();
 
             if cell_type == "markdown" {
                 // Extract first H1 heading as title
@@ -96,12 +93,11 @@ impl Converter for IpynbConverter {
                 // Include text outputs
                 let mut outputs: Vec<String> = Vec::new();
                 let empty_arr = Value::Array(vec![]);
-                let cell_outputs = cell
-                    .get("outputs")
-                    .unwrap_or(&empty_arr);
+                let cell_outputs = cell.get("outputs").unwrap_or(&empty_arr);
                 if let Value::Array(cell_outputs) = cell_outputs {
                     for out in cell_outputs {
-                        let output_type = out.get("output_type").and_then(Value::as_str).unwrap_or("");
+                        let output_type =
+                            out.get("output_type").and_then(Value::as_str).unwrap_or("");
                         if output_type == "stream" {
                             let t = out.get("text").map(join_text).unwrap_or_default();
                             let t = t.trim().to_string();
@@ -131,7 +127,8 @@ impl Converter for IpynbConverter {
                                 .unwrap_or_default();
                             if !tb.trim().is_empty() {
                                 let ename = out.get("ename").and_then(Value::as_str).unwrap_or("");
-                                let evalue = out.get("evalue").and_then(Value::as_str).unwrap_or("");
+                                let evalue =
+                                    out.get("evalue").and_then(Value::as_str).unwrap_or("");
                                 outputs.push(format!("Error: {}: {}", ename, evalue));
                             }
                         }
@@ -147,10 +144,7 @@ impl Converter for IpynbConverter {
         }
 
         // Metadata title overrides extracted title
-        if let Some(meta_title) = notebook
-            .pointer("/metadata/title")
-            .and_then(Value::as_str)
-        {
+        if let Some(meta_title) = notebook.pointer("/metadata/title").and_then(Value::as_str) {
             title = Some(meta_title.to_string());
         }
 
@@ -193,7 +187,9 @@ mod tests {
     fn empty_notebook() {
         let c = IpynbConverter;
         let nb = r#"{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5}"#;
-        let res = c.convert(nb.as_bytes(), &make_info(".ipynb"), &opts()).unwrap();
+        let res = c
+            .convert(nb.as_bytes(), &make_info(".ipynb"), &opts())
+            .unwrap();
         assert_eq!(res.markdown, "");
         assert!(res.title.is_none());
     }
@@ -208,7 +204,9 @@ mod tests {
             }],
             "metadata": {}
         });
-        let res = c.convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts()).unwrap();
+        let res = c
+            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts())
+            .unwrap();
         assert_eq!(res.markdown, "# Hello World\nSome text");
         assert_eq!(res.title.as_deref(), Some("Hello World"));
     }
@@ -223,7 +221,9 @@ mod tests {
             }],
             "metadata": {}
         });
-        let res = c.convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts()).unwrap();
+        let res = c
+            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts())
+            .unwrap();
         assert_eq!(res.markdown, "# My Title\nsecond line");
         assert_eq!(res.title.as_deref(), Some("My Title"));
     }
@@ -239,7 +239,9 @@ mod tests {
             }],
             "metadata": {}
         });
-        let res = c.convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts()).unwrap();
+        let res = c
+            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts())
+            .unwrap();
         assert_eq!(res.markdown, "```python\nprint('hello')\n```");
     }
 
@@ -256,7 +258,9 @@ mod tests {
                 "kernelspec": { "language": "R" }
             }
         });
-        let res = c.convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts()).unwrap();
+        let res = c
+            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts())
+            .unwrap();
         assert_eq!(res.markdown, "```R\nx <- 1\n```");
     }
 
@@ -273,7 +277,9 @@ mod tests {
                 "language_info": { "name": "julia" }
             }
         });
-        let res = c.convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts()).unwrap();
+        let res = c
+            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts())
+            .unwrap();
         assert_eq!(res.markdown, "```julia\nx = 1\n```");
     }
 
@@ -291,7 +297,9 @@ mod tests {
             }],
             "metadata": {}
         });
-        let res = c.convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts()).unwrap();
+        let res = c
+            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts())
+            .unwrap();
         assert!(res.markdown.contains("```python\nprint('hi')\n```"));
         assert!(res.markdown.contains("```\nhi\n```"));
     }
@@ -310,7 +318,9 @@ mod tests {
             }],
             "metadata": {}
         });
-        let res = c.convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts()).unwrap();
+        let res = c
+            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts())
+            .unwrap();
         assert!(res.markdown.contains("```\n2\n```"));
     }
 
@@ -330,7 +340,9 @@ mod tests {
             }],
             "metadata": {}
         });
-        let res = c.convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts()).unwrap();
+        let res = c
+            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts())
+            .unwrap();
         assert!(res.markdown.contains("```\n2\n```"));
     }
 
@@ -350,7 +362,9 @@ mod tests {
             }],
             "metadata": {}
         });
-        let res = c.convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts()).unwrap();
+        let res = c
+            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts())
+            .unwrap();
         assert!(res.markdown.contains("```\na  b\n1  2\n```"));
     }
 
@@ -370,8 +384,12 @@ mod tests {
             }],
             "metadata": {}
         });
-        let res = c.convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts()).unwrap();
-        assert!(res.markdown.contains("```\nError: ZeroDivisionError: division by zero\n```"));
+        let res = c
+            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts())
+            .unwrap();
+        assert!(res
+            .markdown
+            .contains("```\nError: ZeroDivisionError: division by zero\n```"));
     }
 
     #[test]
@@ -390,7 +408,9 @@ mod tests {
             }],
             "metadata": {}
         });
-        let res = c.convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts()).unwrap();
+        let res = c
+            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts())
+            .unwrap();
         assert_eq!(res.markdown, "```python\nx\n```");
     }
 
@@ -404,7 +424,9 @@ mod tests {
             }],
             "metadata": {}
         });
-        let res = c.convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts()).unwrap();
+        let res = c
+            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts())
+            .unwrap();
         assert_eq!(res.markdown, "```\ntitle: My Notebook\nauthor: Alice\n```");
     }
 
@@ -420,7 +442,9 @@ mod tests {
                 "title": "Metadata Title"
             }
         });
-        let res = c.convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts()).unwrap();
+        let res = c
+            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts())
+            .unwrap();
         assert_eq!(res.title.as_deref(), Some("Metadata Title"));
     }
 
@@ -435,7 +459,9 @@ mod tests {
             ],
             "metadata": {}
         });
-        let res = c.convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts()).unwrap();
+        let res = c
+            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts())
+            .unwrap();
         let parts: Vec<&str> = res.markdown.split("\n\n").collect();
         assert_eq!(parts.len(), 3);
         assert_eq!(parts[0], "# Intro");
@@ -457,7 +483,9 @@ mod tests {
             }],
             "metadata": {}
         });
-        let res = c.convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts()).unwrap();
+        let res = c
+            .convert(nb.to_string().as_bytes(), &make_info(".ipynb"), &opts())
+            .unwrap();
         assert_eq!(res.markdown, "```python\npass\n```");
     }
 
@@ -465,7 +493,9 @@ mod tests {
     fn missing_cells_field() {
         let c = IpynbConverter;
         let nb = r#"{"metadata":{},"nbformat":4}"#;
-        let res = c.convert(nb.as_bytes(), &make_info(".ipynb"), &opts()).unwrap();
+        let res = c
+            .convert(nb.as_bytes(), &make_info(".ipynb"), &opts())
+            .unwrap();
         assert_eq!(res.markdown, "");
     }
 

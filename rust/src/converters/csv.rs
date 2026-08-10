@@ -42,10 +42,7 @@ impl Converter for CsvConverter {
         let mut lines: Vec<String> = Vec::with_capacity(rows.len() + 1);
 
         lines.push(format!("| {} |", header.join(" | ")));
-        lines.push(format!(
-            "| {} |",
-            vec!["---"; header.len()].join(" | ")
-        ));
+        lines.push(format!("| {} |", vec!["---"; header.len()].join(" | ")));
 
         for row in &rows[1..] {
             let mut row = row.clone();
@@ -121,12 +118,16 @@ mod tests {
     use crate::types::{Converter, MarkitOptions, StreamInfo};
 
     fn info(ext: &str) -> StreamInfo {
-        StreamInfo { extension: Some(ext.to_string()), ..Default::default() }
+        StreamInfo {
+            extension: Some(ext.to_string()),
+            ..Default::default()
+        }
     }
 
     #[test]
     fn quoted_fields_and_escaped_quotes() {
-        let input = "name,age,\"city, state\"\nAlice,30,\"Portland, OR\"\n\"Q \"\"quoted\"\"\",1,\n\n";
+        let input =
+            "name,age,\"city, state\"\nAlice,30,\"Portland, OR\"\n\"Q \"\"quoted\"\"\",1,\n\n";
         let result = CsvConverter
             .convert(input.as_bytes(), &info(".csv"), &MarkitOptions::default())
             .unwrap();

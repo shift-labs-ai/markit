@@ -21,7 +21,10 @@ pub struct ConversionResult {
 
 impl ConversionResult {
     pub fn markdown(markdown: impl Into<String>) -> Self {
-        Self { markdown: markdown.into(), title: None }
+        Self {
+            markdown: markdown.into(),
+            title: None,
+        }
     }
 }
 
@@ -57,7 +60,11 @@ pub trait Converter {
 
     /// Optional URL-first hook. When Some, called before the default fetch
     /// so the converter can handle URL fetching itself.
-    fn convert_url(&self, _url: &str, _options: &MarkitOptions) -> Option<Result<ConversionResult>> {
+    fn convert_url(
+        &self,
+        _url: &str,
+        _options: &MarkitOptions,
+    ) -> Option<Result<ConversionResult>> {
         None
     }
 }

@@ -7,9 +7,8 @@ use crate::types::{ConversionResult, Converter, MarkitOptions, StreamInfo};
 use crate::utils::html_to_md::html_to_markdown;
 
 // Mirrors TS: /^https?:\/\/[a-zA-Z]{2,3}\.wikipedia\.org\//
-static WIKIPEDIA_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^https?://[a-zA-Z]{2,3}\.wikipedia\.org/").unwrap()
-});
+static WIKIPEDIA_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^https?://[a-zA-Z]{2,3}\.wikipedia\.org/").unwrap());
 
 pub struct WikipediaConverter;
 
@@ -23,16 +22,14 @@ impl WikipediaConverter {
         // (?is): i = case-insensitive, s = dot matches newline
         // Mirrors TS: /<div[^>]*id="mw-content-text"[^>]*>([\s\S]*?)<\/div>\s*(?:<\/div>|$)/i
         // Using (?s) so bare . matches newlines; avoids [\s\S] escaping in raw strings.
-        let re_content = Regex::new(
-            r#"(?is)<div[^>]*id="mw-content-text"[^>]*>(.*?)</div>\s*(?:</div>|$)"#,
-        )?;
+        let re_content =
+            Regex::new(r#"(?is)<div[^>]*id="mw-content-text"[^>]*>(.*?)</div>\s*(?:</div>|$)"#)?;
         let content_cap = re_content.captures(&html);
 
         // ── Extract title ─────────────────────────────────────────────────────
         // First try <span class="mw-page-title-main">, then <title>
-        let re_title_span = Regex::new(
-            r#"(?is)<span[^>]*class="mw-page-title-main"[^>]*>(.*?)</span>"#,
-        )?;
+        let re_title_span =
+            Regex::new(r#"(?is)<span[^>]*class="mw-page-title-main"[^>]*>(.*?)</span>"#)?;
         let re_title_tag = Regex::new(r"(?is)<title[^>]*>(.*?)</title>")?;
 
         let title_raw = re_title_span
@@ -60,8 +57,7 @@ impl WikipediaConverter {
         let re_editsection =
             Regex::new(r#"(?is)<div[^>]*class="[^"]*mw-editsection[^"]*".*?</div>"#)?;
         // TS: /<sup[^>]*class="[^"]*reference[^"]*"[\s\S]*?<\/sup>/gi
-        let re_reference =
-            Regex::new(r#"(?is)<sup[^>]*class="[^"]*reference[^"]*".*?</sup>"#)?;
+        let re_reference = Regex::new(r#"(?is)<sup[^>]*class="[^"]*reference[^"]*".*?</sup>"#)?;
         // TS: /<div[^>]*class="[^"]*navbox[\s\S]*?<\/div>/gi
         let re_navbox = Regex::new(r#"(?is)<div[^>]*class="[^"]*navbox.*?</div>"#)?;
         // TS: /<table[^>]*class="[^"]*sidebar[\s\S]*?<\/table>/gi
@@ -82,7 +78,10 @@ impl WikipediaConverter {
             markdown
         };
 
-        Ok(ConversionResult { markdown: result, title })
+        Ok(ConversionResult {
+            markdown: result,
+            title,
+        })
     }
 }
 
@@ -113,7 +112,10 @@ mod tests {
     use super::*;
 
     fn info_with_url(url: &str) -> StreamInfo {
-        StreamInfo { url: Some(url.to_string()), ..Default::default() }
+        StreamInfo {
+            url: Some(url.to_string()),
+            ..Default::default()
+        }
     }
 
     fn opts() -> MarkitOptions {
@@ -232,7 +234,10 @@ mod tests {
                 &opts(),
             )
             .unwrap();
-        assert!(!result.markdown.contains("var x"), "scripts should be removed");
+        assert!(
+            !result.markdown.contains("var x"),
+            "scripts should be removed"
+        );
         assert!(result.markdown.contains("Hello"), "prose should remain");
     }
 
@@ -247,7 +252,10 @@ mod tests {
                 &opts(),
             )
             .unwrap();
-        assert!(!result.markdown.contains("color: red"), "styles should be removed");
+        assert!(
+            !result.markdown.contains("color: red"),
+            "styles should be removed"
+        );
     }
 
     #[test]
@@ -290,8 +298,7 @@ mod tests {
     #[test]
     fn removes_navboxes() {
         let c = WikipediaConverter;
-        let html =
-            r#"<p>Article content.</p><div class="navbox">Navigation links here</div>"#;
+        let html = r#"<p>Article content.</p><div class="navbox">Navigation links here</div>"#;
         let result = c
             .convert(
                 html.as_bytes(),
@@ -299,14 +306,21 @@ mod tests {
                 &opts(),
             )
             .unwrap();
-        assert!(!result.markdown.contains("Navigation links"), "navboxes should be removed");
-        assert!(result.markdown.contains("Article content"), "prose should remain");
+        assert!(
+            !result.markdown.contains("Navigation links"),
+            "navboxes should be removed"
+        );
+        assert!(
+            result.markdown.contains("Article content"),
+            "prose should remain"
+        );
     }
 
     #[test]
     fn removes_sidebar_tables() {
         let c = WikipediaConverter;
-        let html = r#"<table class="sidebar"><tr><td>Sidebar info</td></tr></table><p>Main content.</p>"#;
+        let html =
+            r#"<table class="sidebar"><tr><td>Sidebar info</td></tr></table><p>Main content.</p>"#;
         let result = c
             .convert(
                 html.as_bytes(),
@@ -314,8 +328,14 @@ mod tests {
                 &opts(),
             )
             .unwrap();
-        assert!(!result.markdown.contains("Sidebar info"), "sidebars should be removed");
-        assert!(result.markdown.contains("Main content"), "prose should remain");
+        assert!(
+            !result.markdown.contains("Sidebar info"),
+            "sidebars should be removed"
+        );
+        assert!(
+            result.markdown.contains("Main content"),
+            "prose should remain"
+        );
     }
 
     // ── convert(): full round-trip ────────────────────────────────────────────
@@ -361,7 +381,11 @@ mod tests {
                 &opts(),
             )
             .unwrap();
-        assert!(result.markdown.contains("Just a paragraph"), "got: {}", result.markdown);
+        assert!(
+            result.markdown.contains("Just a paragraph"),
+            "got: {}",
+            result.markdown
+        );
     }
 
     #[test]

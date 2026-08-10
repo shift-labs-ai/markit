@@ -5,9 +5,8 @@ use std::path::Path;
 
 use crate::types::{ConversionResult, Converter, MarkitOptions, StreamInfo};
 
-const MIMETYPES: &[&str] = &[
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-];
+const MIMETYPES: &[&str] =
+    &["application/vnd.openxmlformats-officedocument.presentationml.presentation"];
 
 /// Namespace URI for the `r:` prefix used in OOXML relationship attributes.
 const R_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -76,11 +75,8 @@ impl Converter for PptxConverter {
 
         // Fallback: discover slide files by name pattern, sorted numerically.
         if slide_paths.is_empty() {
-            let mut slide_files: Vec<String> = files
-                .keys()
-                .filter(|f| is_slide_path(f))
-                .cloned()
-                .collect();
+            let mut slide_files: Vec<String> =
+                files.keys().filter(|f| is_slide_path(f)).cloned().collect();
             slide_files.sort_by_key(|f| extract_slide_number(f));
             slide_paths = slide_files;
         }
@@ -160,8 +156,8 @@ impl Converter for PptxConverter {
                     };
 
                     // Resolve relative path against ppt/slides/
-                    let raw_path = if target.starts_with('/') {
-                        target[1..].to_string()
+                    let raw_path = if let Some(stripped) = target.strip_prefix('/') {
+                        stripped.to_string()
                     } else {
                         format!("ppt/slides/{}", target)
                     };
@@ -193,14 +189,11 @@ impl Converter for PptxConverter {
                             Ok(()) => {
                                 slide_lines.push(format!("![{}]({})", name, filepath.display()))
                             }
-                            Err(_) => slide_lines.push(format!(
-                                "<!-- image: {} (slide {}) -->",
-                                name, slide_num
-                            )),
+                            Err(_) => slide_lines
+                                .push(format!("<!-- image: {} (slide {}) -->", name, slide_num)),
                         }
                     } else {
-                        slide_lines
-                            .push(format!("<!-- image: {} (slide {}) -->", name, slide_num));
+                        slide_lines.push(format!("<!-- image: {} (slide {}) -->", name, slide_num));
                     }
                 }
 
@@ -444,11 +437,11 @@ mod tests {
 
     /// 1×1 red PNG bytes.
     const TINY_PNG: &[u8] = &[
-        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
-        0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
-        0x00, 0x90, 0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08,
-        0xd7, 0x63, 0xf8, 0xcf, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0xe2, 0x21, 0xbc, 0x33,
-        0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08, 0xd7, 0x63, 0xf8,
+        0xcf, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0xe2, 0x21, 0xbc, 0x33, 0x00, 0x00, 0x00, 0x00,
+        0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
     ];
 
     fn stored() -> SimpleFileOptions {
@@ -771,9 +764,18 @@ mod tests {
             .convert(&bytes, &info_ext(".pptx"), &MarkitOptions::default())
             .unwrap();
 
-        assert!(result.markdown.contains("| Name | Age |"), "header row missing");
-        assert!(result.markdown.contains("| --- | --- |"), "separator missing");
-        assert!(result.markdown.contains("| Alice | 30 |"), "data row missing");
+        assert!(
+            result.markdown.contains("| Name | Age |"),
+            "header row missing"
+        );
+        assert!(
+            result.markdown.contains("| --- | --- |"),
+            "separator missing"
+        );
+        assert!(
+            result.markdown.contains("| Alice | 30 |"),
+            "data row missing"
+        );
     }
 
     #[test]

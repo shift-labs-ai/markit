@@ -26,12 +26,21 @@ pub struct AnthropicProvider {
 impl AnthropicProvider {
     /// Create with the production ureq HTTP client.
     pub fn new(config: ResolvedConfig, prompt: String) -> Self {
-        Self { config, prompt, http: Arc::new(UreqHttpClient) }
+        Self {
+            config,
+            prompt,
+            http: Arc::new(UreqHttpClient),
+        }
     }
 
     /// Create with an injectable HTTP client (for tests).
+    #[cfg(test)]
     pub fn with_http(config: ResolvedConfig, prompt: String, http: Arc<dyn HttpPost>) -> Self {
-        Self { config, prompt, http }
+        Self {
+            config,
+            prompt,
+            http,
+        }
     }
 
     /// Build the JSON request body for the Messages API.
@@ -79,7 +88,10 @@ impl AnthropicProvider {
         let data: Value = serde_json::from_str(&res.body)
             .map_err(|e| anyhow!("Failed to parse Anthropic response: {e}"))?;
 
-        Ok(data["content"][0]["text"].as_str().unwrap_or("").to_string())
+        Ok(data["content"][0]["text"]
+            .as_str()
+            .unwrap_or("")
+            .to_string())
     }
 
     /// Build a `MarkitOptions` with this provider's describe closure.
@@ -99,8 +111,8 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Mutex;
 
-    use super::*;
     use super::super::types::HttpPostResponse;
+    use super::*;
 
     // ── Mock HTTP client ────────────────────────────────────────────────────
 
@@ -111,11 +123,15 @@ mod tests {
 
     impl MockHttpPost {
         fn new() -> Self {
-            Self { responses: HashMap::new(), calls: Mutex::new(vec![]) }
+            Self {
+                responses: HashMap::new(),
+                calls: Mutex::new(vec![]),
+            }
         }
 
         fn add(&mut self, url: &str, status: u16, body: &str) {
-            self.responses.insert(url.to_string(), (status, body.to_string()));
+            self.responses
+                .insert(url.to_string(), (status, body.to_string()));
         }
 
         fn last_call(&self) -> Option<(String, String)> {
@@ -130,7 +146,10 @@ mod tests {
             _headers: Vec<(&str, String)>,
             body: &str,
         ) -> Result<HttpPostResponse> {
-            self.calls.lock().unwrap().push((url.to_string(), body.to_string()));
+            self.calls
+                .lock()
+                .unwrap()
+                .push((url.to_string(), body.to_string()));
             if let Some((status, resp_body)) = self.responses.get(url) {
                 Ok(HttpPostResponse {
                     status: *status,
@@ -162,9 +181,7 @@ mod tests {
         }
     }
 
-    fn make_provider_with_mock(
-        mock: MockHttpPost,
-    ) -> (AnthropicProvider, Arc<MockHttpPost>) {
+    fn make_provider_with_mock(mock: MockHttpPost) -> (AnthropicProvider, Arc<MockHttpPost>) {
         let shared = Arc::new(mock);
         let provider = AnthropicProvider::with_http(
             make_config(),
@@ -197,15 +214,23 @@ mod tests {
         let img_block = &content[0];
         assert_eq!(img_block["type"].as_str(), Some("image"));
         assert_eq!(img_block["source"]["type"].as_str(), Some("base64"));
-        assert_eq!(img_block["source"]["media_type"].as_str(), Some("image/png"));
+        assert_eq!(
+            img_block["source"]["media_type"].as_str(),
+            Some("image/png")
+        );
         let data = img_block["source"]["data"].as_str().unwrap();
-        let decoded = base64::engine::general_purpose::STANDARD.decode(data).unwrap();
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .unwrap();
         assert_eq!(decoded, image);
 
         // Text block
         let text_block = &content[1];
         assert_eq!(text_block["type"].as_str(), Some("text"));
-        assert_eq!(text_block["text"].as_str(), Some("Describe this image in detail."));
+        assert_eq!(
+            text_block["text"].as_str(),
+            Some("Describe this image in detail.")
+        );
     }
 
     #[test]
@@ -326,6 +351,9 @@ mod tests {
         let provider = AnthropicProvider::new(make_config(), "prompt".to_string());
         let opts = provider.into_options();
         assert!(opts.describe.is_some(), "describe should be set");
-        assert!(opts.transcribe.is_none(), "Anthropic has no transcription API");
+        assert!(
+            opts.transcribe.is_none(),
+            "Anthropic has no transcription API"
+        );
     }
 }

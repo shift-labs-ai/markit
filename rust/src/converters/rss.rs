@@ -36,7 +36,11 @@ impl RssConverter {
         let content = caps.get(1)?.as_str();
         let stripped = strip_cdata(content);
         let trimmed = stripped.trim().to_string();
-        if trimmed.is_empty() { None } else { Some(trimmed) }
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
     }
 
     /// Collect all \`<tag>…</tag>\` blocks (case-insensitive, multi-line).
@@ -80,7 +84,7 @@ impl RssConverter {
             .unwrap_or(xml);
 
         let channel_title = Self::extract(channel_xml, "title");
-        let channel_desc  = Self::extract(channel_xml, "description");
+        let channel_desc = Self::extract(channel_xml, "description");
 
         if let Some(ref t) = channel_title {
             sections.push(format!("# {t}"));
@@ -90,16 +94,22 @@ impl RssConverter {
         }
 
         for item in Self::extract_all(xml, "item") {
-            let title       = Self::extract(&item, "title");
-            let pub_date    = Self::extract(&item, "pubDate");
+            let title = Self::extract(&item, "title");
+            let pub_date = Self::extract(&item, "pubDate");
             let description = Self::extract(&item, "description");
-            let content     = Self::extract(&item, "content:encoded");
-            let link        = Self::extract(&item, "link");
+            let content = Self::extract(&item, "content:encoded");
+            let link = Self::extract(&item, "link");
 
             let mut parts: Vec<String> = Vec::new();
-            if let Some(t) = &title    { parts.push(format!("## {t}")); }
-            if let Some(d) = &pub_date { parts.push(format!("Published: {d}")); }
-            if let Some(l) = &link     { parts.push(format!("[Link]({l})")); }
+            if let Some(t) = &title {
+                parts.push(format!("## {t}"));
+            }
+            if let Some(d) = &pub_date {
+                parts.push(format!("Published: {d}"));
+            }
+            if let Some(l) = &link {
+                parts.push(format!("[Link]({l})"));
+            }
             if let Some(c) = content {
                 parts.push(Self::html_to_md(&c));
             } else if let Some(d) = description {
@@ -122,20 +132,28 @@ impl RssConverter {
         let mut sections: Vec<String> = Vec::new();
 
         let feed_title = Self::extract(xml, "title");
-        let subtitle   = Self::extract(xml, "subtitle");
+        let subtitle = Self::extract(xml, "subtitle");
 
-        if let Some(ref t) = feed_title { sections.push(format!("# {t}")); }
-        if let Some(s) = subtitle       { sections.push(s); }
+        if let Some(ref t) = feed_title {
+            sections.push(format!("# {t}"));
+        }
+        if let Some(s) = subtitle {
+            sections.push(s);
+        }
 
         for entry in Self::extract_all(xml, "entry") {
-            let title   = Self::extract(&entry, "title");
+            let title = Self::extract(&entry, "title");
             let updated = Self::extract(&entry, "updated");
             let summary = Self::extract(&entry, "summary");
             let content = Self::extract(&entry, "content");
 
             let mut parts: Vec<String> = Vec::new();
-            if let Some(t) = &title   { parts.push(format!("## {t}")); }
-            if let Some(u) = &updated { parts.push(format!("Updated: {u}")); }
+            if let Some(t) = &title {
+                parts.push(format!("## {t}"));
+            }
+            if let Some(u) = &updated {
+                parts.push(format!("Updated: {u}"));
+            }
             if let Some(c) = content {
                 parts.push(Self::html_to_md(&c));
             } else if let Some(s) = summary {
@@ -180,8 +198,7 @@ impl Converter for RssConverter {
         _info: &StreamInfo,
         _options: &MarkitOptions,
     ) -> Result<ConversionResult> {
-        let text = std::str::from_utf8(input)
-            .map_err(|e| anyhow!("RSS: invalid UTF-8: {e}"))?;
+        let text = std::str::from_utf8(input).map_err(|e| anyhow!("RSS: invalid UTF-8: {e}"))?;
 
         if text.contains("<rss") {
             Ok(Self::parse_rss(text))
@@ -206,45 +223,78 @@ fn strip_cdata(s: &str) -> String {
 mod tests {
     use super::*;
 
-    fn conv() -> RssConverter { RssConverter }
-    fn opts() -> MarkitOptions { MarkitOptions::default() }
+    fn conv() -> RssConverter {
+        RssConverter
+    }
+    fn opts() -> MarkitOptions {
+        MarkitOptions::default()
+    }
 
     fn info_ext(ext: &str) -> StreamInfo {
-        StreamInfo { extension: Some(ext.into()), ..Default::default() }
+        StreamInfo {
+            extension: Some(ext.into()),
+            ..Default::default()
+        }
     }
     fn info_mime(mime: &str) -> StreamInfo {
-        StreamInfo { mimetype: Some(mime.into()), ..Default::default() }
+        StreamInfo {
+            mimetype: Some(mime.into()),
+            ..Default::default()
+        }
     }
     fn go(xml: &str) -> ConversionResult {
-        conv().convert(xml.as_bytes(), &StreamInfo::default(), &opts()).unwrap()
+        conv()
+            .convert(xml.as_bytes(), &StreamInfo::default(), &opts())
+            .unwrap()
     }
 
     // ── accepts() ────────────────────────────────────────────────────────────
 
     #[test]
-    fn accepts_rss_extension()  { assert!(conv().accepts(&info_ext(".rss"))); }
+    fn accepts_rss_extension() {
+        assert!(conv().accepts(&info_ext(".rss")));
+    }
     #[test]
-    fn accepts_atom_extension() { assert!(conv().accepts(&info_ext(".atom"))); }
+    fn accepts_atom_extension() {
+        assert!(conv().accepts(&info_ext(".atom")));
+    }
     #[test]
-    fn accepts_xml_extension()  { assert!(conv().accepts(&info_ext(".xml"))); }
+    fn accepts_xml_extension() {
+        assert!(conv().accepts(&info_ext(".xml")));
+    }
     #[test]
-    fn rejects_pdf_extension()  { assert!(!conv().accepts(&info_ext(".pdf"))); }
+    fn rejects_pdf_extension() {
+        assert!(!conv().accepts(&info_ext(".pdf")));
+    }
     #[test]
-    fn accepts_rss_xml_mime()   { assert!(conv().accepts(&info_mime("application/rss+xml"))); }
+    fn accepts_rss_xml_mime() {
+        assert!(conv().accepts(&info_mime("application/rss+xml")));
+    }
     #[test]
-    fn accepts_atom_xml_mime()  { assert!(conv().accepts(&info_mime("application/atom+xml"))); }
+    fn accepts_atom_xml_mime() {
+        assert!(conv().accepts(&info_mime("application/atom+xml")));
+    }
     #[test]
-    fn accepts_text_xml_mime()  { assert!(conv().accepts(&info_mime("text/xml; charset=utf-8"))); }
+    fn accepts_text_xml_mime() {
+        assert!(conv().accepts(&info_mime("text/xml; charset=utf-8")));
+    }
     #[test]
-    fn rejects_json_mime()      { assert!(!conv().accepts(&info_mime("application/json"))); }
+    fn rejects_json_mime() {
+        assert!(!conv().accepts(&info_mime("application/json")));
+    }
 
     // ── error paths ──────────────────────────────────────────────────────────
 
     #[test]
     fn rejects_plain_xml() {
         let xml = r#"<?xml version="1.0"?><root><item>hello</item></root>"#;
-        let err = conv().convert(xml.as_bytes(), &StreamInfo::default(), &opts()).unwrap_err();
-        assert!(err.to_string().contains("Not an RSS or Atom feed"), "got: {err}");
+        let err = conv()
+            .convert(xml.as_bytes(), &StreamInfo::default(), &opts())
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Not an RSS or Atom feed"),
+            "got: {err}"
+        );
     }
 
     // ── RSS 2.0 ───────────────────────────────────────────────────────────────
@@ -272,7 +322,11 @@ mod tests {
     #[test]
     fn rss_title_h1_and_result() {
         let r = go(SIMPLE_RSS);
-        assert!(r.markdown.starts_with("# Test Feed"), "got:\n{}", r.markdown);
+        assert!(
+            r.markdown.starts_with("# Test Feed"),
+            "got:\n{}",
+            r.markdown
+        );
         assert_eq!(r.title.as_deref(), Some("Test Feed"));
     }
     #[test]
@@ -282,16 +336,20 @@ mod tests {
     #[test]
     fn rss_item_titles_become_h2() {
         let md = go(SIMPLE_RSS).markdown;
-        assert!(md.contains("## First Post"),  "got:\n{md}");
+        assert!(md.contains("## First Post"), "got:\n{md}");
         assert!(md.contains("## Second Post"), "got:\n{md}");
     }
     #[test]
     fn rss_item_pubdate() {
-        assert!(go(SIMPLE_RSS).markdown.contains("Published: Mon, 01 Jan 2024 00:00:00 +0000"));
+        assert!(go(SIMPLE_RSS)
+            .markdown
+            .contains("Published: Mon, 01 Jan 2024 00:00:00 +0000"));
     }
     #[test]
     fn rss_item_link() {
-        assert!(go(SIMPLE_RSS).markdown.contains("[Link](https://example.com/1)"));
+        assert!(go(SIMPLE_RSS)
+            .markdown
+            .contains("[Link](https://example.com/1)"));
     }
     #[test]
     fn rss_html_description_converted() {
@@ -323,8 +381,11 @@ mod tests {
     fn rss_prefers_content_encoded() {
         let md = go(RSS_CONTENT_ENCODED).markdown;
         assert!(md.contains("## Full content"), "got:\n{md}");
-        assert!(md.contains("**HTML**"),        "got:\n{md}");
-        assert!(!md.contains("Short desc"),     "short desc should be suppressed:\n{md}");
+        assert!(md.contains("**HTML**"), "got:\n{md}");
+        assert!(
+            !md.contains("Short desc"),
+            "short desc should be suppressed:\n{md}"
+        );
     }
 
     // ── CDATA ─────────────────────────────────────────────────────────────────
@@ -346,7 +407,11 @@ mod tests {
     #[test]
     fn rss_cdata_title_unwrapped() {
         let r = go(RSS_CDATA);
-        assert!(r.markdown.starts_with("# My CDATA Feed"), "got:\n{}", r.markdown);
+        assert!(
+            r.markdown.starts_with("# My CDATA Feed"),
+            "got:\n{}",
+            r.markdown
+        );
         assert_eq!(r.title.as_deref(), Some("My CDATA Feed"));
     }
     #[test]
@@ -376,7 +441,11 @@ mod tests {
     #[test]
     fn atom_title_h1_and_result() {
         let r = go(SIMPLE_ATOM);
-        assert!(r.markdown.starts_with("# Atom Test Feed"), "got:\n{}", r.markdown);
+        assert!(
+            r.markdown.starts_with("# Atom Test Feed"),
+            "got:\n{}",
+            r.markdown
+        );
         assert_eq!(r.title.as_deref(), Some("Atom Test Feed"));
     }
     #[test]
@@ -391,7 +460,9 @@ mod tests {
     }
     #[test]
     fn atom_entry_updated() {
-        assert!(go(SIMPLE_ATOM).markdown.contains("Updated: 2024-01-01T00:00:00Z"));
+        assert!(go(SIMPLE_ATOM)
+            .markdown
+            .contains("Updated: 2024-01-01T00:00:00Z"));
     }
     #[test]
     fn atom_summary_plain_text() {
@@ -420,7 +491,10 @@ mod tests {
     fn atom_content_over_summary() {
         let md = go(ATOM_PRIO).markdown;
         assert!(md.contains("**content** wins"), "got:\n{md}");
-        assert!(!md.contains("Short summary"),   "summary should be suppressed:\n{md}");
+        assert!(
+            !md.contains("Short summary"),
+            "summary should be suppressed:\n{md}"
+        );
     }
 
     // ── empty feeds ───────────────────────────────────────────────────────────
@@ -467,6 +541,11 @@ mod tests {
         let r = go(SIMPLE_RSS);
         let parts: Vec<&str> = r.markdown.split("\n\n").collect();
         // header + description + 2 items = 4 sections minimum
-        assert!(parts.len() >= 3, "expected >=3 sections, got {}: {}", parts.len(), r.markdown);
+        assert!(
+            parts.len() >= 3,
+            "expected >=3 sections, got {}: {}",
+            parts.len(),
+            r.markdown
+        );
     }
 }

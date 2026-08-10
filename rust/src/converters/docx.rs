@@ -41,9 +41,7 @@ impl Converter for DocxConverter {
             return true;
         }
         info.mimetype.as_deref().is_some_and(|m| {
-            m.starts_with(
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            )
+            m.starts_with("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
         })
     }
 
@@ -78,7 +76,14 @@ impl Converter for DocxConverter {
 
         // Convert to HTML
         let mut image_count: usize = 0;
-        let html = doc_to_html(&doc_xml, &rels, &images, &num_types, image_dir, &mut image_count)?;
+        let html = doc_to_html(
+            &doc_xml,
+            &rels,
+            &images,
+            &num_types,
+            image_dir,
+            &mut image_count,
+        )?;
 
         let normalized = normalize_tables_html(&html);
         let mut markdown = html_to_markdown(&normalized);
@@ -92,7 +97,9 @@ impl Converter for DocxConverter {
                 let token = format!("{}{}", IMG_TOKEN_PREFIX, i);
                 let comment = format!("<!-- image: image_{} -->", i);
                 let escaped = token.replace('_', "\\_");
-                markdown = markdown.replace(&token, &comment).replace(&escaped, &comment);
+                markdown = markdown
+                    .replace(&token, &comment)
+                    .replace(&escaped, &comment);
             }
         }
 
@@ -102,20 +109,14 @@ impl Converter for DocxConverter {
 
 // ── ZIP helpers ───────────────────────────────────────────────────────────────
 
-fn read_zip_bytes(
-    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
-    name: &str,
-) -> Result<Vec<u8>> {
+fn read_zip_bytes(archive: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Result<Vec<u8>> {
     let mut file = archive.by_name(name)?;
     let mut buf = Vec::new();
     file.read_to_end(&mut buf)?;
     Ok(buf)
 }
 
-fn read_zip_str(
-    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
-    name: &str,
-) -> Result<String> {
+fn read_zip_str(archive: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Result<String> {
     let bytes = read_zip_bytes(archive, name)?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
@@ -145,9 +146,7 @@ fn read_rels(
 // ── Numbering (list type detection) ──────────────────────────────────────────
 
 /// Returns numId → true(ordered) / false(unordered).
-fn read_numbering(
-    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
-) -> Result<HashMap<String, bool>> {
+fn read_numbering(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> Result<HashMap<String, bool>> {
     let xml = match read_zip_str(archive, "word/numbering.xml") {
         Ok(s) => s,
         Err(_) => return Ok(HashMap::new()),
@@ -201,11 +200,7 @@ fn load_images(
             continue;
         }
         let zip_path = resolve_path(target);
-        let ext = zip_path
-            .rsplit('.')
-            .next()
-            .unwrap_or("png")
-            .to_lowercase();
+        let ext = zip_path.rsplit('.').next().unwrap_or("png").to_lowercase();
         if let Ok(bytes) = read_zip_bytes(archive, &zip_path) {
             map.insert(rel_id.clone(), (bytes, ext));
         }
@@ -351,8 +346,11 @@ fn manage_list(
             break;
         }
         let tag = if *top_ordered { "ol" } else { "ul" };
-        html.push_str(&format!("</{}>
-", tag));
+        html.push_str(&format!(
+            "</{}>
+",
+            tag
+        ));
         stack.pop();
     }
 
@@ -370,8 +368,11 @@ fn manage_list(
 fn close_all_lists(stack: &mut Vec<(String, u32, bool)>, html: &mut String) {
     while let Some((_, _, is_ordered)) = stack.pop() {
         let tag = if is_ordered { "ol" } else { "ul" };
-        html.push_str(&format!("</{}>
-", tag));
+        html.push_str(&format!(
+            "</{}>
+",
+            tag
+        ));
     }
 }
 
@@ -446,11 +447,7 @@ fn para_content_html(
             if href.is_empty() {
                 out.push_str(&inner);
             } else {
-                out.push_str(&format!(
-                    "<a href=\"{}\">{}</a>",
-                    html_escape(href),
-                    inner
-                ));
+                out.push_str(&format!("<a href=\"{}\">{}</a>", html_escape(href), inner));
             }
         }
     }
@@ -534,9 +531,7 @@ fn run_html(
 // ── XML helpers ───────────────────────────────────────────────────────────────
 
 fn is_wn(node: roxmltree::Node, name: &str) -> bool {
-    node.is_element()
-        && node.tag_name().name() == name
-        && node.tag_name().namespace() == Some(W)
+    node.is_element() && node.tag_name().name() == name && node.tag_name().namespace() == Some(W)
 }
 
 fn wattr<'a>(node: roxmltree::Node<'a, '_>, name: &str) -> Option<&'a str> {
@@ -548,9 +543,7 @@ fn find_wchild<'a, 'input>(
     name: &str,
 ) -> Option<roxmltree::Node<'a, 'input>> {
     node.children().find(|n| {
-        n.is_element()
-            && n.tag_name().name() == name
-            && n.tag_name().namespace() == Some(W)
+        n.is_element() && n.tag_name().name() == name && n.tag_name().namespace() == Some(W)
     })
 }
 
@@ -588,11 +581,11 @@ mod tests {
 
     // 1×1 red PNG bytes
     const TINY_PNG: &[u8] = &[
-        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
-        0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
-        0x00, 0x90, 0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08,
-        0xd7, 0x63, 0xf8, 0xcf, 0xc0, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0xe2, 0x21, 0xbc,
-        0x33, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08, 0xd7, 0x63, 0xf8,
+        0xcf, 0xc0, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0xe2, 0x21, 0xbc, 0x33, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
     ];
 
     fn base_rels(extra: &str) -> String {
@@ -649,7 +642,8 @@ mod tests {
         zip.start_file("word/document.xml", opts).unwrap();
         zip.write_all(doc_xml.as_bytes()).unwrap();
 
-        zip.start_file("word/_rels/document.xml.rels", opts).unwrap();
+        zip.start_file("word/_rels/document.xml.rels", opts)
+            .unwrap();
         zip.write_all(rels_xml.as_bytes()).unwrap();
 
         if let Some((path, bytes)) = image {
@@ -661,10 +655,7 @@ mod tests {
     }
 
     fn simple_docx(text: &str) -> Vec<u8> {
-        let doc = wrap_body(&format!(
-            "<w:p><w:r><w:t>{}</w:t></w:r></w:p>",
-            text
-        ));
+        let doc = wrap_body(&format!("<w:p><w:r><w:t>{}</w:t></w:r></w:p>", text));
         let rels = base_rels("");
         build_docx(&doc, &rels, None)
     }
@@ -699,7 +690,10 @@ mod tests {
     }
 
     fn info_ext(ext: &str) -> StreamInfo {
-        StreamInfo { extension: Some(ext.to_string()), ..Default::default() }
+        StreamInfo {
+            extension: Some(ext.to_string()),
+            ..Default::default()
+        }
     }
 
     fn info_with_dir(ext: &str, dir: &str) -> StreamInfo {
@@ -783,7 +777,11 @@ mod tests {
 
         let docx = docx_with_image();
         let _result = DocxConverter
-            .convert(&docx, &info_with_dir(".docx", &dir_str), &MarkitOptions::default())
+            .convert(
+                &docx,
+                &info_with_dir(".docx", &dir_str),
+                &MarkitOptions::default(),
+            )
             .unwrap();
 
         let img_path = dir.join("image_1.png");

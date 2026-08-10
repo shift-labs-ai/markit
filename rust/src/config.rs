@@ -71,6 +71,8 @@ pub fn load_config() -> MarkitConfig {
 }
 
 /// Save config to .markit/config.json. Creates .markit/ if needed.
+#[allow(dead_code)] // Public API parity with src/config.ts saveConfig; the config
+                    // command manages raw JSON to preserve unknown keys.
 pub fn save_config(config: &MarkitConfig) -> Result<()> {
     let dir = find_config_dir()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default().join(DATA_DIR));
@@ -85,6 +87,7 @@ pub fn save_config(config: &MarkitConfig) -> Result<()> {
 }
 
 /// Load config from a specific root directory (for testing / alternate roots).
+#[cfg(test)]
 pub fn load_config_from(root: &std::path::Path) -> MarkitConfig {
     let config_file = root.join(DATA_DIR).join(CONFIG_FILE);
     if !config_file.exists() {
@@ -104,8 +107,11 @@ mod tests {
 
     /// Create a unique temp directory for this test run.
     fn make_test_root(suffix: &str) -> PathBuf {
-        let dir = std::env::temp_dir()
-            .join(format!("markit-config-test-{}-{}", std::process::id(), suffix));
+        let dir = std::env::temp_dir().join(format!(
+            "markit-config-test-{}-{}",
+            std::process::id(),
+            suffix
+        ));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -143,7 +149,10 @@ mod tests {
     #[test]
     fn parses_api_base() {
         let root = make_test_root("apibase");
-        write_config(&root, r#"{ "llm": { "apiBase": "https://custom.api.com/v1" } }"#);
+        write_config(
+            &root,
+            r#"{ "llm": { "apiBase": "https://custom.api.com/v1" } }"#,
+        );
         let cfg = load_config_from(&root);
         assert_eq!(
             cfg.llm.unwrap().api_base.as_deref(),
@@ -247,7 +256,10 @@ mod tests {
         };
         let json = serde_json::to_string(&config).unwrap();
         // Keys must be camelCase to match the TS config file format
-        assert!(json.contains("\"apiBase\""), "expected apiBase, got: {json}");
+        assert!(
+            json.contains("\"apiBase\""),
+            "expected apiBase, got: {json}"
+        );
         assert!(json.contains("\"apiKey\""), "expected apiKey, got: {json}");
         assert!(
             json.contains("\"transcriptionModel\""),

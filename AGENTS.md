@@ -12,9 +12,17 @@ bun run dev -- init                    # Create .markit/ config directory
 bun run dev -- config show             # Show configuration
 bun run dev -- plugin install <src>    # Install a plugin (npm:, git:, or path)
 bun run dev -- plugin list             # List installed plugins
-bun test                               # Tests
-bun run check                          # Biome lint + format
+bun test                               # Tests (TS)
+bun run check                          # Biome lint + format (TS)
+cd rust && cargo test                  # Tests (Rust port)
+bun run check:rust                     # rustfmt --check + clippy -D warnings
+bun run check:all                      # Both sides
 ```
+
+The Rust port lives in `rust/` and mirrors the TS pipeline byte-for-byte;
+run both test suites when touching conversion logic. Lint policy is in
+`rust/Cargo.toml` `[lints.clippy]` (index loops in ported algorithm code
+are intentionally allowed to keep the ports auditable against their sources).
 
 ## Architecture
 

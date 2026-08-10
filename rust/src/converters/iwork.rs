@@ -8,9 +8,7 @@ const SF_NS: &str = "http://developer.apple.com/namespaces/sf";
 const SFA_NS: &str = "http://developer.apple.com/namespaces/sfa";
 const KEY_NS: &str = "http://developer.apple.com/namespaces/keynote2";
 
-const IMAGE_EXTS: &[&str] = &[
-    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".tiff", ".bmp",
-];
+const IMAGE_EXTS: &[&str] = &[".png", ".jpg", ".jpeg", ".gif", ".webp", ".tiff", ".bmp"];
 
 pub struct IWorkConverter;
 
@@ -77,7 +75,11 @@ fn is_image(name: &str) -> bool {
 fn image_filename(name: &str, count: usize) -> String {
     let fallback = format!("image_{}", count);
     let base = name.rsplit('/').next().unwrap_or(&fallback);
-    if base.is_empty() { fallback } else { base.to_string() }
+    if base.is_empty() {
+        fallback
+    } else {
+        base.to_string()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -184,7 +186,10 @@ fn convert_pages(
         }
     }
 
-    Ok(ConversionResult { markdown: lines.join("\n\n"), title })
+    Ok(ConversionResult {
+        markdown: lines.join("\n\n"),
+        title,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -270,7 +275,10 @@ fn convert_keynote(
         }
     }
 
-    Ok(ConversionResult { markdown: sections.join("\n\n"), title })
+    Ok(ConversionResult {
+        markdown: sections.join("\n\n"),
+        title,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -369,10 +377,7 @@ fn extract_grid(grid: roxmltree::Node) -> Vec<Vec<String>> {
                         && n.tag_name().name() == "ct"
                 });
                 match ct {
-                    Some(ct_node) => ct_node
-                        .attribute((SFA_NS, "s"))
-                        .unwrap_or("")
-                        .to_string(),
+                    Some(ct_node) => ct_node.attribute((SFA_NS, "s")).unwrap_or("").to_string(),
                     None => collect_text(child).trim().to_string(),
                 }
             }
@@ -406,7 +411,7 @@ fn extract_grid(grid: roxmltree::Node) -> Vec<Vec<String>> {
 
     // Relayout fallback: only one row produced and fewer cells than numcols
     if rows.len() <= 1 && total_cells > 0 && total_cells < num_cols {
-        let cols = if total_cells % 2 == 0 { 2 } else { 1 };
+        let cols = if total_cells.is_multiple_of(2) { 2 } else { 1 };
         let mut relaid: Vec<Vec<String>> = Vec::new();
         let mut i = 0;
         while i < all_values.len() {
@@ -498,11 +503,9 @@ mod tests {
                 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, // IHDR length + type
                 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, // 1x1
                 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, // 8-bit RGB
-                0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41,
-                0x54, 0x08, 0xd7, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
-                0x00, 0x00, 0x02, 0x00, 0x01, 0xe2, 0x21, 0xbc,
-                0x33, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
-                0x44, 0xae, 0x42, 0x60, 0x82,
+                0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08, 0xd7, 0x63, 0xf8, 0xcf,
+                0xc0, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0xe2, 0x21, 0xbc, 0x33, 0x00, 0x00, 0x00,
+                0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
             ];
             zip.start_file("media/photo.png", opts).unwrap();
             zip.write_all(png_data).unwrap();

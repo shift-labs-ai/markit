@@ -10,32 +10,61 @@ fn use_color() -> bool {
 }
 
 // ANSI escape helpers
+#[allow(dead_code)] // used by info(), which exists for TS API parity
+fn blue(s: &str) -> String {
+    if use_color() {
+        format!("\x1b[34m{}\x1b[0m", s)
+    } else {
+        s.to_string()
+    }
+}
+
 fn green(s: &str) -> String {
-    if use_color() { format!("\x1b[32m{}\x1b[0m", s) } else { s.to_string() }
+    if use_color() {
+        format!("\x1b[32m{}\x1b[0m", s)
+    } else {
+        s.to_string()
+    }
 }
 
 fn red(s: &str) -> String {
-    if use_color() { format!("\x1b[31m{}\x1b[0m", s) } else { s.to_string() }
-}
-
-fn blue(s: &str) -> String {
-    if use_color() { format!("\x1b[34m{}\x1b[0m", s) } else { s.to_string() }
+    if use_color() {
+        format!("\x1b[31m{}\x1b[0m", s)
+    } else {
+        s.to_string()
+    }
 }
 
 fn yellow(s: &str) -> String {
-    if use_color() { format!("\x1b[33m{}\x1b[0m", s) } else { s.to_string() }
+    if use_color() {
+        format!("\x1b[33m{}\x1b[0m", s)
+    } else {
+        s.to_string()
+    }
 }
 
 fn cyan_str(s: &str) -> String {
-    if use_color() { format!("\x1b[36m{}\x1b[0m", s) } else { s.to_string() }
+    if use_color() {
+        format!("\x1b[36m{}\x1b[0m", s)
+    } else {
+        s.to_string()
+    }
 }
 
 fn bold_ansi(s: &str) -> String {
-    if use_color() { format!("\x1b[1m{}\x1b[0m", s) } else { s.to_string() }
+    if use_color() {
+        format!("\x1b[1m{}\x1b[0m", s)
+    } else {
+        s.to_string()
+    }
 }
 
 fn dim_ansi(s: &str) -> String {
-    if use_color() { format!("\x1b[2m{}\x1b[0m", s) } else { s.to_string() }
+    if use_color() {
+        format!("\x1b[2m{}\x1b[0m", s)
+    } else {
+        s.to_string()
+    }
 }
 
 // Public formatting functions matching chalk usage in TS
@@ -56,6 +85,7 @@ pub fn success(msg: &str) {
     println!("{} {}", green("✓"), msg);
 }
 
+#[allow(dead_code)] // API parity with src/utils/output.ts info()
 pub fn info(msg: &str) {
     println!("{} {}", blue("ℹ"), msg);
 }
@@ -97,12 +127,7 @@ pub struct OutputOptions {
 
 /// Triple output handler matching the TS output() function.
 /// Calls the appropriate handler based on options.
-pub fn output<J, Q, H>(
-    options: &OutputOptions,
-    json_fn: J,
-    quiet_fn: Option<Q>,
-    human_fn: H,
-)
+pub fn output<J, Q, H>(options: &OutputOptions, json_fn: J, quiet_fn: Option<Q>, human_fn: H)
 where
     J: FnOnce() -> serde_json::Value,
     Q: FnOnce(),

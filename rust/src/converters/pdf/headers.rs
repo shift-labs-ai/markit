@@ -141,8 +141,8 @@ fn normalize_whitespace(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::types::{Bounds, TextBox};
+    use super::*;
 
     fn make_text_box(text: &str, top: f64, bottom: f64, page_number: u32) -> TextBox {
         TextBox {
@@ -230,10 +230,7 @@ mod tests {
 
         for page in &pages {
             assert!(
-                !page
-                    .text_boxes
-                    .iter()
-                    .any(|tb| tb.text == "Copyright 2024"),
+                !page.text_boxes.iter().any(|tb| tb.text == "Copyright 2024"),
                 "Footer should be stripped from page {}",
                 page.page_number
             );

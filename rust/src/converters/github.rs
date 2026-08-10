@@ -32,11 +32,17 @@ impl HttpFetch for UreqFetcher {
             Ok(mut response) => {
                 let status = response.status().as_u16();
                 let body = response.body_mut().read_to_string()?;
-                Ok(HttpResponse { status, ok: status < 400, body })
+                Ok(HttpResponse {
+                    status,
+                    ok: status < 400,
+                    body,
+                })
             }
-            Err(ureq::Error::StatusCode(code)) => {
-                Ok(HttpResponse { status: code, ok: false, body: String::new() })
-            }
+            Err(ureq::Error::StatusCode(code)) => Ok(HttpResponse {
+                status: code,
+                ok: false,
+                body: String::new(),
+            }),
             Err(e) => Err(anyhow!("HTTP error: {}", e)),
         }
     }
@@ -54,7 +60,9 @@ impl Default for GitHubConverter {
 
 impl GitHubConverter {
     pub fn new() -> Self {
-        Self { http: Box::new(UreqFetcher) }
+        Self {
+            http: Box::new(UreqFetcher),
+        }
     }
 
     fn do_convert_url(&self, url: &str) -> Result<ConversionResult> {
@@ -98,17 +106,17 @@ impl GitHubConverter {
     }
 
     fn fetch_readme(&self, owner: &str, repo: &str) -> Result<ConversionResult> {
-        let url = format!(
-            "https://raw.githubusercontent.com/{owner}/{repo}/HEAD/README.md"
-        );
+        let url = format!("https://raw.githubusercontent.com/{owner}/{repo}/HEAD/README.md");
         let res = self.http.get(&url, None)?;
         if !res.ok {
             return Err(anyhow!("Failed to fetch README: {}", res.status));
         }
         let markdown = res.body.trim().to_string();
-        let title = extract_first_heading(&markdown)
-            .unwrap_or_else(|| format!("{owner}/{repo}"));
-        Ok(ConversionResult { markdown, title: Some(title) })
+        let title = extract_first_heading(&markdown).unwrap_or_else(|| format!("{owner}/{repo}"));
+        Ok(ConversionResult {
+            markdown,
+            title: Some(title),
+        })
     }
 
     fn fetch_raw_file(
@@ -118,19 +126,24 @@ impl GitHubConverter {
         ref_: &str,
         file_path: &str,
     ) -> Result<ConversionResult> {
-        let url = format!(
-            "https://raw.githubusercontent.com/{owner}/{repo}/{ref_}/{file_path}"
-        );
+        let url = format!("https://raw.githubusercontent.com/{owner}/{repo}/{ref_}/{file_path}");
         let res = self.http.get(&url, None)?;
         if !res.ok {
             return Err(anyhow!("Failed to fetch file: {}", res.status));
         }
         let content = res.body.trim().to_string();
-        let filename = file_path.split('/').last().unwrap_or(file_path).to_string();
+        let filename = file_path
+            .split('/')
+            .next_back()
+            .unwrap_or(file_path)
+            .to_string();
 
         if file_path.ends_with(".md") || file_path.ends_with(".mdx") {
             let title = extract_first_heading(&content).unwrap_or_else(|| filename.clone());
-            return Ok(ConversionResult { markdown: content, title: Some(title) });
+            return Ok(ConversionResult {
+                markdown: content,
+                title: Some(title),
+            });
         }
 
         let ext = if filename.contains('.') {
@@ -139,7 +152,10 @@ impl GitHubConverter {
             ""
         };
         let markdown = format!("# {filename}\n\n```{ext}\n{content}\n```");
-        Ok(ConversionResult { markdown, title: Some(filename) })
+        Ok(ConversionResult {
+            markdown,
+            title: Some(filename),
+        })
     }
 
     fn fetch_gist(&self, original_url: &str, segments: &[String]) -> Result<ConversionResult> {
@@ -155,17 +171,17 @@ impl GitHubConverter {
         }
         let content = res.body.trim().to_string();
         let title = format!("gist:{id}");
-        Ok(ConversionResult { markdown: content, title: Some(title) })
+        Ok(ConversionResult {
+            markdown: content,
+            title: Some(title),
+        })
     }
 
-    fn fetch_issue_or_pr(
-        &self,
-        owner: &str,
-        repo: &str,
-        number: u64,
-    ) -> Result<ConversionResult> {
+    fn fetch_issue_or_pr(&self, owner: &str, repo: &str, number: u64) -> Result<ConversionResult> {
         let url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{number}");
-        let res = self.http.get(&url, Some("application/vnd.github.v3+json"))?;
+        let res = self
+            .http
+            .get(&url, Some("application/vnd.github.v3+json"))?;
         if !res.ok {
             return Err(anyhow!("Failed to fetch issue/PR: {}", res.status));
         }
@@ -188,8 +204,7 @@ impl GitHubConverter {
         }
         if let Some(labels) = data["labels"].as_array() {
             if !labels.is_empty() {
-                let names: Vec<&str> =
-                    labels.iter().filter_map(|l| l["name"].as_str()).collect();
+                let names: Vec<&str> = labels.iter().filter_map(|l| l["name"].as_str()).collect();
                 meta.push(names.join(", "));
             }
         }
@@ -204,7 +219,10 @@ impl GitHubConverter {
             }
         }
 
-        Ok(ConversionResult { markdown: parts.join("\n\n"), title: Some(title) })
+        Ok(ConversionResult {
+            markdown: parts.join("\n\n"),
+            title: Some(title),
+        })
     }
 }
 
@@ -223,11 +241,7 @@ impl Converter for GitHubConverter {
         GITHUB_HOSTS.contains(&hostname.as_str())
     }
 
-    fn convert_url(
-        &self,
-        url: &str,
-        _options: &MarkitOptions,
-    ) -> Option<Result<ConversionResult>> {
+    fn convert_url(&self, url: &str, _options: &MarkitOptions) -> Option<Result<ConversionResult>> {
         Some(self.do_convert_url(url))
     }
 
@@ -250,9 +264,7 @@ fn parse_github_url(url: &str) -> Option<(String, Vec<String>)> {
         .strip_prefix("https://")
         .or_else(|| url.strip_prefix("http://"))?;
 
-    let (host_part, path_part) = after_scheme
-        .split_once('/')
-        .unwrap_or((after_scheme, ""));
+    let (host_part, path_part) = after_scheme.split_once('/').unwrap_or((after_scheme, ""));
 
     let hostname = host_part.split(':').next()?.to_string();
 
@@ -301,7 +313,8 @@ mod tests {
         }
 
         fn add(&mut self, url: &str, status: u16, body: &str) {
-            self.responses.insert(url.to_string(), (status, body.to_string()));
+            self.responses
+                .insert(url.to_string(), (status, body.to_string()));
         }
     }
 
@@ -322,7 +335,9 @@ mod tests {
 
     fn make(mock: MockFetcher) -> (GitHubConverter, Arc<Mutex<Vec<String>>>) {
         let calls = Arc::clone(&mock.calls);
-        let c = GitHubConverter { http: Box::new(mock) };
+        let c = GitHubConverter {
+            http: Box::new(mock),
+        };
         (c, calls)
     }
 
@@ -439,7 +454,8 @@ mod tests {
             "user": { "login": "alice" },
             "state": "open",
             "labels": [{ "name": "bug" }]
-        }).to_string();
+        })
+        .to_string();
 
         let mut mock = MockFetcher::new();
         mock.add(expected_url, 200, &body);
@@ -468,7 +484,8 @@ mod tests {
             "user": { "login": "bob" },
             "state": "closed",
             "labels": []
-        }).to_string();
+        })
+        .to_string();
 
         let mut mock = MockFetcher::new();
         mock.add(expected_url, 200, &body);

@@ -194,13 +194,12 @@ fn dc_text_all(doc: &roxmltree::Document, local: &str) -> Vec<String> {
 
 /// True for any Dublin Core namespace URI.
 fn is_dc_namespace(ns: Option<&str>) -> bool {
-    ns.map_or(false, |n| n.contains("purl.org/dc") || n.contains("dublin"))
+    ns.is_some_and(|n| n.contains("purl.org/dc") || n.contains("dublin"))
 }
 
 /// Parse an OPF file and return (metadata, manifest id→href, spine idref order).
 fn parse_opf(xml: &str) -> Result<(EpubMetadata, HashMap<String, String>, Vec<String>)> {
-    let doc = roxmltree::Document::parse(xml)
-        .map_err(|e| anyhow!("Invalid EPUB OPF: {}", e))?;
+    let doc = roxmltree::Document::parse(xml).map_err(|e| anyhow!("Invalid EPUB OPF: {}", e))?;
 
     // Metadata
     let creators = dc_text_all(&doc, "creator");
@@ -494,8 +493,14 @@ mod tests {
     #[test]
     fn chapters_appear_in_spine_order() {
         let chapters = [
-            ("ch1.xhtml", "<html><body><p>Chapter One Content</p></body></html>"),
-            ("ch2.xhtml", "<html><body><p>Chapter Two Content</p></body></html>"),
+            (
+                "ch1.xhtml",
+                "<html><body><p>Chapter One Content</p></body></html>",
+            ),
+            (
+                "ch2.xhtml",
+                "<html><body><p>Chapter Two Content</p></body></html>",
+            ),
         ];
         let container = simple_container("content.opf");
         let opf = simple_opf("Ordered Book", &[], &chapters);
@@ -505,14 +510,23 @@ mod tests {
             .convert(&epub, &info_epub(), &MarkitOptions::default())
             .unwrap();
 
-        let pos_ch1 = result.markdown.find("Chapter One Content").expect("ch1 text missing");
-        let pos_ch2 = result.markdown.find("Chapter Two Content").expect("ch2 text missing");
+        let pos_ch1 = result
+            .markdown
+            .find("Chapter One Content")
+            .expect("ch1 text missing");
+        let pos_ch2 = result
+            .markdown
+            .find("Chapter Two Content")
+            .expect("ch2 text missing");
         assert!(pos_ch1 < pos_ch2, "ch1 should appear before ch2");
     }
 
     #[test]
     fn chapter_text_present_in_output() {
-        let chapters = [("main.xhtml", "<html><body><h1>Hello World</h1></body></html>")];
+        let chapters = [(
+            "main.xhtml",
+            "<html><body><h1>Hello World</h1></body></html>",
+        )];
         let container = simple_container("content.opf");
         let opf = simple_opf("Simple", &[], &chapters);
         let epub = build_epub(&container, "content.opf", &opf, &chapters);

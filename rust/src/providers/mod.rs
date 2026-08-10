@@ -11,8 +11,14 @@ pub mod types;
 use crate::config::MarkitConfig;
 use crate::types::MarkitOptions;
 
-use anthropic::{AnthropicProvider, DEFAULT_BASE as ANTHROPIC_BASE, DEFAULT_MODEL as ANTHROPIC_MODEL, ENV_KEYS as ANTHROPIC_KEYS};
-use openai::{OpenAiProvider, DEFAULT_BASE as OPENAI_BASE, DEFAULT_MODEL as OPENAI_MODEL, DEFAULT_TRANSCRIPTION_MODEL, ENV_KEYS as OPENAI_KEYS};
+use anthropic::{
+    AnthropicProvider, DEFAULT_BASE as ANTHROPIC_BASE, DEFAULT_MODEL as ANTHROPIC_MODEL,
+    ENV_KEYS as ANTHROPIC_KEYS,
+};
+use openai::{
+    OpenAiProvider, DEFAULT_BASE as OPENAI_BASE, DEFAULT_MODEL as OPENAI_MODEL,
+    DEFAULT_TRANSCRIPTION_MODEL, ENV_KEYS as OPENAI_KEYS,
+};
 use types::ResolvedConfig;
 
 const BASE_PROMPT: &str = "Describe this image in detail.";
@@ -53,7 +59,12 @@ fn resolve(
         .and_then(|l| l.transcription_model.clone())
         .or_else(|| default_transcription_model.map(String::from));
 
-    Some(ResolvedConfig { api_key, api_base, model, transcription_model })
+    Some(ResolvedConfig {
+        api_key,
+        api_base,
+        model,
+        transcription_model,
+    })
 }
 
 /// Build `describe`/`transcribe` closures from config + optional extra prompt.
@@ -81,9 +92,13 @@ pub fn create_llm_functions(
 
     match provider_name {
         "anthropic" => {
-            let Some(resolved) =
-                resolve(ANTHROPIC_KEYS, ANTHROPIC_BASE, ANTHROPIC_MODEL, None, config)
-            else {
+            let Some(resolved) = resolve(
+                ANTHROPIC_KEYS,
+                ANTHROPIC_BASE,
+                ANTHROPIC_MODEL,
+                None,
+                config,
+            ) else {
                 return Ok(MarkitOptions::default());
             };
             Ok(AnthropicProvider::new(resolved, full_prompt).into_options())
@@ -149,12 +164,22 @@ mod tests {
         std::env::remove_var("MARKIT_API_KEY");
 
         let opts = create_llm_functions(&empty_config(), None).unwrap();
-        assert!(opts.describe.is_none(), "describe should be None with no key");
-        assert!(opts.transcribe.is_none(), "transcribe should be None with no key");
+        assert!(
+            opts.describe.is_none(),
+            "describe should be None with no key"
+        );
+        assert!(
+            opts.transcribe.is_none(),
+            "transcribe should be None with no key"
+        );
 
         // Restore
-        if let Some(v) = prev_key { std::env::set_var("OPENAI_API_KEY", v); }
-        if let Some(v) = prev_markit { std::env::set_var("MARKIT_API_KEY", v); }
+        if let Some(v) = prev_key {
+            std::env::set_var("OPENAI_API_KEY", v);
+        }
+        if let Some(v) = prev_markit {
+            std::env::set_var("MARKIT_API_KEY", v);
+        }
     }
 
     #[test]
@@ -167,11 +192,18 @@ mod tests {
 
         let cfg = config_with_provider("anthropic");
         let opts = create_llm_functions(&cfg, None).unwrap();
-        assert!(opts.describe.is_none(), "describe should be None with no key");
+        assert!(
+            opts.describe.is_none(),
+            "describe should be None with no key"
+        );
         assert!(opts.transcribe.is_none());
 
-        if let Some(v) = prev_a { std::env::set_var("ANTHROPIC_API_KEY", v); }
-        if let Some(v) = prev_m { std::env::set_var("MARKIT_API_KEY", v); }
+        if let Some(v) = prev_a {
+            std::env::set_var("ANTHROPIC_API_KEY", v);
+        }
+        if let Some(v) = prev_m {
+            std::env::set_var("MARKIT_API_KEY", v);
+        }
     }
 
     // ── API key found → closures populated ──────────────────────────────────
@@ -187,10 +219,17 @@ mod tests {
         let cfg = config_with_key("openai", "sk-from-config");
         let opts = create_llm_functions(&cfg, None).unwrap();
         assert!(opts.describe.is_some(), "describe should be set");
-        assert!(opts.transcribe.is_some(), "transcribe should be set for OpenAI");
+        assert!(
+            opts.transcribe.is_some(),
+            "transcribe should be set for OpenAI"
+        );
 
-        if let Some(v) = prev { std::env::set_var("OPENAI_API_KEY", v); }
-        if let Some(v) = prev_m { std::env::set_var("MARKIT_API_KEY", v); }
+        if let Some(v) = prev {
+            std::env::set_var("OPENAI_API_KEY", v);
+        }
+        if let Some(v) = prev_m {
+            std::env::set_var("MARKIT_API_KEY", v);
+        }
     }
 
     #[test]
@@ -205,10 +244,17 @@ mod tests {
         let opts = create_llm_functions(&cfg, None).unwrap();
         assert!(opts.describe.is_some(), "describe should be set");
         // Anthropic has no transcription
-        assert!(opts.transcribe.is_none(), "Anthropic should have no transcribe");
+        assert!(
+            opts.transcribe.is_none(),
+            "Anthropic should have no transcribe"
+        );
 
-        if let Some(v) = prev { std::env::set_var("ANTHROPIC_API_KEY", v); }
-        if let Some(v) = prev_m { std::env::set_var("MARKIT_API_KEY", v); }
+        if let Some(v) = prev {
+            std::env::set_var("ANTHROPIC_API_KEY", v);
+        }
+        if let Some(v) = prev_m {
+            std::env::set_var("MARKIT_API_KEY", v);
+        }
     }
 
     // ── Provider selection ───────────────────────────────────────────────────
@@ -226,8 +272,12 @@ mod tests {
         // With no key, options should be empty (openai is default)
         assert!(opts.describe.is_none());
 
-        if let Some(v) = prev { std::env::set_var("OPENAI_API_KEY", v); }
-        if let Some(v) = prev_m { std::env::set_var("MARKIT_API_KEY", v); }
+        if let Some(v) = prev {
+            std::env::set_var("OPENAI_API_KEY", v);
+        }
+        if let Some(v) = prev_m {
+            std::env::set_var("MARKIT_API_KEY", v);
+        }
     }
 
     #[test]
@@ -238,11 +288,11 @@ mod tests {
             Err(e) => e,
             Ok(_) => panic!("expected error for unknown provider"),
         };
+        assert!(err.to_string().contains("Unknown provider"), "got: {err}");
         assert!(
-            err.to_string().contains("Unknown provider"),
+            err.to_string().contains("nonexistent-provider"),
             "got: {err}"
         );
-        assert!(err.to_string().contains("nonexistent-provider"), "got: {err}");
     }
 
     // ── Prompt composition ───────────────────────────────────────────────────
@@ -279,7 +329,9 @@ mod tests {
         );
 
         std::env::remove_var("OPENAI_API_KEY");
-        if let Some(v) = prev { std::env::set_var("OPENAI_API_KEY", v); }
+        if let Some(v) = prev {
+            std::env::set_var("OPENAI_API_KEY", v);
+        }
 
         assert_eq!(resolved.unwrap().api_key, "env-key");
     }
@@ -301,8 +353,12 @@ mod tests {
         );
 
         std::env::remove_var("MARKIT_API_KEY");
-        if let Some(v) = prev_o { std::env::set_var("OPENAI_API_KEY", v); }
-        if let Some(v) = prev_m { std::env::set_var("MARKIT_API_KEY", v); }
+        if let Some(v) = prev_o {
+            std::env::set_var("OPENAI_API_KEY", v);
+        }
+        if let Some(v) = prev_m {
+            std::env::set_var("MARKIT_API_KEY", v);
+        }
 
         assert_eq!(resolved.unwrap().api_key, "markit-env-key");
     }
@@ -328,7 +384,9 @@ mod tests {
         );
 
         std::env::remove_var("MARKIT_MODEL");
-        if let Some(v) = prev { std::env::set_var("MARKIT_MODEL", v); }
+        if let Some(v) = prev {
+            std::env::set_var("MARKIT_MODEL", v);
+        }
 
         assert_eq!(resolved.unwrap().model, "env-model-override");
     }

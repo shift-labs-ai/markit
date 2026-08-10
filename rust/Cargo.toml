@@ -23,6 +23,14 @@ ureq = "3.4.0"
 zip = "8.6.0"
 ego-tree = "0.11"
 
+[lints.clippy]
+# The PDF pipeline and HTML→MD engine are line-for-line ports of the TS
+# originals (and of JSC's StableSort.h). Index-based loops intentionally
+# mirror the source structure to keep the ports auditable.
+needless_range_loop = "allow"
+# CTM mirrors the TS type name (PDF current transformation matrix).
+upper_case_acronyms = "allow"
+
 [[bin]]
 name = "markit"
 path = "src/main.rs"

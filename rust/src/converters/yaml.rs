@@ -27,8 +27,6 @@ impl Converter for YamlConverter {
         _options: &MarkitOptions,
     ) -> Result<ConversionResult> {
         let text = decode_text(input);
-        Ok(ConversionResult::markdown(format!(
-            "```yaml\n{text}\n```"
-        )))
+        Ok(ConversionResult::markdown(format!("```yaml\n{text}\n```")))
     }
 }

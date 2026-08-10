@@ -41,7 +41,10 @@ fn parse_pipe_row(line: &str) -> Vec<String> {
         return vec![];
     }
     let inner = &trimmed[1..trimmed.len() - 1];
-    inner.split('|').map(|cell| cell.trim().to_string()).collect()
+    inner
+        .split('|')
+        .map(|cell| cell.trim().to_string())
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -68,10 +71,7 @@ pub fn render_table_to_markdown(table: &TableGrid) -> String {
     let promoted = promote_sub_header_prefixes(normalized);
 
     let header = format!("| {} |", promoted[0].join(" | "));
-    let divider = format!(
-        "| {} |",
-        vec!["---"; promoted[0].len()].join(" | ")
-    );
+    let divider = format!("| {} |", vec!["---"; promoted[0].len()].join(" | "));
     let body: String = promoted[1..]
         .iter()
         .map(|row| format!("| {} |", row.join(" | ")))
@@ -98,7 +98,12 @@ fn normalize_shifted_sparse_columns(matrix: Vec<Vec<String>>) -> Vec<Vec<String>
     let cols = matrix[0].len();
 
     let counts: Vec<usize> = (0..cols)
-        .map(|c| matrix.iter().filter(|row| !row[c].trim().is_empty()).count())
+        .map(|c| {
+            matrix
+                .iter()
+                .filter(|row| !row[c].trim().is_empty())
+                .count()
+        })
         .collect();
 
     let dense_cols: std::collections::HashSet<usize> = counts
@@ -136,7 +141,7 @@ fn normalize_shifted_sparse_columns(matrix: Vec<Vec<String>>) -> Vec<Vec<String>
         moves.push((from, to, row));
     }
 
-    let mut copy: Vec<Vec<String>> = matrix.iter().map(|row| row.clone()).collect();
+    let mut copy: Vec<Vec<String>> = matrix.to_vec();
     for &(from, to, row) in &moves {
         if !copy[row][to].trim().is_empty() {
             copy[row][to] = format!("{} {}", copy[row][to], copy[row][from]);
@@ -167,7 +172,7 @@ fn promote_sub_header_prefixes(matrix: Vec<Vec<String>>) -> Vec<Vec<String>> {
     }
 
     let paren_re = regex::Regex::new(r"^\([^)]{1,40}\)$").unwrap();
-    let mut result: Vec<Vec<String>> = matrix.iter().map(|row| row.clone()).collect();
+    let mut result: Vec<Vec<String>> = matrix.to_vec();
     let cols = matrix[0].len();
     let mut rows_to_remove: std::collections::HashSet<usize> = std::collections::HashSet::new();
 
@@ -185,7 +190,10 @@ fn promote_sub_header_prefixes(matrix: Vec<Vec<String>>) -> Vec<Vec<String>> {
         let mut promotable: Vec<Promotable> = Vec::new();
 
         for col in 1..cols {
-            let cell = result[r].get(col).map(|s| s.trim().to_string()).unwrap_or_default();
+            let cell = result[r]
+                .get(col)
+                .map(|s| s.trim().to_string())
+                .unwrap_or_default();
             if cell.is_empty() {
                 continue;
             }
@@ -312,7 +320,10 @@ fn group_free_text_into_lines(text_boxes: &[TextBox]) -> Vec<TextLine> {
             // page ⇔ a sorts first — i.e. plain partial_cmp, NO reversal.
             dy.partial_cmp(&0.0f64).unwrap_or(std::cmp::Ordering::Equal)
         } else {
-            a.bounds.left.partial_cmp(&b.bounds.left).unwrap_or(std::cmp::Ordering::Equal)
+            a.bounds
+                .left
+                .partial_cmp(&b.bounds.left)
+                .unwrap_or(std::cmp::Ordering::Equal)
         }
     });
 
@@ -356,7 +367,14 @@ fn group_free_text_into_lines(text_boxes: &[TextBox]) -> Vec<TextLine> {
             cur_font_size = cur_font_size.max(bx.font_size);
             cur_is_bold = cur_is_bold || bx.is_bold;
         } else {
-            finish_line(&cur_parts, &cur_boxes, cur_top_y, cur_font_size, cur_is_bold, &mut lines);
+            finish_line(
+                &cur_parts,
+                &cur_boxes,
+                cur_top_y,
+                cur_font_size,
+                cur_is_bold,
+                &mut lines,
+            );
             cur_parts = vec![bx.text.clone()];
             cur_boxes = vec![bx];
             cur_y = cy;
@@ -365,7 +383,14 @@ fn group_free_text_into_lines(text_boxes: &[TextBox]) -> Vec<TextLine> {
             cur_is_bold = bx.is_bold;
         }
     }
-    finish_line(&cur_parts, &cur_boxes, cur_top_y, cur_font_size, cur_is_bold, &mut lines);
+    finish_line(
+        &cur_parts,
+        &cur_boxes,
+        cur_top_y,
+        cur_font_size,
+        cur_is_bold,
+        &mut lines,
+    );
     lines
 }
 
@@ -410,8 +435,12 @@ fn merge_consecutive_headings(blocks: Vec<ContentBlock>, body_fs: f64) -> Vec<Co
 
     for i in 1..blocks.len() {
         let next = &blocks[i];
-        let cur_match = heading_re.find(&cur.content).map(|m| m.as_str().to_string());
-        let next_match = heading_re.find(&next.content).map(|m| m.as_str().to_string());
+        let cur_match = heading_re
+            .find(&cur.content)
+            .map(|m| m.as_str().to_string());
+        let next_match = heading_re
+            .find(&next.content)
+            .map(|m| m.as_str().to_string());
         let gap = cur.top_y - next.top_y;
 
         if let (Some(ref cp), Some(ref np)) = (&cur_match, &next_match) {
@@ -545,14 +574,14 @@ fn normalize_detached_first_column_tables(blocks: Vec<ContentBlock>) -> Vec<Cont
         !t.is_empty() && t.len() <= 40
     };
     let split_tokens = |text: &str| -> Vec<String> {
-        text.trim()
-            .split_whitespace()
+        text.split_whitespace()
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
             .collect()
     };
 
-    let mut replacements: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
+    let mut replacements: std::collections::HashMap<usize, String> =
+        std::collections::HashMap::new();
     let mut remove: std::collections::HashSet<usize> = std::collections::HashSet::new();
 
     for table_idx in 0..blocks.len() {
@@ -593,7 +622,11 @@ fn normalize_detached_first_column_tables(blocks: Vec<ContentBlock>) -> Vec<Cont
                 .iter()
                 .map(|cell| cell.split("<br>").map(|p| p.trim().to_string()).collect())
                 .collect();
-            let row_span = split_cells.iter().map(|parts| parts.len()).max().unwrap_or(1);
+            let row_span = split_cells
+                .iter()
+                .map(|parts| parts.len())
+                .max()
+                .unwrap_or(1);
             for k in 0..row_span {
                 logical_rows.push(
                     split_cells
@@ -610,14 +643,18 @@ fn normalize_detached_first_column_tables(blocks: Vec<ContentBlock>) -> Vec<Cont
         // Find header with (cols + 1) non-numeric tokens
         let mut header_idx: Option<usize> = None;
         let mut header_tokens: Vec<String> = Vec::new();
-        let start = if table_idx >= 4 { table_idx - 4 } else { 0 };
+        let start = table_idx.saturating_sub(4);
         for i in start..table_idx {
             let text = normalize_full_width_ascii(blocks[i].content.trim());
             if !is_plain_block(&text) {
                 continue;
             }
             let tokens = split_tokens(&text);
-            if tokens.len() == cols + 1 && tokens.iter().all(|tok| !tok.chars().any(|c| c.is_ascii_digit())) {
+            if tokens.len() == cols + 1
+                && tokens
+                    .iter()
+                    .all(|tok| !tok.chars().any(|c| c.is_ascii_digit()))
+            {
                 header_idx = Some(i);
                 header_tokens = tokens;
             }
@@ -658,16 +695,9 @@ fn normalize_detached_first_column_tables(blocks: Vec<ContentBlock>) -> Vec<Cont
         // Reconstruct the full table
         let mut normalized_lines: Vec<String> = Vec::new();
         normalized_lines.push(format!("| {} |", header_tokens.join(" | ")));
-        normalized_lines.push(format!(
-            "| {} |",
-            vec!["---"; cols + 1].join(" | ")
-        ));
+        normalized_lines.push(format!("| {} |", vec!["---"; cols + 1].join(" | ")));
         for (r, logical_row) in logical_rows.iter().enumerate() {
-            normalized_lines.push(format!(
-                "| {} | {} |",
-                labels[r].1,
-                logical_row.join(" | ")
-            ));
+            normalized_lines.push(format!("| {} | {} |", labels[r].1, logical_row.join(" | ")));
         }
 
         replacements.insert(table_idx, normalized_lines.join("\n"));
@@ -753,7 +783,11 @@ pub fn render_page_content(
     }
 
     // Sort top-to-bottom (higher Y = higher on page = comes first)
-    blocks.sort_by(|a, b| b.top_y.partial_cmp(&a.top_y).unwrap_or(std::cmp::Ordering::Equal));
+    blocks.sort_by(|a, b| {
+        b.top_y
+            .partial_cmp(&a.top_y)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let cleaned = remove_page_numbers(blocks);
     let headings_merged = merge_consecutive_headings(cleaned, body_fs);
@@ -840,10 +874,34 @@ mod tests {
             is_borderless: false,
             cells: o.cells.unwrap_or_else(|| {
                 vec![
-                    TableCell { row: 0, col: 0, text: "Name".to_string(), row_span: 1, col_span: 1 },
-                    TableCell { row: 0, col: 1, text: "Role".to_string(), row_span: 1, col_span: 1 },
-                    TableCell { row: 1, col: 0, text: "Alice".to_string(), row_span: 1, col_span: 1 },
-                    TableCell { row: 1, col: 1, text: "CEO".to_string(), row_span: 1, col_span: 1 },
+                    TableCell {
+                        row: 0,
+                        col: 0,
+                        text: "Name".to_string(),
+                        row_span: 1,
+                        col_span: 1,
+                    },
+                    TableCell {
+                        row: 0,
+                        col: 1,
+                        text: "Role".to_string(),
+                        row_span: 1,
+                        col_span: 1,
+                    },
+                    TableCell {
+                        row: 1,
+                        col: 0,
+                        text: "Alice".to_string(),
+                        row_span: 1,
+                        col_span: 1,
+                    },
+                    TableCell {
+                        row: 1,
+                        col: 1,
+                        text: "CEO".to_string(),
+                        row_span: 1,
+                        col_span: 1,
+                    },
                 ]
             }),
         }
@@ -898,9 +956,13 @@ mod tests {
         let g = make_grid(Some(TableGridOverrides {
             rows: Some(1),
             cols: Some(1),
-            cells: Some(vec![
-                TableCell { row: 0, col: 0, text: "A|B".to_string(), row_span: 1, col_span: 1 },
-            ]),
+            cells: Some(vec![TableCell {
+                row: 0,
+                col: 0,
+                text: "A|B".to_string(),
+                row_span: 1,
+                col_span: 1,
+            }]),
             ..Default::default()
         }));
         assert!(render_table_to_markdown(&g).contains("A\\|B"));
@@ -912,9 +974,13 @@ mod tests {
         let g = make_grid(Some(TableGridOverrides {
             rows: Some(1),
             cols: Some(1),
-            cells: Some(vec![
-                TableCell { row: 0, col: 0, text: "line1\nline2".to_string(), row_span: 1, col_span: 1 },
-            ]),
+            cells: Some(vec![TableCell {
+                row: 0,
+                col: 0,
+                text: "line1\nline2".to_string(),
+                row_span: 1,
+                col_span: 1,
+            }]),
             ..Default::default()
         }));
         assert!(render_table_to_markdown(&g).contains("line1<br>line2"));
@@ -926,9 +992,13 @@ mod tests {
         let g = make_grid(Some(TableGridOverrides {
             rows: Some(1),
             cols: Some(1),
-            cells: Some(vec![
-                TableCell { row: 0, col: 0, text: "Ａ＋Ｂ".to_string(), row_span: 1, col_span: 1 },
-            ]),
+            cells: Some(vec![TableCell {
+                row: 0,
+                col: 0,
+                text: "Ａ＋Ｂ".to_string(),
+                row_span: 1,
+                col_span: 1,
+            }]),
             ..Default::default()
         }));
         assert!(render_table_to_markdown(&g).contains("A+B"));
@@ -941,8 +1011,20 @@ mod tests {
             rows: Some(1),
             cols: Some(2),
             cells: Some(vec![
-                TableCell { row: 0, col: 0, text: "Col A".to_string(), row_span: 1, col_span: 1 },
-                TableCell { row: 0, col: 1, text: "Col B".to_string(), row_span: 1, col_span: 1 },
+                TableCell {
+                    row: 0,
+                    col: 0,
+                    text: "Col A".to_string(),
+                    row_span: 1,
+                    col_span: 1,
+                },
+                TableCell {
+                    row: 0,
+                    col: 1,
+                    text: "Col B".to_string(),
+                    row_span: 1,
+                    col_span: 1,
+                },
             ]),
             ..Default::default()
         }));
@@ -1028,8 +1110,8 @@ mod tests {
             bx_font("Body 1", 200.0, 9.0),
             bx_font("Body 2", 180.0, 9.0),
             bx_font("Body 3", 160.0, 9.0),
-            bx_font("Chapter Title", 700.0, 20.0),   // # (ratio 2.2)
-            bx_font("Section Title", 670.0, 14.0),    // ## (ratio 1.5)
+            bx_font("Chapter Title", 700.0, 20.0), // # (ratio 2.2)
+            bx_font("Section Title", 670.0, 14.0), // ## (ratio 1.5)
         ];
         let result = render_page_content(&boxes, &[], &[], None);
         assert!(result.contains("# Chapter Title"));
@@ -1092,12 +1174,8 @@ mod tests {
     #[test]
     fn includes_both_text_and_table_content() {
         reset_id();
-        let result = render_page_content(
-            &[bx_y("Some text", 600.0)],
-            &[make_grid(None)],
-            &[],
-            None,
-        );
+        let result =
+            render_page_content(&[bx_y("Some text", 600.0)], &[make_grid(None)], &[], None);
         assert!(result.contains("Some text"));
         assert!(result.contains("| Name | Role |"));
     }

@@ -6,7 +6,9 @@ use lofty::tag::ItemKey;
 
 use crate::types::{ConversionResult, Converter, MarkitOptions, StreamInfo};
 
-const EXTENSIONS: &[&str] = &[".mp3", ".wav", ".m4a", ".mp4", ".ogg", ".flac", ".aac", ".wma"];
+const EXTENSIONS: &[&str] = &[
+    ".mp3", ".wav", ".m4a", ".mp4", ".ogg", ".flac", ".aac", ".wma",
+];
 
 pub struct AudioConverter;
 
@@ -54,7 +56,9 @@ impl Converter for AudioConverter {
             let format_str = file_type_to_format(tagged_file.file_type());
 
             // Try to get tag from primary or first tag
-            let tag_opt = tagged_file.primary_tag().or_else(|| tagged_file.first_tag());
+            let tag_opt = tagged_file
+                .primary_tag()
+                .or_else(|| tagged_file.first_tag());
 
             let mut title: Option<String> = None;
             let mut artist: Option<String> = None;
@@ -144,7 +148,9 @@ impl Converter for AudioConverter {
             return Ok(ConversionResult::markdown(format!("*[audio: {name}]*")));
         }
 
-        Ok(ConversionResult::markdown(sections.join("\n").trim().to_string()))
+        Ok(ConversionResult::markdown(
+            sections.join("\n").trim().to_string(),
+        ))
     }
 }
 
@@ -201,8 +207,8 @@ fn guess_mimetype(ext: Option<&str>) -> String {
 mod tests {
     use super::*;
     use crate::types::MarkitOptions;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
 
     fn make_info(ext: Option<&str>, mime: Option<&str>, filename: Option<&str>) -> StreamInfo {
         StreamInfo {
@@ -291,14 +297,18 @@ mod tests {
     #[test]
     fn placeholder_when_lofty_fails_with_filename() {
         let info = make_info(Some(".mp3"), None, Some("song.mp3"));
-        let result = AudioConverter.convert(&[], &info, &MarkitOptions::default()).unwrap();
+        let result = AudioConverter
+            .convert(&[], &info, &MarkitOptions::default())
+            .unwrap();
         assert_eq!(result.markdown, "*[audio: song.mp3]*");
     }
 
     #[test]
     fn placeholder_uses_unknown_when_no_filename() {
         let info = make_info(Some(".mp3"), None, None);
-        let result = AudioConverter.convert(&[], &info, &MarkitOptions::default()).unwrap();
+        let result = AudioConverter
+            .convert(&[], &info, &MarkitOptions::default())
+            .unwrap();
         assert_eq!(result.markdown, "*[audio: unknown]*");
     }
 
@@ -369,7 +379,9 @@ mod tests {
     #[test]
     fn transcribe_appends_after_metadata_section() {
         let opts = MarkitOptions {
-            transcribe: Some(Box::new(|_bytes, _mime| Ok("Transcribed text.".to_string()))),
+            transcribe: Some(Box::new(
+                |_bytes, _mime| Ok("Transcribed text.".to_string()),
+            )),
             ..Default::default()
         };
         let info = make_info(Some(".mp3"), None, Some("s.mp3"));
@@ -404,7 +416,7 @@ mod tests {
         wav.extend_from_slice(&44100u32.to_le_bytes()); // ByteRate = SR * 1 * 1
         wav.extend_from_slice(&1u16.to_le_bytes()); // BlockAlign
         wav.extend_from_slice(&8u16.to_le_bytes()); // BitsPerSample
-        // data sub-chunk
+                                                    // data sub-chunk
         wav.extend_from_slice(b"data");
         wav.extend_from_slice(&data_len.to_le_bytes());
         wav.extend_from_slice(&samples);
@@ -415,25 +427,43 @@ mod tests {
     fn wav_produces_metadata_section() {
         let wav = minimal_wav();
         let info = make_info(Some(".wav"), Some("audio/wav"), Some("test.wav"));
-        let result = AudioConverter.convert(&wav, &info, &MarkitOptions::default()).unwrap();
+        let result = AudioConverter
+            .convert(&wav, &info, &MarkitOptions::default())
+            .unwrap();
         // Should have a Metadata section (even if fields are mostly empty)
-        assert!(result.markdown.contains("## Metadata"), "got: {}", result.markdown);
+        assert!(
+            result.markdown.contains("## Metadata"),
+            "got: {}",
+            result.markdown
+        );
     }
 
     #[test]
     fn wav_reports_sample_rate() {
         let wav = minimal_wav();
         let info = make_info(Some(".wav"), Some("audio/wav"), Some("test.wav"));
-        let result = AudioConverter.convert(&wav, &info, &MarkitOptions::default()).unwrap();
-        assert!(result.markdown.contains("44100 Hz"), "got: {}", result.markdown);
+        let result = AudioConverter
+            .convert(&wav, &info, &MarkitOptions::default())
+            .unwrap();
+        assert!(
+            result.markdown.contains("44100 Hz"),
+            "got: {}",
+            result.markdown
+        );
     }
 
     #[test]
     fn wav_reports_channel_count() {
         let wav = minimal_wav();
         let info = make_info(Some(".wav"), Some("audio/wav"), Some("test.wav"));
-        let result = AudioConverter.convert(&wav, &info, &MarkitOptions::default()).unwrap();
-        assert!(result.markdown.contains("Channels: 1"), "got: {}", result.markdown);
+        let result = AudioConverter
+            .convert(&wav, &info, &MarkitOptions::default())
+            .unwrap();
+        assert!(
+            result.markdown.contains("Channels: 1"),
+            "got: {}",
+            result.markdown
+        );
     }
 
     // --- format_duration ---

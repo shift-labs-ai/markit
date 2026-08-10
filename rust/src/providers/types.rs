@@ -57,7 +57,11 @@ impl HttpPost for UreqHttpClient {
             Ok(mut response) => {
                 let status = response.status().as_u16();
                 let text = response.body_mut().read_to_string()?;
-                Ok(HttpPostResponse { status, ok: true, body: text })
+                Ok(HttpPostResponse {
+                    status,
+                    ok: true,
+                    body: text,
+                })
             }
             Err(ureq::Error::StatusCode(code)) => Ok(HttpPostResponse {
                 status: code,
@@ -83,7 +87,11 @@ impl HttpPost for UreqHttpClient {
             Ok(mut response) => {
                 let status = response.status().as_u16();
                 let text = response.body_mut().read_to_string()?;
-                Ok(HttpPostResponse { status, ok: true, body: text })
+                Ok(HttpPostResponse {
+                    status,
+                    ok: true,
+                    body: text,
+                })
             }
             Err(ureq::Error::StatusCode(code)) => Ok(HttpPostResponse {
                 status: code,

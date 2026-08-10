@@ -6,7 +6,7 @@
 //! 2. Group horizontal Y-lines into table groups (split by vertical gaps)
 //! 3. For each group:
 //!    a. Full grid (H+V lines): build cells from grid intersections,
-//!       place text via raycasting
+//!    place text via raycasting
 //!    b. H-line only (no V lines): infer columns from text X positions
 //! 4. Prune empty rows/cols
 
@@ -20,6 +20,8 @@ use crate::converters::pdf::types::*;
 
 #[derive(Debug, Clone)]
 struct RayHit {
+    /// Kept for parity with the TS RayHit shape (debugging aid there).
+    #[allow(dead_code)]
     direction: &'static str, // "up", "down", "left", "right"
     segment_id: Option<String>,
     distance: f64,
@@ -29,10 +31,26 @@ fn cast_rays_for_text_box(text_box: &TextBox, segments: &[Segment]) -> Vec<RayHi
     let cx = (text_box.bounds.left + text_box.bounds.right) / 2.0;
     let cy = (text_box.bounds.top + text_box.bounds.bottom) / 2.0;
 
-    let mut up = RayHit { direction: "up", segment_id: None, distance: f64::INFINITY };
-    let mut down = RayHit { direction: "down", segment_id: None, distance: f64::INFINITY };
-    let mut left = RayHit { direction: "left", segment_id: None, distance: f64::INFINITY };
-    let mut right = RayHit { direction: "right", segment_id: None, distance: f64::INFINITY };
+    let mut up = RayHit {
+        direction: "up",
+        segment_id: None,
+        distance: f64::INFINITY,
+    };
+    let mut down = RayHit {
+        direction: "down",
+        segment_id: None,
+        distance: f64::INFINITY,
+    };
+    let mut left = RayHit {
+        direction: "left",
+        segment_id: None,
+        distance: f64::INFINITY,
+    };
+    let mut right = RayHit {
+        direction: "right",
+        segment_id: None,
+        distance: f64::INFINITY,
+    };
 
     for seg in segments {
         let is_h = (seg.y1 - seg.y2).abs() < 0.5;
@@ -44,11 +62,19 @@ fn cast_rays_for_text_box(text_box: &TextBox, segments: &[Segment]) -> Vec<RayHi
             if cx >= min_x && cx <= max_x {
                 let d = seg.y1 - cy;
                 if d >= 0.0 && d < up.distance {
-                    up = RayHit { direction: "up", segment_id: Some(seg.id.clone()), distance: d };
+                    up = RayHit {
+                        direction: "up",
+                        segment_id: Some(seg.id.clone()),
+                        distance: d,
+                    };
                 }
                 let dd = cy - seg.y1;
                 if dd >= 0.0 && dd < down.distance {
-                    down = RayHit { direction: "down", segment_id: Some(seg.id.clone()), distance: dd };
+                    down = RayHit {
+                        direction: "down",
+                        segment_id: Some(seg.id.clone()),
+                        distance: dd,
+                    };
                 }
             }
         }
@@ -59,11 +85,19 @@ fn cast_rays_for_text_box(text_box: &TextBox, segments: &[Segment]) -> Vec<RayHi
             if cy >= min_y && cy <= max_y {
                 let d = cx - seg.x1;
                 if d >= 0.0 && d < left.distance {
-                    left = RayHit { direction: "left", segment_id: Some(seg.id.clone()), distance: d };
+                    left = RayHit {
+                        direction: "left",
+                        segment_id: Some(seg.id.clone()),
+                        distance: d,
+                    };
                 }
                 let rd = seg.x1 - cx;
                 if rd >= 0.0 && rd < right.distance {
-                    right = RayHit { direction: "right", segment_id: Some(seg.id.clone()), distance: rd };
+                    right = RayHit {
+                        direction: "right",
+                        segment_id: Some(seg.id.clone()),
+                        distance: rd,
+                    };
                 }
             }
         }
@@ -95,12 +129,7 @@ fn unique_sorted(values: &[f64]) -> Vec<f64> {
 // Y-line group splitting
 // ---------------------------------------------------------------------------
 
-fn chain_covers_range(
-    intervals: &[(f64, f64)],
-    lower_y: f64,
-    upper_y: f64,
-    eps: f64,
-) -> bool {
+fn chain_covers_range(intervals: &[(f64, f64)], lower_y: f64, upper_y: f64, eps: f64) -> bool {
     let mut sorted = intervals.to_vec();
     sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
     let mut covered = lower_y;
@@ -118,16 +147,14 @@ fn chain_covers_range(
     false
 }
 
-fn count_bridging_v_line_cols(
-    upper_y: f64,
-    lower_y: f64,
-    verticals: &[Segment],
-) -> usize {
+fn count_bridging_v_line_cols(upper_y: f64, lower_y: f64, verticals: &[Segment]) -> usize {
     let eps = 1.5;
     let mut by_x: HashMap<i64, Vec<(f64, f64)>> = HashMap::new();
     for seg in verticals {
         let rx = seg.x1.round() as i64;
-        by_x.entry(rx).or_default().push((seg.y1.min(seg.y2), seg.y1.max(seg.y2)));
+        by_x.entry(rx)
+            .or_default()
+            .push((seg.y1.min(seg.y2), seg.y1.max(seg.y2)));
     }
     let mut count = 0;
     for intervals in by_x.values() {
@@ -138,17 +165,15 @@ fn count_bridging_v_line_cols(
     count
 }
 
-fn bridging_x_set(
-    upper_y: f64,
-    lower_y: f64,
-    verticals: &[Segment],
-) -> HashSet<i64> {
+fn bridging_x_set(upper_y: f64, lower_y: f64, verticals: &[Segment]) -> HashSet<i64> {
     let eps = 1.5;
     let mut xs = HashSet::new();
     let mut by_x: HashMap<i64, Vec<(f64, f64)>> = HashMap::new();
     for seg in verticals {
         let rx = seg.x1.round() as i64;
-        by_x.entry(rx).or_default().push((seg.y1.min(seg.y2), seg.y1.max(seg.y2)));
+        by_x.entry(rx)
+            .or_default()
+            .push((seg.y1.min(seg.y2), seg.y1.max(seg.y2)));
     }
     for (rx, intervals) in &by_x {
         if chain_covers_range(intervals, lower_y, upper_y, eps) {
@@ -160,10 +185,7 @@ fn bridging_x_set(
 
 const MIN_RICH_BRIDGING_COLS: usize = 3;
 
-fn split_y_lines_into_groups(
-    y_lines: &[f64],
-    verticals: &[Segment],
-) -> Vec<Vec<f64>> {
+fn split_y_lines_into_groups(y_lines: &[f64], verticals: &[Segment]) -> Vec<Vec<f64>> {
     if y_lines.is_empty() {
         return vec![];
     }
@@ -194,8 +216,7 @@ fn split_y_lines_into_groups(
         {
             let bxs = bridging_x_set(upper_y, lower_y, verticals);
             let is_outer_frame_only = bxs.iter().all(|&x| {
-                (x - global_x_min).abs() as f64 <= eps
-                    || (x - global_x_max).abs() as f64 <= eps
+                (x - global_x_min).abs() as f64 <= eps || (x - global_x_max).abs() as f64 <= eps
             });
             if !is_outer_frame_only {
                 groups.push(current_group);
@@ -247,13 +268,17 @@ fn expand_sub_rows_by_y_clusters(
 
         // Collect row cell infos
         struct RowCellInfo {
+            #[allow(dead_code)] // parity with the TS struct shape
             cell_idx: usize,
             col: usize,
             box_indices: Vec<usize>,
         }
         let mut row_cell_infos: Vec<RowCellInfo> = Vec::new();
         for col in 0..cols {
-            if let Some(cell_idx) = cells.iter().position(|c| c.row == current_row && c.col == col) {
+            if let Some(cell_idx) = cells
+                .iter()
+                .position(|c| c.row == current_row && c.col == col)
+            {
                 if let Some(bi) = cell_boxes.get(&cell_idx) {
                     if !bi.is_empty() {
                         row_cell_infos.push(RowCellInfo {
@@ -272,9 +297,9 @@ fn expand_sub_rows_by_y_clusters(
         let all_mid_ys: Vec<f64> = row_cell_infos
             .iter()
             .flat_map(|rci| {
-                rci.box_indices.iter().map(|&bi| {
-                    (all_boxes[bi].bounds.top + all_boxes[bi].bounds.bottom) / 2.0
-                })
+                rci.box_indices
+                    .iter()
+                    .map(|&bi| (all_boxes[bi].bounds.top + all_boxes[bi].bounds.bottom) / 2.0)
             })
             .collect();
 
@@ -319,9 +344,9 @@ fn expand_sub_rows_by_y_clusters(
             continue;
         }
 
-        let sparse_cols_have_multiple_boxes = row_cell_infos.iter().any(|rci| {
-            !cols_in_top_cluster.contains(&rci.col) && rci.box_indices.len() > 1
-        });
+        let sparse_cols_have_multiple_boxes = row_cell_infos
+            .iter()
+            .any(|rci| !cols_in_top_cluster.contains(&rci.col) && rci.box_indices.len() > 1);
         if !sparse_cols_have_multiple_boxes {
             continue;
         }
@@ -418,12 +443,7 @@ fn expand_sub_rows_by_y_clusters(
 /// Find which column a horizontal position falls into.
 /// Returns None if outside the grid.
 fn find_col(x: f64, x_lines: &[f64]) -> Option<usize> {
-    for i in 0..x_lines.len().saturating_sub(1) {
-        if x >= x_lines[i] && x <= x_lines[i + 1] {
-            return Some(i);
-        }
-    }
-    None
+    (0..x_lines.len().saturating_sub(1)).find(|&i| x >= x_lines[i] && x <= x_lines[i + 1])
 }
 
 /// When a text box spans across one or more vertical column boundaries,
@@ -524,8 +544,7 @@ fn split_cross_column_boxes(text_boxes: &[TextBox], x_lines: &[f64]) -> Vec<Text
                             });
                             remaining_words.clear();
                         } else {
-                            let part_words: Vec<&str> =
-                                remaining_words[..split_idx].to_vec();
+                            let part_words: Vec<&str> = remaining_words[..split_idx].to_vec();
                             result.push(TextBox {
                                 id: format!("{}-split{}", tb.id, col),
                                 text: part_words.join(" "),
@@ -606,7 +625,11 @@ fn build_table_grid(
             let cy = (tb.bounds.top + tb.bounds.bottom) / 2.0;
             let cx = (tb.bounds.left + tb.bounds.right) / 2.0;
             let box_width = tb.bounds.right - tb.bounds.left;
-            cy > y_max && cy <= y_max + 20.0 && cx >= x_min && cx <= x_max && box_width <= max_header_box_width
+            cy > y_max
+                && cy <= y_max + 20.0
+                && cx >= x_min
+                && cx <= x_max
+                && box_width <= max_header_box_width
         })
         .collect();
 
@@ -662,7 +685,11 @@ fn build_table_grid(
             None => continue,
         };
 
-        let max_row = if !header_boxes.is_empty() { rows - 1 } else { rows };
+        let max_row = if !header_boxes.is_empty() {
+            rows - 1
+        } else {
+            rows
+        };
         if row >= max_row {
             continue;
         }
@@ -732,7 +759,11 @@ fn build_table_grid(
     // Also consume the original (unsplit) text box IDs when any of their
     // split pieces were placed in a cell.
     for split_id in &placed_split_ids {
-        let orig_id = split_id.split("-split").next().unwrap_or(split_id).to_string();
+        let orig_id = split_id
+            .split("-split")
+            .next()
+            .unwrap_or(split_id)
+            .to_string();
         if !consumed_ids.contains(&orig_id) {
             consumed_ids.push(orig_id);
         }
@@ -826,7 +857,11 @@ fn build_h_line_only_table(
         last_y = cy;
     }
 
-    let all_boxes: Vec<&TextBox> = in_range.iter().chain(extension_boxes.iter()).copied().collect();
+    let all_boxes: Vec<&TextBox> = in_range
+        .iter()
+        .chain(extension_boxes.iter())
+        .copied()
+        .collect();
     if all_boxes.is_empty() {
         return None;
     }
@@ -859,7 +894,11 @@ fn build_h_line_only_table(
         if (ya - yb).abs() > 0.5 {
             yb.partial_cmp(&ya).unwrap()
         } else {
-            all_boxes[a].bounds.left.partial_cmp(&all_boxes[b].bounds.left).unwrap()
+            all_boxes[a]
+                .bounds
+                .left
+                .partial_cmp(&all_boxes[b].bounds.left)
+                .unwrap()
         }
     });
 
@@ -1020,7 +1059,11 @@ fn is_diagram(grid: &TableGrid) -> bool {
         return true;
     }
 
-    let filled: Vec<&TableCell> = grid.cells.iter().filter(|c| !c.text.trim().is_empty()).collect();
+    let filled: Vec<&TableCell> = grid
+        .cells
+        .iter()
+        .filter(|c| !c.text.trim().is_empty())
+        .collect();
     let fill_ratio = filled.len() as f64 / total_cells as f64;
 
     // Very high column count
@@ -1036,7 +1079,11 @@ fn is_diagram(grid: &TableGrid) -> bool {
     // Compute duplicate text ratio among non-trivial cells.
     // Exclude short values (≤3 chars) like "—", "V", "YES", "NO" which
     // naturally repeat in real data tables.
-    let substantive: Vec<&TableCell> = filled.iter().filter(|c| c.text.trim().len() > 3).copied().collect();
+    let substantive: Vec<&TableCell> = filled
+        .iter()
+        .filter(|c| c.text.trim().len() > 3)
+        .copied()
+        .collect();
     let unique_texts: HashSet<&str> = substantive.iter().map(|c| c.text.trim()).collect();
     let dup_ratio = if substantive.len() > 2 {
         1.0 - unique_texts.len() as f64 / substantive.len() as f64
@@ -1099,7 +1146,11 @@ pub fn resolve_table_grids(
         f64::NEG_INFINITY
     };
     let text_y_max = if !text_y_values.is_empty() {
-        text_y_values.iter().cloned().fold(f64::NEG_INFINITY, f64::max) + PAGE_MARGIN
+        text_y_values
+            .iter()
+            .cloned()
+            .fold(f64::NEG_INFINITY, f64::max)
+            + PAGE_MARGIN
     } else {
         f64::INFINITY
     };
@@ -1113,7 +1164,11 @@ pub fn resolve_table_grids(
         f64::NEG_INFINITY
     };
     let text_x_max = if !text_x_values.is_empty() {
-        text_x_values.iter().cloned().fold(f64::NEG_INFINITY, f64::max) + 100.0
+        text_x_values
+            .iter()
+            .cloned()
+            .fold(f64::NEG_INFINITY, f64::max)
+            + 100.0
     } else {
         f64::INFINITY
     };
@@ -1127,7 +1182,10 @@ pub fn resolve_table_grids(
         .collect();
 
     let h_max_x2 = if !filtered_h.is_empty() {
-        filtered_h.iter().map(|s| s.x2).fold(f64::NEG_INFINITY, f64::max)
+        filtered_h
+            .iter()
+            .map(|s| s.x2)
+            .fold(f64::NEG_INFINITY, f64::max)
     } else {
         text_x_max
     };
@@ -1138,15 +1196,15 @@ pub fn resolve_table_grids(
         .filter(|s| {
             let seg_min = s.y1.min(s.y2);
             let seg_max = s.y1.max(s.y2);
-            seg_max >= text_y_min && seg_min <= text_y_max && s.x1 >= text_x_min && s.x1 <= v_seg_x_max
+            seg_max >= text_y_min
+                && seg_min <= text_y_max
+                && s.x1 >= text_x_min
+                && s.x1 <= v_seg_x_max
         })
         .map(|s| (*s).clone())
         .collect();
 
-    let all_y_lines_vals: Vec<f64> = filtered_h
-        .iter()
-        .flat_map(|s| vec![s.y1, s.y2])
-        .collect();
+    let all_y_lines_vals: Vec<f64> = filtered_h.iter().flat_map(|s| vec![s.y1, s.y2]).collect();
     let mut all_y_lines = unique_sorted(&all_y_lines_vals);
     all_y_lines.sort_by(|a, b| b.partial_cmp(a).unwrap()); // descending
 
@@ -1234,8 +1292,13 @@ pub fn resolve_table_grids(
             continue;
         }
 
-        let (grid, cids) =
-            build_table_grid(page_number, y_lines, &group_x_lines, &filtered_segments, text_boxes);
+        let (grid, cids) = build_table_grid(
+            page_number,
+            y_lines,
+            &group_x_lines,
+            &filtered_segments,
+            text_boxes,
+        );
         grids.push(grid);
         all_consumed_ids.extend(cids.iter().cloned());
         grid_consumed_ids.push(cids);
@@ -1477,10 +1540,10 @@ mod tests {
         reset_ids();
         let segs_a = table_segs(&[100.0, 300.0, 500.0], &[400.0, 350.0]);
         reset_ids(); // TS resets before each helper call chain but shares sid/tid
-        // Actually TS beforeEach resets both. But table_segs calls v_seg and h_seg
-        // which increment sid. Let me NOT reset here — TS beforeEach only runs once
-        // per test, and both tableSegs calls happen within the same test.
-        // The IDs just need to be unique, they don't need specific values.
+                     // Actually TS beforeEach resets both. But table_segs calls v_seg and h_seg
+                     // which increment sid. Let me NOT reset here — TS beforeEach only runs once
+                     // per test, and both tableSegs calls happen within the same test.
+                     // The IDs just need to be unique, they don't need specific values.
         let segs_b = table_segs(&[100.0, 300.0, 500.0], &[250.0, 200.0]);
         let mut all_segs = segs_a;
         all_segs.extend(segs_b);
@@ -1562,10 +1625,7 @@ mod tests {
     #[test]
     fn returns_one_grid_for_4_rows() {
         reset_ids();
-        let segs = table_segs(
-            &[100.0, 300.0, 500.0],
-            &[400.0, 350.0, 300.0, 250.0, 200.0],
-        );
+        let segs = table_segs(&[100.0, 300.0, 500.0], &[400.0, 350.0, 300.0, 250.0, 200.0]);
         let boxes = vec![
             tb("R0", 200.0, 375.0),
             tb("R1", 200.0, 325.0),
@@ -1646,7 +1706,9 @@ mod tests {
     #[test]
     fn filters_out_sparse_grids_with_wide_column_count() {
         reset_ids();
-        let x_lines = [100.0, 160.0, 220.0, 280.0, 340.0, 400.0, 460.0, 520.0, 580.0];
+        let x_lines = [
+            100.0, 160.0, 220.0, 280.0, 340.0, 400.0, 460.0, 520.0, 580.0,
+        ];
         let y_lines = [400.0, 350.0, 300.0, 250.0];
         let segs = table_segs(&x_lines, &y_lines);
         let boxes = vec![
@@ -1681,7 +1743,9 @@ mod tests {
     #[test]
     fn filters_out_sparse_grids_with_high_text_duplication() {
         reset_ids();
-        let x_lines = [100.0, 150.0, 200.0, 250.0, 300.0, 350.0, 400.0, 450.0, 500.0];
+        let x_lines = [
+            100.0, 150.0, 200.0, 250.0, 300.0, 350.0, 400.0, 450.0, 500.0,
+        ];
         let y_lines = [400.0, 360.0, 320.0, 280.0];
         let segs = table_segs(&x_lines, &y_lines);
         let boxes = vec![
@@ -1829,11 +1893,7 @@ mod tests {
             412.0,
         );
         let paragraph_id = paragraph.id.clone();
-        let boxes = vec![
-            paragraph,
-            tb("A", 200.0, 375.0),
-            tb("B", 400.0, 375.0),
-        ];
+        let boxes = vec![paragraph, tb("A", 200.0, 375.0), tb("B", 400.0, 375.0)];
         let result = resolve_table_grids(1, &boxes, &segs);
         assert_eq!(result.grids.len(), 1);
         // The paragraph should NOT be consumed by the table
@@ -1850,12 +1910,7 @@ mod tests {
         let h2 = wide_box("Role", 350.0, 450.0, 412.0);
         let h1_id = h1.id.clone();
         let h2_id = h2.id.clone();
-        let boxes = vec![
-            h1,
-            h2,
-            tb("Alice", 200.0, 375.0),
-            tb("CEO", 400.0, 375.0),
-        ];
+        let boxes = vec![h1, h2, tb("Alice", 200.0, 375.0), tb("CEO", 400.0, 375.0)];
         let result = resolve_table_grids(1, &boxes, &segs);
         assert_eq!(result.grids.len(), 1);
         // Both headers should be consumed

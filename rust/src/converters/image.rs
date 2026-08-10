@@ -64,7 +64,9 @@ impl Converter for ImageConverter {
             return Ok(ConversionResult::markdown(format!("*[image: {name}]*")));
         }
 
-        Ok(ConversionResult::markdown(sections.join("\n").trim().to_string()))
+        Ok(ConversionResult::markdown(
+            sections.join("\n").trim().to_string(),
+        ))
     }
 }
 
@@ -77,9 +79,9 @@ fn parse_exif(input: &[u8]) -> Result<Vec<String>> {
 
     let mut width: Option<u32> = None;
     let mut height: Option<u32> = None;
-    let mut title: Option<String> = None;
+    let title: Option<String> = None;
     let mut description: Option<String> = None;
-    let mut keywords: Option<String> = None;
+    let keywords: Option<String> = None;
     let mut artist: Option<String> = None;
     let mut copyright: Option<String> = None;
     let mut make: Option<String> = None;
@@ -195,12 +197,10 @@ fn parse_exif(input: &[u8]) -> Result<Vec<String>> {
                     iso = field.value.get_uint(0);
                 }
             }
-            Tag::FocalLength => {
-                if focal_length.is_none() {
-                    if let Value::Rational(ref v) = field.value {
-                        if let Some(r) = v.first() {
-                            focal_length = Some(r.to_f64());
-                        }
+            Tag::FocalLength if focal_length.is_none() => {
+                if let Value::Rational(ref v) = field.value {
+                    if let Some(r) = v.first() {
+                        focal_length = Some(r.to_f64());
                     }
                 }
             }
@@ -245,8 +245,16 @@ fn parse_exif(input: &[u8]) -> Result<Vec<String>> {
         lines.push(format!("CreateDate: {v}"));
     }
     if let (Some(lat), Some(lon)) = (gps_lat, gps_lon) {
-        let lat_sign = if gps_lat_ref.as_deref() == Some("S") { -1.0_f64 } else { 1.0_f64 };
-        let lon_sign = if gps_lon_ref.as_deref() == Some("W") { -1.0_f64 } else { 1.0_f64 };
+        let lat_sign = if gps_lat_ref.as_deref() == Some("S") {
+            -1.0_f64
+        } else {
+            1.0_f64
+        };
+        let lon_sign = if gps_lon_ref.as_deref() == Some("W") {
+            -1.0_f64
+        } else {
+            1.0_f64
+        };
         let lat_dec = lat * lat_sign;
         let lon_dec = lon * lon_sign;
         lines.push(format!("GPS: {lat_dec}, {lon_dec}"));
@@ -328,8 +336,8 @@ fn guess_mimetype(ext: Option<&str>) -> String {
 mod tests {
     use super::*;
     use crate::types::MarkitOptions;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
 
     fn make_info(ext: Option<&str>, mime: Option<&str>, filename: Option<&str>) -> StreamInfo {
         StreamInfo {
@@ -411,14 +419,18 @@ mod tests {
     #[test]
     fn placeholder_when_no_exif_and_no_describe() {
         let info = make_info(Some(".jpg"), None, Some("photo.jpg"));
-        let result = ImageConverter.convert(&[], &info, &MarkitOptions::default()).unwrap();
+        let result = ImageConverter
+            .convert(&[], &info, &MarkitOptions::default())
+            .unwrap();
         assert_eq!(result.markdown, "*[image: photo.jpg]*");
     }
 
     #[test]
     fn placeholder_uses_unknown_when_no_filename() {
         let info = make_info(Some(".png"), None, None);
-        let result = ImageConverter.convert(&[], &info, &MarkitOptions::default()).unwrap();
+        let result = ImageConverter
+            .convert(&[], &info, &MarkitOptions::default())
+            .unwrap();
         assert_eq!(result.markdown, "*[image: unknown]*");
     }
 
@@ -426,7 +438,9 @@ mod tests {
     fn svg_placeholder() {
         let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\"><rect/></svg>";
         let info = make_info(Some(".svg"), Some("image/svg+xml"), Some("t.svg"));
-        let result = ImageConverter.convert(svg, &info, &MarkitOptions::default()).unwrap();
+        let result = ImageConverter
+            .convert(svg, &info, &MarkitOptions::default())
+            .unwrap();
         assert_eq!(result.markdown, "*[image: t.svg]*");
     }
 
@@ -563,9 +577,19 @@ mod tests {
     fn exif_extracts_make_and_model_as_camera() {
         let jpeg = minimal_jpeg_exif("Canon", "EOS 5D");
         let info = make_info(Some(".jpg"), None, Some("photo.jpg"));
-        let result = ImageConverter.convert(&jpeg, &info, &MarkitOptions::default()).unwrap();
-        assert!(result.markdown.contains("## Metadata"), "missing header: {}", result.markdown);
-        assert!(result.markdown.contains("Camera: Canon EOS 5D"), "missing camera: {}", result.markdown);
+        let result = ImageConverter
+            .convert(&jpeg, &info, &MarkitOptions::default())
+            .unwrap();
+        assert!(
+            result.markdown.contains("## Metadata"),
+            "missing header: {}",
+            result.markdown
+        );
+        assert!(
+            result.markdown.contains("Camera: Canon EOS 5D"),
+            "missing camera: {}",
+            result.markdown
+        );
     }
 
     #[test]

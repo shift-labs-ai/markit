@@ -41,10 +41,12 @@ fn load_config() -> serde_json::Value {
 
 /// Save config to .markit/config.json.
 fn save_config(config: &serde_json::Value) -> Result<()> {
-    let config_dir =
-        find_config_dir().ok_or_else(|| anyhow::anyhow!("No .markit/ directory"))?;
+    let config_dir = find_config_dir().ok_or_else(|| anyhow::anyhow!("No .markit/ directory"))?;
     let path = config_dir.join("config.json");
-    fs::write(&path, format!("{}\n", serde_json::to_string_pretty(config)?))?;
+    fs::write(
+        &path,
+        format!("{}\n", serde_json::to_string_pretty(config)?),
+    )?;
     Ok(())
 }
 
@@ -60,7 +62,7 @@ fn set_nested_value(obj: &mut serde_json::Value, path: &str, value: serde_json::
     let keys: Vec<&str> = path.split('.').collect();
     let mut current = obj;
     for key in &keys[..keys.len() - 1] {
-        if !current.get(key).map_or(false, |v| v.is_object()) {
+        if !current.get(key).is_some_and(|v| v.is_object()) {
             current[*key] = serde_json::json!({});
         }
         current = current.get_mut(key).unwrap();
@@ -82,7 +84,9 @@ fn provider_meta(name: &str) -> Option<ProviderMeta> {
             env_keys: crate::providers::openai::ENV_KEYS,
             default_base: crate::providers::openai::DEFAULT_BASE,
             default_model: crate::providers::openai::DEFAULT_MODEL,
-            default_transcription_model: Some(crate::providers::openai::DEFAULT_TRANSCRIPTION_MODEL),
+            default_transcription_model: Some(
+                crate::providers::openai::DEFAULT_TRANSCRIPTION_MODEL,
+            ),
         }),
         "anthropic" => Some(ProviderMeta {
             env_keys: crate::providers::anthropic::ENV_KEYS,
@@ -200,7 +204,10 @@ pub fn config_show(options: &OutputOptions) {
     println!();
     println!(
         "  {}",
-        dim(&format!("Available providers: {}", PROVIDER_NAMES.join(", ")))
+        dim(&format!(
+            "Available providers: {}",
+            PROVIDER_NAMES.join(", ")
+        ))
     );
     println!();
 }
@@ -223,17 +230,13 @@ pub fn config_get(key: &str, options: &OutputOptions) {
             output(
                 options,
                 || serde_json::json!({ "key": key, "value": val }),
-                Some(|| {
-                    match val {
-                        serde_json::Value::String(s) => println!("{}", s),
-                        other => println!("{}", other),
-                    }
+                Some(|| match val {
+                    serde_json::Value::String(s) => println!("{}", s),
+                    other => println!("{}", other),
                 }),
-                || {
-                    match val {
-                        serde_json::Value::String(s) => println!("{}", s),
-                        other => println!("{}", other),
-                    }
+                || match val {
+                    serde_json::Value::String(s) => println!("{}", s),
+                    other => println!("{}", other),
                 },
             );
         }
@@ -257,9 +260,8 @@ pub fn config_set(key: &str, value: Option<&str>, options: &OutputOptions) {
     }
 
     let key_lower = key.to_lowercase();
-    let is_secret = key_lower.contains("key")
-        || key_lower.contains("secret")
-        || key_lower.contains("token");
+    let is_secret =
+        key_lower.contains("key") || key_lower.contains("secret") || key_lower.contains("token");
 
     let resolved: String = if is_secret && value.is_none() {
         // Read from stdin
@@ -275,19 +277,19 @@ pub fn config_set(key: &str, value: Option<&str>, options: &OutputOptions) {
             std::process::exit(EXIT_USER_ERROR as i32);
         }
         trimmed
-    } else if is_secret && value.is_some() {
-        eprintln!(
-            "  {}",
-            crate::utils::output::dim(
-                "hint: secrets in args leak to shell history. Use: markit config set llm.apiKey < keyfile",
-            )
-        );
-        value.unwrap().to_string()
-    } else if value.is_none() {
+    } else if let Some(v) = value {
+        if is_secret {
+            eprintln!(
+                "  {}",
+                crate::utils::output::dim(
+                    "hint: secrets in args leak to shell history. Use: markit config set llm.apiKey < keyfile",
+                )
+            );
+        }
+        v.to_string()
+    } else {
         error("Missing value. Usage: markit config set <key> <value>");
         std::process::exit(EXIT_USER_ERROR as i32);
-    } else {
-        value.unwrap().to_string()
     };
 
     let mut config = load_config();
@@ -318,6 +320,12 @@ pub fn config_set(key: &str, value: Option<&str>, options: &OutputOptions) {
         options,
         || serde_json::json!({ "success": true, "key": key, "value": parsed }),
         None::<fn()>,
-        || success(&format!("{} = {}", key, serde_json::to_string(&parsed).unwrap())),
+        || {
+            success(&format!(
+                "{} = {}",
+                key,
+                serde_json::to_string(&parsed).unwrap()
+            ))
+        },
     );
 }

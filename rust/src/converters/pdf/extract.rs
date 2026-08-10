@@ -8,7 +8,7 @@
 
 use anyhow::{anyhow, Result};
 use mupdf::pdf::PdfDocument;
-use mupdf::{Document, TextBlockContent, TextCharFlags, TextPageFlags};
+use mupdf::{Document, TextBlockContent, TextPageFlags};
 
 use super::types::{Bounds, ImageRegion, PageContent, Rect, Segment, TextBox};
 
@@ -246,14 +246,7 @@ fn thin_rect_to_segment(id: String, x: f64, y: f64, w: f64, h: f64) -> Option<Se
 }
 
 /// Emit 4 edge segments from a stroked rectangle.
-fn push_stroked_rect_edges(
-    segments: &mut Vec<Segment>,
-    id: &str,
-    x: f64,
-    y: f64,
-    w: f64,
-    h: f64,
-) {
+fn push_stroked_rect_edges(segments: &mut Vec<Segment>, id: &str, x: f64, y: f64, w: f64, h: f64) {
     let aw = w.abs();
     let ah = h.abs();
 
@@ -917,10 +910,7 @@ mod tests {
         let pages = extract_pages(&buf).unwrap();
         let p8 = &pages[7];
         let bold_boxes: Vec<_> = p8.text_boxes.iter().filter(|tb| tb.is_bold).collect();
-        assert!(
-            !bold_boxes.is_empty(),
-            "Page 8 should have bold text boxes"
-        );
+        assert!(!bold_boxes.is_empty(), "Page 8 should have bold text boxes");
     }
 
     #[test]
@@ -1243,7 +1233,10 @@ mod tests {
         use mupdf::pdf::PdfDocument;
 
         let mut doc = PdfDocument::new();
-        let page = doc.new_page(mupdf::Size { width: 612.0, height: 792.0 });
+        let page = doc.new_page(mupdf::Size {
+            width: 612.0,
+            height: 792.0,
+        });
         // We have a page — write the PDF out and read it back
         match page {
             Ok(_) => {
@@ -1269,22 +1262,35 @@ mod tests {
     }
     #[test]
     fn zz_dump_extract_json() {
-        if !has_fixture("intel-743835-004.pdf") { return; }
+        if !has_fixture("intel-743835-004.pdf") {
+            return;
+        }
         let buf = std::fs::read(fixture_path("intel-743835-004.pdf")).unwrap();
         let pages = extract_pages(&buf).unwrap();
         let mut out = String::from("[");
         for (i, p) in pages.iter().enumerate() {
-            if i > 0 { out.push(','); }
+            if i > 0 {
+                out.push(',');
+            }
             out.push_str(&format!("{{\"n\":{},\"tb\":[", p.page_number));
             for (j, t) in p.text_boxes.iter().enumerate() {
-                if j > 0 { out.push(','); }
-                out.push_str(&serde_json::json!({
-                    "text": t.text, "x": (t.bounds.left * 100.0).round() / 100.0,
-                    "y": (t.bounds.bottom * 100.0).round() / 100.0,
-                    "fs": (t.font_size * 100.0).round() / 100.0, "b": t.is_bold
-                }).to_string());
+                if j > 0 {
+                    out.push(',');
+                }
+                out.push_str(
+                    &serde_json::json!({
+                        "text": t.text, "x": (t.bounds.left * 100.0).round() / 100.0,
+                        "y": (t.bounds.bottom * 100.0).round() / 100.0,
+                        "fs": (t.font_size * 100.0).round() / 100.0, "b": t.is_bold
+                    })
+                    .to_string(),
+                );
             }
-            out.push_str(&format!("],\"seg\":{},\"img\":{}}}", p.segments.len(), p.images.len()));
+            out.push_str(&format!(
+                "],\"seg\":{},\"img\":{}}}",
+                p.segments.len(),
+                p.images.len()
+            ));
         }
         out.push(']');
         std::fs::write("/tmp/extract_rs.json", out).unwrap();

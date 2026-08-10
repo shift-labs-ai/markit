@@ -44,10 +44,9 @@ fn resolve_url(href: &str, base: &str) -> Option<String> {
     // Extract scheme from base URL
     let (scheme, rest) = if let Some(s) = base.strip_prefix("https://") {
         ("https", s)
-    } else if let Some(s) = base.strip_prefix("http://") {
-        ("http", s)
     } else {
-        return None;
+        let s = base.strip_prefix("http://")?;
+        ("http", s)
     };
 
     if href.starts_with("//") {
@@ -80,11 +79,7 @@ fn resolve_url(href: &str, base: &str) -> Option<String> {
 
 /// Strip trailing slash then append `.md`.
 fn append_md_extension(url: &str) -> String {
-    if url.ends_with('/') {
-        format!("{}.md", &url[..url.len() - 1])
-    } else {
-        format!("{}.md", url)
-    }
+    format!("{}.md", url.strip_suffix('/').unwrap_or(url))
 }
 
 /// Discover a raw markdown source URL from an HTML page.
@@ -284,11 +279,7 @@ mod tests {
     fn handles_url_with_query_string_vitepress() {
         let html = r#"<div id="VPContent"></div>"#;
         assert_eq!(
-            discover_markdown_source(
-                html,
-                "https://docs.example.com/guide/intro?ref=nav",
-                ""
-            ),
+            discover_markdown_source(html, "https://docs.example.com/guide/intro?ref=nav", ""),
             Some("https://docs.example.com/guide/intro?ref=nav.md".to_string())
         );
     }
@@ -298,11 +289,7 @@ mod tests {
         let html = r#"<div id="VPContent"></div>"#;
         // extname won't pick up fragment, so ext is ""
         assert_eq!(
-            discover_markdown_source(
-                html,
-                "https://docs.example.com/guide/intro#section",
-                ""
-            ),
+            discover_markdown_source(html, "https://docs.example.com/guide/intro#section", ""),
             Some("https://docs.example.com/guide/intro#section.md".to_string())
         );
     }

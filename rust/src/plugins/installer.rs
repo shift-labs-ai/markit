@@ -22,7 +22,10 @@ pub fn parse_plugin_source(source: &str) -> PluginSource {
             let last_at = rest.rfind('@').unwrap();
             let first_at = rest.find('@').unwrap();
             if last_at > 0 && last_at != first_at {
-                (rest[..last_at].to_string(), Some(rest[last_at + 1..].to_string()))
+                (
+                    rest[..last_at].to_string(),
+                    Some(rest[last_at + 1..].to_string()),
+                )
             } else {
                 (rest.to_string(), None)
             }
@@ -71,9 +74,7 @@ pub fn parse_plugin_source(source: &str) -> PluginSource {
 
         // Ensure proper URL scheme
         let mut url = raw;
-        if !url.starts_with("http://")
-            && !url.starts_with("https://")
-            && !url.starts_with("ssh://")
+        if !url.starts_with("http://") && !url.starts_with("https://") && !url.starts_with("ssh://")
         {
             url = format!("https://{url}");
         }
@@ -105,8 +106,11 @@ pub fn parse_plugin_source(source: &str) -> PluginSource {
     }
 
     // Local path
-    let abs_path = fs::canonicalize(source)
-        .unwrap_or_else(|_| PathBuf::from(source).canonicalize().unwrap_or_else(|_| PathBuf::from(source)));
+    let abs_path = fs::canonicalize(source).unwrap_or_else(|_| {
+        PathBuf::from(source)
+            .canonicalize()
+            .unwrap_or_else(|_| PathBuf::from(source))
+    });
     let abs_str = abs_path.to_string_lossy().to_string();
     let name = Path::new(&abs_str)
         .file_stem()
@@ -214,7 +218,10 @@ pub fn install_plugin(source: &str) -> Result<(String, String)> {
                 .to_string();
         }
         PluginSourceKind::Git => {
-            let url_str = parsed.url.as_deref().ok_or_else(|| anyhow!("No URL for git source"))?;
+            let url_str = parsed
+                .url
+                .as_deref()
+                .ok_or_else(|| anyhow!("No URL for git source"))?;
             // Parse hostname and path from URL without the url crate.
             // URL is always scheme://host/path.git at this point.
             let after_scheme = url_str
@@ -222,9 +229,7 @@ pub fn install_plugin(source: &str) -> Result<(String, String)> {
                 .or_else(|| url_str.strip_prefix("http://"))
                 .or_else(|| url_str.strip_prefix("ssh://"))
                 .ok_or_else(|| anyhow!("Invalid URL: {url_str}"))?;
-            let (hostname, url_path) = after_scheme
-                .split_once('/')
-                .unwrap_or((after_scheme, ""));
+            let (hostname, url_path) = after_scheme.split_once('/').unwrap_or((after_scheme, ""));
             let url_path = url_path.strip_suffix(".git").unwrap_or(url_path);
             let git_dir = plugins_dir.join("git").join(hostname).join(url_path);
 
@@ -444,13 +449,11 @@ mod tests {
     #[test]
     fn manifest_roundtrip() {
         let manifest = PluginsManifest {
-            plugins: vec![
-                InstalledPlugin {
-                    source: "npm:test-plugin".to_string(),
-                    path: "/some/path".to_string(),
-                    name: Some("test-plugin".to_string()),
-                },
-            ],
+            plugins: vec![InstalledPlugin {
+                source: "npm:test-plugin".to_string(),
+                path: "/some/path".to_string(),
+                name: Some("test-plugin".to_string()),
+            }],
         };
         let json = serde_json::to_string_pretty(&manifest).unwrap();
         let parsed: PluginsManifest = serde_json::from_str(&json).unwrap();
@@ -464,7 +467,10 @@ mod tests {
         // Create a temp dir with a .markit structure and a fake plugin file.
         // Use a unique name with thread id to avoid collisions.
         let tid = format!("{:?}", std::thread::current().id());
-        let tmp = std::env::temp_dir().join(format!("markit_test_plugin_install_{}", tid.replace(|c: char| !c.is_alphanumeric(), "_")));
+        let tmp = std::env::temp_dir().join(format!(
+            "markit_test_plugin_install_{}",
+            tid.replace(|c: char| !c.is_alphanumeric(), "_")
+        ));
         let _ = fs::remove_dir_all(&tmp);
         let markit_dir = tmp.join(".markit");
         fs::create_dir_all(&markit_dir).unwrap();
@@ -511,7 +517,10 @@ mod tests {
     fn local_install_nonexistent_path_fails() {
         let result = install_plugin("/nonexistent/path/plugin.js");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Path does not exist"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Path does not exist"));
     }
 
     #[test]

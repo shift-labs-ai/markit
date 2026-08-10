@@ -6,12 +6,10 @@ use zip::ZipArchive;
 use crate::types::{ConversionResult, Converter, MarkitOptions, StreamInfo};
 
 const EXTENSIONS: &[&str] = &[".xlsx"];
-const MIMETYPES: &[&str] =
-    &["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"];
+const MIMETYPES: &[&str] = &["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"];
 
 /// Namespace URI for the officeDocument relationships (used for r:id in workbook.xml).
-const REL_NS: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+const REL_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 
 pub struct XlsxConverter;
 
@@ -68,8 +66,8 @@ impl Converter for XlsxConverter {
                 None => continue,
             };
 
-            let sheet_path = if target.starts_with('/') {
-                target[1..].to_string()
+            let sheet_path = if let Some(stripped) = target.strip_prefix('/') {
+                stripped.to_string()
             } else {
                 format!("xl/{}", target)
             };
@@ -113,10 +111,7 @@ impl Converter for XlsxConverter {
 // ---------------------------------------------------------------------------
 
 /// Read a ZIP entry as a UTF-8 string. Returns None if the entry doesn't exist.
-fn read_zip_str<R: Read + Seek>(
-    archive: &mut ZipArchive<R>,
-    name: &str,
-) -> Result<Option<String>> {
+fn read_zip_str<R: Read + Seek>(archive: &mut ZipArchive<R>, name: &str) -> Result<Option<String>> {
     match archive.by_name(name) {
         Ok(mut file) => {
             let mut content = String::new();
@@ -188,10 +183,7 @@ fn parse_workbook_sheets(xml: &str) -> Result<Vec<(String, String)>> {
         if node.is_element() && node.tag_name().name() == "sheet" {
             let name = node.attribute("name").unwrap_or("").to_string();
             // r:id is a namespaced attribute
-            let r_id = node
-                .attribute((REL_NS, "id"))
-                .unwrap_or("")
-                .to_string();
+            let r_id = node.attribute((REL_NS, "id")).unwrap_or("").to_string();
             if !name.is_empty() && !r_id.is_empty() {
                 sheets.push((name, r_id));
             }
@@ -301,7 +293,10 @@ mod tests {
     use zip::ZipWriter;
 
     fn info_ext(ext: &str) -> StreamInfo {
-        StreamInfo { extension: Some(ext.to_string()), ..Default::default() }
+        StreamInfo {
+            extension: Some(ext.to_string()),
+            ..Default::default()
+        }
     }
 
     /// Build a minimal in-memory XLSX buffer.
@@ -412,7 +407,8 @@ mod tests {
         let buf = Vec::new();
         let cursor = Cursor::new(buf);
         let mut zip = ZipWriter::new(cursor);
-        zip.start_file("dummy.txt", SimpleFileOptions::default()).unwrap();
+        zip.start_file("dummy.txt", SimpleFileOptions::default())
+            .unwrap();
         zip.write_all(b"dummy").unwrap();
         let data = zip.finish().unwrap().into_inner();
 
@@ -420,7 +416,8 @@ mod tests {
             .convert(&data, &info_ext(".xlsx"), &MarkitOptions::default())
             .unwrap_err();
         assert!(
-            err.to_string().contains("Invalid XLSX: missing workbook.xml"),
+            err.to_string()
+                .contains("Invalid XLSX: missing workbook.xml"),
             "unexpected error: {}",
             err
         );

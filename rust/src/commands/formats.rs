@@ -7,29 +7,121 @@ struct Format {
 }
 
 const BUILTIN_FORMATS: &[Format] = &[
-    Format { name: "PDF", extensions: &[".pdf"], builtin: true },
-    Format { name: "Word", extensions: &[".docx"], builtin: true },
-    Format { name: "PowerPoint", extensions: &[".pptx"], builtin: true },
-    Format { name: "Excel", extensions: &[".xlsx"], builtin: true },
-    Format { name: "HTML", extensions: &[".html", ".htm"], builtin: true },
-    Format { name: "EPUB", extensions: &[".epub"], builtin: true },
-    Format { name: "Jupyter", extensions: &[".ipynb"], builtin: true },
-    Format { name: "RSS/Atom", extensions: &[".rss", ".atom", ".xml"], builtin: true },
-    Format { name: "CSV", extensions: &[".csv", ".tsv"], builtin: true },
-    Format { name: "JSON", extensions: &[".json"], builtin: true },
-    Format { name: "YAML", extensions: &[".yaml", ".yml"], builtin: true },
-    Format { name: "XML", extensions: &[".xml", ".svg"], builtin: true },
-    Format { name: "Images", extensions: &[".jpg", ".png", ".gif", ".webp"], builtin: true },
-    Format { name: "Audio", extensions: &[".mp3", ".wav", ".m4a", ".flac"], builtin: true },
-    Format { name: "Pages", extensions: &[".pages"], builtin: true },
-    Format { name: "Keynote", extensions: &[".key"], builtin: true },
-    Format { name: "Numbers", extensions: &[".numbers"], builtin: true },
-    Format { name: "GitHub", extensions: &["github.com/*", "gist.github.com/*"], builtin: true },
-    Format { name: "ZIP", extensions: &[".zip"], builtin: true },
-    Format { name: "Plain text", extensions: &[".txt", ".md", ".rst", ".log"], builtin: true },
-    Format { name: "Code", extensions: &[".py", ".js", ".ts", ".go", ".rs", "..."], builtin: true },
-    Format { name: "URLs", extensions: &["http://", "https://"], builtin: true },
-    Format { name: "Wikipedia", extensions: &["*.wikipedia.org"], builtin: true },
+    Format {
+        name: "PDF",
+        extensions: &[".pdf"],
+        builtin: true,
+    },
+    Format {
+        name: "Word",
+        extensions: &[".docx"],
+        builtin: true,
+    },
+    Format {
+        name: "PowerPoint",
+        extensions: &[".pptx"],
+        builtin: true,
+    },
+    Format {
+        name: "Excel",
+        extensions: &[".xlsx"],
+        builtin: true,
+    },
+    Format {
+        name: "HTML",
+        extensions: &[".html", ".htm"],
+        builtin: true,
+    },
+    Format {
+        name: "EPUB",
+        extensions: &[".epub"],
+        builtin: true,
+    },
+    Format {
+        name: "Jupyter",
+        extensions: &[".ipynb"],
+        builtin: true,
+    },
+    Format {
+        name: "RSS/Atom",
+        extensions: &[".rss", ".atom", ".xml"],
+        builtin: true,
+    },
+    Format {
+        name: "CSV",
+        extensions: &[".csv", ".tsv"],
+        builtin: true,
+    },
+    Format {
+        name: "JSON",
+        extensions: &[".json"],
+        builtin: true,
+    },
+    Format {
+        name: "YAML",
+        extensions: &[".yaml", ".yml"],
+        builtin: true,
+    },
+    Format {
+        name: "XML",
+        extensions: &[".xml", ".svg"],
+        builtin: true,
+    },
+    Format {
+        name: "Images",
+        extensions: &[".jpg", ".png", ".gif", ".webp"],
+        builtin: true,
+    },
+    Format {
+        name: "Audio",
+        extensions: &[".mp3", ".wav", ".m4a", ".flac"],
+        builtin: true,
+    },
+    Format {
+        name: "Pages",
+        extensions: &[".pages"],
+        builtin: true,
+    },
+    Format {
+        name: "Keynote",
+        extensions: &[".key"],
+        builtin: true,
+    },
+    Format {
+        name: "Numbers",
+        extensions: &[".numbers"],
+        builtin: true,
+    },
+    Format {
+        name: "GitHub",
+        extensions: &["github.com/*", "gist.github.com/*"],
+        builtin: true,
+    },
+    Format {
+        name: "ZIP",
+        extensions: &[".zip"],
+        builtin: true,
+    },
+    Format {
+        name: "Plain text",
+        extensions: &[".txt", ".md", ".rst", ".log"],
+        builtin: true,
+    },
+    Format {
+        name: "Code",
+        extensions: &[".py", ".js", ".ts", ".go", ".rs", "..."],
+        builtin: true,
+    },
+    Format {
+        name: "URLs",
+        extensions: &["http://", "https://"],
+        builtin: true,
+    },
+    Format {
+        name: "Wikipedia",
+        extensions: &["*.wikipedia.org"],
+        builtin: true,
+    },
 ];
 
 pub fn formats(options: &OutputOptions) {
@@ -93,10 +185,29 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                "PDF", "Word", "PowerPoint", "Excel", "HTML", "EPUB", "Jupyter",
-                "RSS/Atom", "CSV", "JSON", "YAML", "XML", "Images", "Audio",
-                "Pages", "Keynote", "Numbers", "GitHub", "ZIP", "Plain text",
-                "Code", "URLs", "Wikipedia",
+                "PDF",
+                "Word",
+                "PowerPoint",
+                "Excel",
+                "HTML",
+                "EPUB",
+                "Jupyter",
+                "RSS/Atom",
+                "CSV",
+                "JSON",
+                "YAML",
+                "XML",
+                "Images",
+                "Audio",
+                "Pages",
+                "Keynote",
+                "Numbers",
+                "GitHub",
+                "ZIP",
+                "Plain text",
+                "Code",
+                "URLs",
+                "Wikipedia",
             ]
         );
     }

@@ -138,7 +138,8 @@ mod tests {
 
     #[test]
     fn test_table_normalization() {
-        let html = b"<table><tr><td>Name</td><td>Age</td></tr><tr><td>Alice</td><td>30</td></tr></table>";
+        let html =
+            b"<table><tr><td>Name</td><td>Age</td></tr><tr><td>Alice</td><td>30</td></tr></table>";
         let result = HtmlConverter
             .convert(html, &info(".html"), &MarkitOptions::default())
             .unwrap();

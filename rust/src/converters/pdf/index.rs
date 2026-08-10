@@ -36,11 +36,7 @@ fn process_column(
 ) -> String {
     let result = resolve_table_grids(page_number, text_boxes, segments);
 
-    let consumed_set: HashSet<&str> = result
-        .consumed_ids
-        .iter()
-        .map(|s| s.as_str())
-        .collect();
+    let consumed_set: HashSet<&str> = result.consumed_ids.iter().map(|s| s.as_str()).collect();
     let free_text_boxes: Vec<TextBox> = text_boxes
         .iter()
         .filter(|tb| !consumed_set.contains(tb.id.as_str()))
@@ -106,7 +102,11 @@ impl Converter for PdfConverter {
                         match render_image_region(input, img) {
                             Ok(png) => {
                                 if let Err(e) = fs::write(&filepath, &png) {
-                                    eprintln!("Failed to write image {}: {}", filepath.display(), e);
+                                    eprintln!(
+                                        "Failed to write image {}: {}",
+                                        filepath.display(),
+                                        e
+                                    );
                                     continue;
                                 }
 
@@ -139,10 +139,7 @@ impl Converter for PdfConverter {
                         top_y: img.top_y,
                         markdown: format!(
                             "<!-- image: {} (page {}, {}x{}pt) -->",
-                            img.id,
-                            img.page_number,
-                            img.bbox.w as i32,
-                            img.bbox.h as i32
+                            img.id, img.page_number, img.bbox.w as i32, img.bbox.h as i32
                         ),
                     });
                 }
@@ -154,45 +151,41 @@ impl Converter for PdfConverter {
             // If the page has vertical segments (tables), suppress column detection
             // when one detected column is very narrow
             if layout.column_count > 1
-                && page
-                    .segments
-                    .iter()
-                    .any(|s| (s.x1 - s.x2).abs() <= 0.8)
+                && page.segments.iter().any(|s| (s.x1 - s.x2).abs() <= 0.8)
+                && !page.text_boxes.is_empty()
             {
-                if !page.text_boxes.is_empty() {
-                    let page_x_min = page
-                        .text_boxes
+                let page_x_min = page
+                    .text_boxes
+                    .iter()
+                    .map(|tb| tb.bounds.left)
+                    .fold(f64::INFINITY, f64::min);
+                let page_x_max = page
+                    .text_boxes
+                    .iter()
+                    .map(|tb| tb.bounds.right)
+                    .fold(f64::NEG_INFINITY, f64::max);
+                let page_width = page_x_max - page_x_min;
+                let min_col_fraction = 0.3;
+
+                let too_narrow = layout.columns.iter().any(|col| {
+                    if col.is_empty() {
+                        return true;
+                    }
+                    let col_x_min = col
                         .iter()
                         .map(|tb| tb.bounds.left)
                         .fold(f64::INFINITY, f64::min);
-                    let page_x_max = page
-                        .text_boxes
+                    let col_x_max = col
                         .iter()
                         .map(|tb| tb.bounds.right)
                         .fold(f64::NEG_INFINITY, f64::max);
-                    let page_width = page_x_max - page_x_min;
-                    let min_col_fraction = 0.3;
+                    (col_x_max - col_x_min) / page_width < min_col_fraction
+                });
 
-                    let too_narrow = layout.columns.iter().any(|col| {
-                        if col.is_empty() {
-                            return true;
-                        }
-                        let col_x_min = col
-                            .iter()
-                            .map(|tb| tb.bounds.left)
-                            .fold(f64::INFINITY, f64::min);
-                        let col_x_max = col
-                            .iter()
-                            .map(|tb| tb.bounds.right)
-                            .fold(f64::NEG_INFINITY, f64::max);
-                        (col_x_max - col_x_min) / page_width < min_col_fraction
-                    });
-
-                    if too_narrow {
-                        layout.column_count = 1;
-                        layout.columns = vec![page.text_boxes.clone()];
-                        layout.boundaries = Vec::new();
-                    }
+                if too_narrow {
+                    layout.column_count = 1;
+                    layout.columns = vec![page.text_boxes.clone()];
+                    layout.boundaries = Vec::new();
                 }
             }
 
@@ -232,18 +225,9 @@ impl Converter for PdfConverter {
                         .collect();
 
                     // Images go with the first column only
-                    let blocks = if col_idx == 0 {
-                        &image_blocks[..]
-                    } else {
-                        &[]
-                    };
+                    let blocks = if col_idx == 0 { &image_blocks[..] } else { &[] };
 
-                    let md = process_column(
-                        page.page_number,
-                        col_boxes,
-                        &col_segments,
-                        blocks,
-                    );
+                    let md = process_column(page.page_number, col_boxes, &col_segments, blocks);
                     if !md.is_empty() {
                         column_markdowns.push(md);
                     }

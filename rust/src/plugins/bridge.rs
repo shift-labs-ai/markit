@@ -100,7 +100,9 @@ const results = converters.map((entry, i) => {{
 }});
 
 console.log(JSON.stringify(results));
-"#, plugin_path)
+"#,
+        plugin_path
+    )
 }
 
 /// Generate the bun -e convert shim script.
@@ -151,7 +153,9 @@ console.log(JSON.stringify({{
     markdown: typeof result === 'string' ? result : result.markdown,
     title: typeof result === 'object' ? result.title : undefined,
 }}));
-"#, plugin_path, converter_index, converter_index)
+"#,
+        plugin_path, converter_index, converter_index
+    )
 }
 
 /// A converter that bridges to a JS plugin via bun subprocess.
@@ -242,8 +246,11 @@ impl Converter for BridgedConverter {
             "options": {},
         });
 
-        let stdin_data = format!("{}
-{}", meta, b64);
+        let stdin_data = format!(
+            "{}
+{}",
+            meta, b64
+        );
 
         let mut child = Command::new("bun")
             .args(["-e", &shim])

@@ -33,8 +33,6 @@ impl Converter for XmlConverter {
             .map(|e| e.trim_start_matches('.'))
             .filter(|e| !e.is_empty())
             .unwrap_or("xml");
-        Ok(ConversionResult::markdown(format!(
-            "```{ext}\n{text}\n```"
-        )))
+        Ok(ConversionResult::markdown(format!("```{ext}\n{text}\n```")))
     }
 }
