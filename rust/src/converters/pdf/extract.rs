@@ -52,6 +52,25 @@ struct RawTextItem {
     is_bold: bool,
 }
 
+/// Superscripts and subscripts sit outside the flat Y band: a footnote
+/// marker rides ~0.33em above the baseline of its line. MuPDF's stext
+/// joins these into the line ("evaluation1"); match that by accepting a
+/// clearly smaller item whose vertical span still overlaps most of the
+/// other's. Same-size items keep the strict band, so ordinary adjacent
+/// lines never fuse.
+fn script_same_line(a: &RawTextItem, b: &RawTextItem) -> bool {
+    let (small, large) = if a.font_size <= b.font_size {
+        (a, b)
+    } else {
+        (b, a)
+    };
+    if large.font_size <= 0.0 || small.font_size > large.font_size * 0.8 {
+        return false;
+    }
+    let overlap = (small.y + small.height).min(large.y + large.height) - small.y.max(large.y);
+    overlap >= 0.5 * small.height.min(large.height).max(1.0)
+}
+
 /// Merge horizontally adjacent raw text items on the same visual line into
 /// word/phrase-level text boxes.
 fn merge_into_words(raws: &[RawTextItem]) -> Vec<RawTextItem> {
@@ -67,7 +86,7 @@ fn merge_into_words(raws: &[RawTextItem]) -> Vec<RawTextItem> {
     // we use a stable insertion sort that accepts the comparator as-is.
     let cmp = |a: &RawTextItem, b: &RawTextItem| {
         let dy = b.y - a.y;
-        if dy.abs() > SAME_LINE_Y_TOLERANCE {
+        if dy.abs() > SAME_LINE_Y_TOLERANCE && !script_same_line(a, b) {
             dy.partial_cmp(&0.0).unwrap_or(std::cmp::Ordering::Equal)
         } else {
             a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal)
@@ -80,7 +99,8 @@ fn merge_into_words(raws: &[RawTextItem]) -> Vec<RawTextItem> {
     let mut cur = sorted[0].clone();
 
     for next in sorted.iter().skip(1) {
-        let same_y = (next.y - cur.y).abs() <= SAME_LINE_Y_TOLERANCE;
+        let same_y =
+            (next.y - cur.y).abs() <= SAME_LINE_Y_TOLERANCE || script_same_line(&cur, next);
         let close = next.x <= cur.x + cur.width + MAX_MERGE_GAP;
 
         if same_y && close {
