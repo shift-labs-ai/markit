@@ -11,6 +11,7 @@ pub mod index;
 pub mod own_pdf;
 pub mod render;
 pub mod truetype;
+pub mod type1;
 pub mod types;
 
 /// JavaScriptCore-faithful Array#sort for comparators that do not implement

@@ -79,6 +79,11 @@ pub(crate) struct FontInfo {
     is_bold: bool,
     size_hint_monospace: bool,
     symbol_font: SymbolFont,
+    /// Codes ARE UCS-2 code units (UniXX-UCS2-H/V predefined CMaps).
+    ucs2_codes: bool,
+    /// Unsupported predefined CMap: text through this font cannot be
+    /// decoded — the page must go to the fallback engine.
+    unsupported_cmap: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -100,6 +105,8 @@ impl Default for FontInfo {
             two_byte: false,
             is_bold: false,
             symbol_font: SymbolFont::None,
+            ucs2_codes: false,
+            unsupported_cmap: false,
             size_hint_monospace: false,
         }
     }
@@ -127,7 +134,25 @@ fn build_font(pdf: &Pdf, dict: &Dict) -> FontInfo {
     let is_type0 = matches!(g(b"Subtype"), Some(Val::Name(b"Type0")));
 
     if is_type0 {
-        info.two_byte = true; // Identity-H / 2-byte CMaps (the practical case)
+        info.two_byte = true;
+        match g(b"Encoding") {
+            // Identity: codes are CIDs. Vertical variants extract the
+            // same text; assembly treats them as horizontal runs.
+            Some(Val::Name(b"Identity-H")) | Some(Val::Name(b"Identity-V")) | None => {}
+            Some(Val::Name(n)) => {
+                if n.ends_with(b"UCS2-H") || n.ends_with(b"UCS2-V") {
+                    info.ucs2_codes = true;
+                } else {
+                    // GBK-EUC-H and friends need Adobe's CMap tables;
+                    // refuse rather than emit garbage.
+                    info.unsupported_cmap = true;
+                }
+            }
+            // Embedded CMap stream: codespace defaults to 2-byte; CID
+            // mapping usually Identity for subset fonts. Accept.
+            Some(Val::Stream(..)) => {}
+            _ => {}
+        }
         if let Some(Val::Array(desc)) = g(b"DescendantFonts") {
             if let Some(d0) = desc.first() {
                 if let Ok(Val::Dict(cid_font)) = pdf.resolve(d0) {
@@ -1182,6 +1207,9 @@ struct Interp<'a> {
     image_xobjects: Vec<(Dict<'a>, &'a [u8])>,
     /// Number of text-showing operators encountered (any font).
     text_ops: usize,
+    /// A font with an unsupported predefined CMap showed text: the page
+    /// cannot be decoded faithfully.
+    unsupported_font: bool,
     ctm: Mat,
     ctm_stack: Vec<Mat>,
     ts: TextState,
@@ -1482,7 +1510,12 @@ impl<'a> Interp<'a> {
                 * self.ts.h_scale;
 
             if font.two_byte {
-                if let Some(s) = font.to_unicode.get(&code) {
+                if font.ucs2_codes {
+                    // Codes are UCS-2 code units directly.
+                    if let Some(c) = char::from_u32(code) {
+                        text.push(c);
+                    }
+                } else if let Some(s) = font.to_unicode.get(&code) {
                     text.push_str(s);
                 } else if let Some(c) = char::from_u32(code) {
                     text.push(c);
@@ -1829,6 +1862,7 @@ pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
             image_bboxes: Vec::new(),
             image_xobjects: Vec::new(),
             text_ops: 0,
+            unsupported_font: false,
             ctm: base,
             ctm_stack: Vec::new(),
             ts: TextState::default(),
@@ -1847,6 +1881,9 @@ pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
         }
         if interp.text_ops > 0 {
             any_text_ops = true;
+        }
+        if interp.unsupported_font {
+            bail!("unsupported predefined CMap (CJK encoding tables)");
         }
 
         // Text boxes through the shared merge pipeline (items are already
@@ -1945,6 +1982,7 @@ pub(crate) fn page_image_placements<'a>(
         image_bboxes: Vec::new(),
         image_xobjects: Vec::new(),
         text_ops: 0,
+        unsupported_font: false,
         ctm: base,
         ctm_stack: Vec::new(),
         ts: TextState::default(),
