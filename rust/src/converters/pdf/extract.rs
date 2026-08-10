@@ -16,6 +16,26 @@ use super::types::{Bounds, ImageRegion, PageContent, Rect, Segment, TextBox};
 // Text extraction
 // ---------------------------------------------------------------------------
 
+/// Fallback diagnostics, visible under MARKIT_DEBUG.
+fn log_fallback(e: &anyhow::Error) {
+    if std::env::var("MARKIT_DEBUG").is_ok() {
+        eprintln!("[markit] pdf fast path fell back to mupdf: {e}");
+    }
+}
+
+/// Disable ICC color management on this thread's MuPDF context, once.
+fn disable_icc_once() {
+    thread_local! {
+        static DONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    DONE.with(|done| {
+        if !done.get() {
+            mupdf::Context::get().disable_icc();
+            done.set(true);
+        }
+    });
+}
+
 /// Y tolerance for merging text fragments on the same visual line.
 const SAME_LINE_Y_TOLERANCE: f64 = 2.0;
 /// Max horizontal gap (pts) to merge adjacent fragments into one text box.
@@ -340,6 +360,66 @@ fn parse_text_boxes_json(json: &str, page_number: u32, page_height: f64) -> Resu
     }
 
     finish_text_boxes(raws, page_number)
+}
+
+/// Public shims for the lopdf fast path (fast_extract.rs), which feeds
+/// the same downstream pipeline.
+pub(crate) struct RawTextItemPub {
+    pub text: String,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub font_size: f64,
+    pub is_bold: bool,
+}
+
+pub(crate) fn finish_text_boxes_pub(
+    raws: Vec<RawTextItemPub>,
+    page_number: u32,
+) -> Result<Vec<TextBox>> {
+    let raws: Vec<RawTextItem> = raws
+        .into_iter()
+        .map(|r| RawTextItem {
+            text: r.text,
+            x: r.x,
+            y: r.y,
+            width: r.width,
+            height: r.height,
+            font_size: r.font_size,
+            is_bold: r.is_bold,
+        })
+        .collect();
+    finish_text_boxes(raws, page_number)
+}
+
+pub(crate) fn image_regions_from_bboxes_pub(
+    bboxes: &[(f32, f32, f32, f32)],
+    page_number: u32,
+    page_height: f64,
+) -> Vec<ImageRegion> {
+    image_regions_from_bboxes(bboxes, page_number, page_height)
+}
+
+pub(crate) fn thin_rect_to_segment_pub(
+    id: String,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+) -> Option<Segment> {
+    thin_rect_to_segment(id, x, y, w, h)
+}
+
+pub(crate) fn push_stroked_rect_edges_pub(
+    segments: &mut Vec<Segment>,
+    id: &str,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+) {
+    push_stroked_rect_edges(segments, id, x, y, w, h)
 }
 
 /// Shared tail of text-box extraction: word merging and TextBox assembly.
@@ -879,7 +959,26 @@ pub fn render_image_region(input: &[u8], region: &ImageRegion) -> Result<Vec<u8>
 }
 
 /// Extract text boxes and vector segments from all pages of a PDF buffer.
+///
+/// The lopdf fast path handles text-based PDFs at a fraction of MuPDF's
+/// cost; anything it cannot model faithfully (encryption lopdf cannot
+/// decrypt, rotated pages, no extractable text, parse errors) falls back
+/// to the MuPDF path. MARKIT_PDF_ENGINE=mupdf forces the fallback.
 pub fn extract_pages(input: &[u8]) -> Result<Vec<PageContent>> {
+    if std::env::var("MARKIT_PDF_ENGINE").as_deref() != Ok("mupdf") {
+        match super::fast_extract::extract_pages_fast(input) {
+            Ok(pages) => return Ok(pages),
+            Err(e) => {
+                log_fallback(&e);
+            }
+        }
+    }
+
+    // Text extraction never consumes color-managed values, but MuPDF's
+    // default context runs lcms ICC transforms during page processing
+    // (~5% of small-document conversion). Off, once per thread.
+    disable_icc_once();
+
     let doc = Document::from_bytes(input, "application/pdf")
         .map_err(|e| anyhow!("Failed to open PDF: {}", e))?;
 
@@ -887,9 +986,12 @@ pub fn extract_pages(input: &[u8]) -> Result<Vec<PageContent>> {
         .page_count()
         .map_err(|e| anyhow!("Failed to get page count: {}", e))?;
 
-    // Also open as PdfDocument for content stream access
-    let pdf_doc = PdfDocument::from_bytes(input)
-        .map_err(|e| anyhow!("Failed to open PDF document: {}", e))?;
+    // Content-stream access needs the pdf_document view of the SAME
+    // document: a borrow-cast (pdf_document_from_fz_document), not the
+    // second full open + xref parse this used to do.
+    let pdf_doc =
+        PdfDocument::try_from(doc).map_err(|e| anyhow!("Failed to open PDF document: {}", e))?;
+    let doc = &pdf_doc;
 
     let mut pages: Vec<PageContent> = Vec::new();
 
@@ -908,7 +1010,11 @@ pub fn extract_pages(input: &[u8]) -> Result<Vec<PageContent>> {
         let (text_boxes, images) = extract_page_content(&page, page_number, page_height);
 
         // Extract vector segments from raw content stream
-        let segments = extract_segments_from_pdf_page(&pdf_doc, i, page_number);
+        let segments = if std::env::var("MARKIT_NO_SEGMENTS").is_ok() {
+            Vec::new()
+        } else {
+            extract_segments_from_pdf_page(&pdf_doc, i, page_number)
+        };
 
         pages.push(PageContent {
             page_number,

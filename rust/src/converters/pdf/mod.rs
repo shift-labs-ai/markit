@@ -2,6 +2,7 @@
 
 pub mod columns;
 pub mod extract;
+pub mod fast_extract;
 pub mod grid;
 pub mod headers;
 pub mod index;
