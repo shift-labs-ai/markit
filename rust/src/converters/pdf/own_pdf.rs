@@ -59,6 +59,11 @@ pub struct Pdf<'a> {
     objstm_cache: RefCell<FxHashMap<u32, ObjStm>>,
     /// AES-256 stream decryption (V5 standard handler), when active.
     decrypt: Option<Decryptor>,
+    /// Legacy (V1/V2/V4) decryption: per-object keys.
+    legacy: Option<LegacyCrypt>,
+    /// Decrypted stream bytes for legacy encryption, keyed by object
+    /// number (entries are never evicted, so returned slices stay valid).
+    legacy_cache: RefCell<FxHashMap<u32, Vec<u8>>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -76,15 +81,20 @@ struct ObjStm {
 
 impl<'a> Pdf<'a> {
     pub fn parse(data: &'a [u8]) -> Result<Pdf<'a>> {
-        let start = find_startxref(data)?;
         let mut pdf = Pdf {
             data,
             xref: FxHashMap::default(),
             trailer: Vec::new(),
             objstm_cache: RefCell::new(FxHashMap::default()),
             decrypt: None,
+            legacy: None,
+            legacy_cache: RefCell::new(FxHashMap::default()),
         };
-        if pdf.load_xref_chain(start).is_err() || pdf.trailer.is_empty() {
+        let loaded = match find_startxref(data) {
+            Ok(start) => pdf.load_xref_chain(start).is_ok() && !pdf.trailer.is_empty(),
+            Err(_) => false,
+        };
+        if !loaded {
             pdf.repair_scan()?;
         }
         // Empty-password AES-256 documents decrypt transparently; anything
@@ -178,6 +188,8 @@ impl<'a> Pdf<'a> {
             trailer: Vec::new(),
             objstm_cache: RefCell::new(FxHashMap::default()),
             decrypt: None,
+            legacy: None,
+            legacy_cache: RefCell::new(FxHashMap::default()),
         };
         pdf.load_xref_chain(start)?;
         Ok(pdf)
@@ -333,6 +345,12 @@ impl<'a> Pdf<'a> {
                 let (n, v) = lx.indirect_object(self)?;
                 if n != num {
                     bail!("xref offset mismatch for {num}");
+                }
+                if self.legacy.is_some() {
+                    if let Val::Stream(d, raw) = v {
+                        let plain = self.legacy_decrypt(num, raw)?;
+                        return Ok(Val::Stream(d, plain));
+                    }
                 }
                 Ok(v)
             }
@@ -1073,6 +1091,9 @@ impl<'a> Pdf<'a> {
         }
         let v = g(b"V")?.and_then(|v| v.as_num()).unwrap_or(0.0) as i64;
         let r = g(b"R")?.and_then(|v| v.as_num()).unwrap_or(0.0) as i64;
+        if matches!(v, 1 | 2 | 4) && matches!(r, 2..=4) {
+            return self.setup_legacy(&enc, v, r);
+        }
         if v != 5 || !(r == 5 || r == 6) {
             bail!("unsupported encryption V={v} R={r}");
         }
@@ -1131,6 +1152,114 @@ impl<'a> Pdf<'a> {
         self.decrypt_stream(raw)
     }
 
+    /// Legacy (V<5) key schedule: Algorithm 2 with the empty user password.
+    fn setup_legacy(&mut self, enc: &Dict<'a>, v: i64, r: i64) -> Result<()> {
+        let get_str = |k: &[u8]| -> Result<Vec<u8>> {
+            match self.dict_get(enc, k)? {
+                Some(Val::Str(s)) => Ok(s),
+                _ => bail!("missing {}", String::from_utf8_lossy(k)),
+            }
+        };
+        let o = get_str(b"O")?;
+        let u = get_str(b"U")?;
+        let p = self
+            .dict_get(enc, b"P")?
+            .and_then(|x| x.as_num())
+            .unwrap_or(0.0) as i64;
+        let length_bits = self
+            .dict_get(enc, b"Length")?
+            .and_then(|x| x.as_num())
+            .unwrap_or(40.0) as usize;
+        let key_len = if v == 1 {
+            5
+        } else {
+            (length_bits / 8).clamp(5, 16)
+        };
+
+        let mut aes = false;
+        if v == 4 {
+            match self.dict_get(enc, b"StmF")? {
+                None | Some(Val::Name(b"Identity")) => return Ok(()),
+                Some(Val::Name(b"StdCF")) => {}
+                _ => bail!("unsupported StmF"),
+            }
+            if let Some(Val::Dict(cf)) = self.dict_get(enc, b"CF")? {
+                if let Some(Val::Dict(stdcf)) = self.dict_get(&cf, b"StdCF")? {
+                    match self.dict_get(&stdcf, b"CFM")? {
+                        Some(Val::Name(b"AESV2")) => aes = true,
+                        Some(Val::Name(b"V2")) => {}
+                        other => bail!("unsupported CFM {other:?}"),
+                    }
+                }
+            }
+        }
+        let encrypt_metadata = !matches!(
+            self.dict_get(enc, b"EncryptMetadata")?,
+            Some(Val::Bool(false))
+        );
+
+        // First file ID from the trailer.
+        let id0: Vec<u8> = match dget(&self.trailer, b"ID").map(|x| self.resolve(x)) {
+            Some(Ok(Val::Array(a))) => match a.first().map(|x| self.resolve(x)) {
+                Some(Ok(Val::Str(s))) => s,
+                _ => Vec::new(),
+            },
+            _ => Vec::new(),
+        };
+
+        // Algorithm 2 with the empty (padded) user password.
+        let mut seed = Vec::with_capacity(128);
+        seed.extend_from_slice(&PAD);
+        seed.extend_from_slice(&o[..32.min(o.len())]);
+        seed.extend_from_slice(&(p as i32).to_le_bytes());
+        seed.extend_from_slice(&id0);
+        if r >= 4 && !encrypt_metadata {
+            seed.extend_from_slice(&[0xff, 0xff, 0xff, 0xff]);
+        }
+        let mut key = md5(&seed)[..key_len].to_vec();
+        if r >= 3 {
+            for _ in 0..50 {
+                key = md5(&key)[..key_len].to_vec();
+            }
+        }
+
+        // Validate against /U (Algorithm 6): tolerate producers that get
+        // the padding wrong by comparing only the first 16 bytes for R>=3.
+        let ok = if r == 2 {
+            rc4(&key, &PAD) == u[..32.min(u.len())]
+        } else {
+            let mut h = Vec::with_capacity(64);
+            h.extend_from_slice(&PAD);
+            h.extend_from_slice(&id0);
+            let mut x = md5(&h).to_vec();
+            for i in 1..=19u8 {
+                let k2: Vec<u8> = key.iter().map(|&b| b ^ i).collect();
+                x = rc4(&k2, &x);
+            }
+            let x = rc4(&key, &x);
+            u.len() >= 16 && x[..16] == u[..16]
+        };
+        if !ok {
+            bail!("password required");
+        }
+
+        self.legacy = Some(LegacyCrypt { key, aes });
+        Ok(())
+    }
+
+    /// Legacy per-object stream decryption with caching.
+    pub(crate) fn legacy_decrypt(&self, num: u32, raw: &[u8]) -> Result<&'a [u8]> {
+        let lc = self.legacy.as_ref().expect("legacy crypt");
+        if !self.legacy_cache.borrow().contains_key(&num) {
+            let plain = lc.decrypt_object(num, 0, raw)?;
+            self.legacy_cache.borrow_mut().insert(num, plain);
+        }
+        let cache = self.legacy_cache.borrow();
+        let v = cache.get(&num).unwrap();
+        // Entries are never evicted; the Vec's heap allocation is stable.
+        Ok(unsafe { std::slice::from_raw_parts(v.as_ptr(), v.len()) })
+    }
+
     pub(crate) fn decrypt_stream(&self, raw: &[u8]) -> Result<Vec<u8>> {
         let Some(d) = &self.decrypt else {
             return Ok(raw.to_vec());
@@ -1149,6 +1278,141 @@ impl<'a> Pdf<'a> {
             }
         }
         Ok(out)
+    }
+}
+
+/// Legacy standard security handler state (V1/V2 RC4, V4 RC4/AESV2).
+pub(crate) struct LegacyCrypt {
+    key: Vec<u8>,
+    aes: bool,
+}
+
+const PAD: [u8; 32] = [
+    0x28, 0xBF, 0x4E, 0x5E, 0x4E, 0x75, 0x8A, 0x41, 0x64, 0x00, 0x4E, 0x56, 0xFF, 0xFA, 0x01, 0x08,
+    0x2E, 0x2E, 0x00, 0xB6, 0xD0, 0x68, 0x3E, 0x80, 0x2F, 0x0C, 0xA9, 0xFE, 0x64, 0x53, 0x69, 0x7A,
+];
+
+/// Tiny MD5 (RFC 1321) — enough for the legacy key schedule.
+fn md5(data: &[u8]) -> [u8; 16] {
+    const S: [u32; 64] = [
+        7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5,
+        9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10,
+        15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+    ];
+    let k: [u32; 64] =
+        std::array::from_fn(|i| ((i as f64 + 1.0).sin().abs() * 4294967296.0) as u32);
+    let (mut a0, mut b0, mut c0, mut d0) =
+        (0x67452301u32, 0xefcdab89u32, 0x98badcfeu32, 0x10325476u32);
+
+    let mut msg = data.to_vec();
+    let bitlen = (data.len() as u64).wrapping_mul(8);
+    msg.push(0x80);
+    while !msg.len().is_multiple_of(64) {
+        if msg.len() % 64 == 56 {
+            break;
+        }
+        msg.push(0);
+    }
+    while msg.len() % 64 != 56 {
+        msg.push(0);
+    }
+    msg.extend_from_slice(&bitlen.to_le_bytes());
+
+    for chunk in msg.chunks_exact(64) {
+        let m: [u32; 16] = std::array::from_fn(|i| {
+            u32::from_le_bytes([
+                chunk[i * 4],
+                chunk[i * 4 + 1],
+                chunk[i * 4 + 2],
+                chunk[i * 4 + 3],
+            ])
+        });
+        let (mut a, mut b, mut c, mut d) = (a0, b0, c0, d0);
+        for i in 0..64 {
+            let (f, g) = match i / 16 {
+                0 => ((b & c) | (!b & d), i),
+                1 => ((d & b) | (!d & c), (5 * i + 1) % 16),
+                2 => (b ^ c ^ d, (3 * i + 5) % 16),
+                _ => (c ^ (b | !d), (7 * i) % 16),
+            };
+            let tmp = d;
+            d = c;
+            c = b;
+            b = b.wrapping_add(
+                a.wrapping_add(f)
+                    .wrapping_add(k[i])
+                    .wrapping_add(m[g])
+                    .rotate_left(S[i]),
+            );
+            a = tmp;
+        }
+        a0 = a0.wrapping_add(a);
+        b0 = b0.wrapping_add(b);
+        c0 = c0.wrapping_add(c);
+        d0 = d0.wrapping_add(d);
+    }
+    let mut out = [0u8; 16];
+    out[..4].copy_from_slice(&a0.to_le_bytes());
+    out[4..8].copy_from_slice(&b0.to_le_bytes());
+    out[8..12].copy_from_slice(&c0.to_le_bytes());
+    out[12..].copy_from_slice(&d0.to_le_bytes());
+    out
+}
+
+fn rc4(key: &[u8], data: &[u8]) -> Vec<u8> {
+    let mut s: [u8; 256] = std::array::from_fn(|i| i as u8);
+    let mut j = 0u8;
+    for i in 0..256 {
+        j = j.wrapping_add(s[i]).wrapping_add(key[i % key.len()]);
+        s.swap(i, j as usize);
+    }
+    let (mut i, mut j) = (0u8, 0u8);
+    data.iter()
+        .map(|&b| {
+            i = i.wrapping_add(1);
+            j = j.wrapping_add(s[i as usize]);
+            s.swap(i as usize, j as usize);
+            b ^ s[(s[i as usize].wrapping_add(s[j as usize])) as usize]
+        })
+        .collect()
+}
+
+impl LegacyCrypt {
+    /// Per-object key (Algorithm 1) + decrypt.
+    fn decrypt_object(&self, num: u32, gen: u16, data: &[u8]) -> Result<Vec<u8>> {
+        let mut seed = self.key.clone();
+        seed.extend_from_slice(&num.to_le_bytes()[..3]);
+        seed.extend_from_slice(&gen.to_le_bytes()[..2]);
+        if self.aes {
+            seed.extend_from_slice(b"sAlT");
+        }
+        let h = md5(&seed);
+        let klen = (self.key.len() + 5).min(16);
+        let obj_key = &h[..klen];
+
+        if self.aes {
+            if data.len() < 16 || !data.len().is_multiple_of(16) {
+                bail!("bad AESV2 stream");
+            }
+            use aes::cipher::{BlockDecryptMut, KeyIvInit};
+            type Dec = cbc::Decryptor<aes::Aes128>;
+            let mut buf = data[16..].to_vec();
+            let mut dec = Dec::new(obj_key.into(), data[..16].into());
+            for chunk in buf.chunks_exact_mut(16) {
+                dec.decrypt_block_mut(chunk.into());
+            }
+            if let Some(&pad) = buf.last() {
+                if pad >= 1 && pad as usize <= 16 && pad as usize <= buf.len() {
+                    let n = buf.len() - pad as usize;
+                    if buf[n..].iter().all(|&b| b == pad) {
+                        buf.truncate(n);
+                    }
+                }
+            }
+            Ok(buf)
+        } else {
+            Ok(rc4(obj_key, data))
+        }
     }
 }
 

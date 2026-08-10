@@ -233,8 +233,10 @@ const WIN_ANSI_HIGH: [u32; 128] = [
     0x00F9, 0x00FA, 0x00FB, 0x00FC, 0x00FD, 0x00FE, 0x00FF,
 ];
 
-/// Small AGL subset covering the glyph names Differences arrays use in
-/// practice for Latin text.
+/// Adobe Glyph List, the practical subset: Latin with full diacritics,
+/// ligatures, punctuation, Greek, and common math/symbol names — the
+/// names Differences arrays actually use. Suffixed variants
+/// ("a.sc", "one.oldstyle") fall back to their base name.
 fn glyph_to_unicode(name: &[u8]) -> Option<char> {
     let s = std::str::from_utf8(name).ok()?;
     // uniXXXX / uXXXX[XX]
@@ -245,7 +247,19 @@ fn glyph_to_unicode(name: &[u8]) -> Option<char> {
             }
         }
     }
+    if let Some(c) = agl_lookup(s) {
+        return Some(c);
+    }
+    // Variant suffix ("eacute.sc", "one.onum") → base glyph.
+    if let Some(dot) = s.find('.') {
+        return agl_lookup(&s[..dot]);
+    }
+    None
+}
+
+fn agl_lookup(s: &str) -> Option<char> {
     Some(match s {
+        // ── ASCII ────────────────────────────────────────────────
         "space" => ' ',
         "exclam" => '!',
         "quotedbl" => '"',
@@ -259,7 +273,7 @@ fn glyph_to_unicode(name: &[u8]) -> Option<char> {
         "asterisk" => '*',
         "plus" => '+',
         "comma" => ',',
-        "hyphen" | "minus" => '-',
+        "hyphen" => '-',
         "period" => '.',
         "slash" => '/',
         "zero" => '0',
@@ -289,20 +303,228 @@ fn glyph_to_unicode(name: &[u8]) -> Option<char> {
         "bar" => '|',
         "braceright" => '}',
         "asciitilde" => '~',
+        // ── quotes, dashes, marks ────────────────────────────────
         "quoteleft" => '\u{2018}',
         "quoteright" => '\u{2019}',
+        "quotesinglbase" => '\u{201A}',
         "quotedblleft" => '\u{201C}',
         "quotedblright" => '\u{201D}',
+        "quotedblbase" => '\u{201E}',
+        "guilsinglleft" => '\u{2039}',
+        "guilsinglright" => '\u{203A}',
+        "guillemotleft" => '\u{00AB}',
+        "guillemotright" => '\u{00BB}',
         "endash" => '\u{2013}',
         "emdash" => '\u{2014}',
         "bullet" => '\u{2022}',
         "ellipsis" => '\u{2026}',
-        "fi" => '\u{FB01}',
-        "fl" => '\u{FB02}',
-        "degree" => '\u{00B0}',
+        "dagger" => '\u{2020}',
+        "daggerdbl" => '\u{2021}',
+        "perthousand" => '\u{2030}',
+        "periodcentered" => '\u{00B7}',
+        "exclamdown" => '\u{00A1}',
+        "questiondown" => '\u{00BF}',
+        "section" => '\u{00A7}',
+        "paragraph" => '\u{00B6}',
+        "fraction" => '\u{2044}',
+        "minute" => '\u{2032}',
+        "second" => '\u{2033}',
+        // ── currency & signs ─────────────────────────────────────
+        "cent" => '\u{00A2}',
+        "sterling" => '\u{00A3}',
+        "yen" => '\u{00A5}',
+        "florin" => '\u{0192}',
+        "currency" => '\u{00A4}',
+        "Euro" | "euro" => '\u{20AC}',
         "copyright" => '\u{00A9}',
         "registered" => '\u{00AE}',
         "trademark" => '\u{2122}',
+        "degree" => '\u{00B0}',
+        "plusminus" => '\u{00B1}',
+        "multiply" => '\u{00D7}',
+        "divide" => '\u{00F7}',
+        "minus" => '\u{2212}',
+        "logicalnot" => '\u{00AC}',
+        "mu" => '\u{00B5}',
+        "micro" => '\u{00B5}',
+        // ── ligatures & special latin ────────────────────────────
+        "fi" => '\u{FB01}',
+        "fl" => '\u{FB02}',
+        "ff" => '\u{FB00}',
+        "ffi" => '\u{FB03}',
+        "ffl" => '\u{FB04}',
+        "ae" => '\u{00E6}',
+        "AE" => '\u{00C6}',
+        "oe" => '\u{0153}',
+        "OE" => '\u{0152}',
+        "oslash" => '\u{00F8}',
+        "Oslash" => '\u{00D8}',
+        "germandbls" => '\u{00DF}',
+        "dotlessi" => '\u{0131}',
+        "thorn" => '\u{00FE}',
+        "Thorn" => '\u{00DE}',
+        "eth" => '\u{00F0}',
+        "Eth" => '\u{00D0}',
+        "Lslash" => '\u{0141}',
+        "lslash" => '\u{0142}',
+        // ── accented Latin (lowercase) ───────────────────────────
+        "agrave" => '\u{00E0}',
+        "aacute" => '\u{00E1}',
+        "acircumflex" => '\u{00E2}',
+        "atilde" => '\u{00E3}',
+        "adieresis" => '\u{00E4}',
+        "aring" => '\u{00E5}',
+        "ccedilla" => '\u{00E7}',
+        "egrave" => '\u{00E8}',
+        "eacute" => '\u{00E9}',
+        "ecircumflex" => '\u{00EA}',
+        "edieresis" => '\u{00EB}',
+        "igrave" => '\u{00EC}',
+        "iacute" => '\u{00ED}',
+        "icircumflex" => '\u{00EE}',
+        "idieresis" => '\u{00EF}',
+        "ntilde" => '\u{00F1}',
+        "ograve" => '\u{00F2}',
+        "oacute" => '\u{00F3}',
+        "ocircumflex" => '\u{00F4}',
+        "otilde" => '\u{00F5}',
+        "odieresis" => '\u{00F6}',
+        "ugrave" => '\u{00F9}',
+        "uacute" => '\u{00FA}',
+        "ucircumflex" => '\u{00FB}',
+        "udieresis" => '\u{00FC}',
+        "yacute" => '\u{00FD}',
+        "ydieresis" => '\u{00FF}',
+        "scaron" => '\u{0161}',
+        "zcaron" => '\u{017E}',
+        "ccaron" => '\u{010D}',
+        "rcaron" => '\u{0159}',
+        "ecaron" => '\u{011B}',
+        "abreve" => '\u{0103}',
+        "amacron" => '\u{0101}',
+        "aogonek" => '\u{0105}',
+        "eogonek" => '\u{0119}',
+        "cacute" => '\u{0107}',
+        "nacute" => '\u{0144}',
+        "sacute" => '\u{015B}',
+        "zacute" => '\u{017A}',
+        "zdotaccent" => '\u{017C}',
+        // ── accented Latin (uppercase) ───────────────────────────
+        "Agrave" => '\u{00C0}',
+        "Aacute" => '\u{00C1}',
+        "Acircumflex" => '\u{00C2}',
+        "Atilde" => '\u{00C3}',
+        "Adieresis" => '\u{00C4}',
+        "Aring" => '\u{00C5}',
+        "Ccedilla" => '\u{00C7}',
+        "Egrave" => '\u{00C8}',
+        "Eacute" => '\u{00C9}',
+        "Ecircumflex" => '\u{00CA}',
+        "Edieresis" => '\u{00CB}',
+        "Igrave" => '\u{00CC}',
+        "Iacute" => '\u{00CD}',
+        "Icircumflex" => '\u{00CE}',
+        "Idieresis" => '\u{00CF}',
+        "Ntilde" => '\u{00D1}',
+        "Ograve" => '\u{00D2}',
+        "Oacute" => '\u{00D3}',
+        "Ocircumflex" => '\u{00D4}',
+        "Otilde" => '\u{00D5}',
+        "Odieresis" => '\u{00D6}',
+        "Ugrave" => '\u{00D9}',
+        "Uacute" => '\u{00DA}',
+        "Ucircumflex" => '\u{00DB}',
+        "Udieresis" => '\u{00DC}',
+        "Yacute" => '\u{00DD}',
+        "Scaron" => '\u{0160}',
+        "Zcaron" => '\u{017D}',
+        // ── accents (spacing) ────────────────────────────────────
+        "circumflex" => '\u{02C6}',
+        "caron" => '\u{02C7}',
+        "breve" => '\u{02D8}',
+        "dotaccent" => '\u{02D9}',
+        "ring" => '\u{02DA}',
+        "ogonek" => '\u{02DB}',
+        "tilde" => '\u{02DC}',
+        "hungarumlaut" => '\u{02DD}',
+        "macron" => '\u{00AF}',
+        "acute" => '\u{00B4}',
+        "cedilla" => '\u{00B8}',
+        "dieresis" => '\u{00A8}',
+        // ── ordinals & fractions ─────────────────────────────────
+        "ordfeminine" => '\u{00AA}',
+        "ordmasculine" => '\u{00BA}',
+        "onequarter" => '\u{00BC}',
+        "onehalf" => '\u{00BD}',
+        "threequarters" => '\u{00BE}',
+        "onesuperior" => '\u{00B9}',
+        "twosuperior" => '\u{00B2}',
+        "threesuperior" => '\u{00B3}',
+        // ── Greek ────────────────────────────────────────────────
+        "alpha" => '\u{03B1}',
+        "beta" => '\u{03B2}',
+        "gamma" => '\u{03B3}',
+        "delta" => '\u{03B4}',
+        "epsilon" => '\u{03B5}',
+        "zeta" => '\u{03B6}',
+        "eta" => '\u{03B7}',
+        "theta" => '\u{03B8}',
+        "iota" => '\u{03B9}',
+        "kappa" => '\u{03BA}',
+        "lambda" => '\u{03BB}',
+        "nu" => '\u{03BD}',
+        "xi" => '\u{03BE}',
+        "omicron" => '\u{03BF}',
+        "pi" => '\u{03C0}',
+        "rho" => '\u{03C1}',
+        "sigma" => '\u{03C3}',
+        "sigma1" => '\u{03C2}',
+        "tau" => '\u{03C4}',
+        "upsilon" => '\u{03C5}',
+        "phi" => '\u{03C6}',
+        "chi" => '\u{03C7}',
+        "psi" => '\u{03C8}',
+        "omega" => '\u{03C9}',
+        "Gamma" => '\u{0393}',
+        "Delta" => '\u{0394}',
+        "Theta" => '\u{0398}',
+        "Lambda" => '\u{039B}',
+        "Xi" => '\u{039E}',
+        "Pi" => '\u{03A0}',
+        "Sigma" => '\u{03A3}',
+        "Upsilon" => '\u{03A5}',
+        "Phi" => '\u{03A6}',
+        "Psi" => '\u{03A8}',
+        "Omega" => '\u{03A9}',
+        // ── math & misc symbols ──────────────────────────────────
+        "infinity" => '\u{221E}',
+        "partialdiff" => '\u{2202}',
+        "summation" => '\u{2211}',
+        "product" => '\u{220F}',
+        "integral" => '\u{222B}',
+        "radical" => '\u{221A}',
+        "approxequal" => '\u{2248}',
+        "notequal" => '\u{2260}',
+        "lessequal" => '\u{2264}',
+        "greaterequal" => '\u{2265}',
+        "equivalence" => '\u{2261}',
+        "element" => '\u{2208}',
+        "intersection" => '\u{2229}',
+        "union" => '\u{222A}',
+        "arrowleft" => '\u{2190}',
+        "arrowup" => '\u{2191}',
+        "arrowright" => '\u{2192}',
+        "arrowdown" => '\u{2193}',
+        "arrowboth" => '\u{2194}',
+        "lozenge" => '\u{25CA}',
+        "diamond" => '\u{2666}',
+        "heart" => '\u{2665}',
+        "spade" => '\u{2660}',
+        "club" => '\u{2663}',
+        "brokenbar" => '\u{00A6}',
+        "nbspace" => '\u{00A0}',
+        "sfthyphen" => '\u{00AD}',
+        "apple" => '\u{F8FF}',
         other => {
             // Single-letter names map to themselves (A–Z, a–z).
             let mut chars = other.chars();
@@ -534,6 +756,8 @@ struct Interp<'a> {
     image_bboxes: Vec<(f64, f64, f64, f64)>, // user-space x0,y0,x1,y1
     /// Image XObject placements in paint order (dict + raw stream bytes).
     image_xobjects: Vec<(Dict<'a>, &'a [u8])>,
+    /// Number of text-showing operators encountered (any font).
+    text_ops: usize,
     ctm: Mat,
     ctm_stack: Vec<Mat>,
     ts: TextState,
@@ -960,6 +1184,61 @@ impl<'a> Interp<'a> {
 
 // ── Page assembly ───────────────────────────────────────────────────────────
 
+/// Base CTM for a page: MediaBox-origin normalization composed with the
+/// /Rotate transform, plus the resulting (visual) page height. Rotation
+/// maps content into an upright page of swapped dimensions, so the whole
+/// downstream pipeline sees a normal page.
+fn rotation_base(rotate: Option<f64>, mb: &[f64], mx0: f64, my0: f64) -> (Mat, f64) {
+    let w = (mb[2] - mb[0]).abs();
+    let h = (mb[3] - mb[1]).abs();
+    let t = Mat {
+        a: 1.0,
+        b: 0.0,
+        c: 0.0,
+        d: 1.0,
+        e: -mx0,
+        f: -my0,
+    };
+    let r = ((rotate.unwrap_or(0.0) as i64 % 360) + 360) % 360;
+    match r {
+        90 => (
+            // (x,y) → (y, w−x): 90° clockwise display; page dims swap.
+            t.mul(Mat {
+                a: 0.0,
+                b: -1.0,
+                c: 1.0,
+                d: 0.0,
+                e: 0.0,
+                f: w,
+            }),
+            w,
+        ),
+        180 => (
+            t.mul(Mat {
+                a: -1.0,
+                b: 0.0,
+                c: 0.0,
+                d: -1.0,
+                e: w,
+                f: h,
+            }),
+            h,
+        ),
+        270 => (
+            t.mul(Mat {
+                a: 0.0,
+                b: 1.0,
+                c: -1.0,
+                d: 0.0,
+                e: h,
+                f: 0.0,
+            }),
+            w,
+        ),
+        _ => (t, h),
+    }
+}
+
 /// Inheritable page-tree attributes.
 #[derive(Clone, Default)]
 struct Inherit<'a> {
@@ -1080,19 +1359,15 @@ pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
 
     let mut out: Vec<PageContent> = Vec::with_capacity(page_dicts.len());
     let mut any_text = false;
+    let mut any_text_ops = false;
     let mut content_buf: Vec<u8> = Vec::new();
 
     for (idx, (page, inh)) in page_dicts.iter().enumerate() {
         let page_no = (idx + 1) as u32;
 
-        if let Some(r) = inh.rotate {
-            if r as i64 % 360 != 0 {
-                bail!("rotated page");
-            }
-        }
         let mb = inh.media.as_ref().ok_or_else(|| anyhow!("no MediaBox"))?;
         let (mx0, my0) = (mb[0].min(mb[2]), mb[1].min(mb[3]));
-        let page_height = (mb[3] - mb[1]).abs();
+        let (base, page_height) = rotation_base(inh.rotate, mb, mx0, my0);
 
         // Concatenate content streams.
         content_buf.clear();
@@ -1117,15 +1392,8 @@ pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
             segments: Vec::new(),
             image_bboxes: Vec::new(),
             image_xobjects: Vec::new(),
-            // Normalize a non-zero MediaBox origin to (0,0).
-            ctm: Mat {
-                a: 1.0,
-                b: 0.0,
-                c: 0.0,
-                d: 1.0,
-                e: -mx0,
-                f: -my0,
-            },
+            text_ops: 0,
+            ctm: base,
             ctm_stack: Vec::new(),
             ts: TextState::default(),
             path_start: None,
@@ -1140,6 +1408,9 @@ pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
 
         if !interp.items.is_empty() {
             any_text = true;
+        }
+        if interp.text_ops > 0 {
+            any_text_ops = true;
         }
 
         // Text boxes through the shared merge pipeline (items are already
@@ -1183,8 +1454,11 @@ pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
         });
     }
 
-    if !any_text && !out.is_empty() {
-        bail!("no text extracted (scanned or unsupported encodings)");
+    // Text operators that produced nothing = an encoding we failed to
+    // decode: defer to the fallback. No text operators at all = a scanned
+    // document: image placeholders are the right output, same as MuPDF.
+    if !any_text && any_text_ops && !out.is_empty() {
+        bail!("text ops decoded to nothing (unsupported encodings)");
     }
 
     Ok(out)
@@ -1210,7 +1484,7 @@ pub(crate) fn page_image_placements<'a>(
 
     let mb = inh.media.as_ref().ok_or_else(|| anyhow!("no MediaBox"))?;
     let (mx0, my0) = (mb[0].min(mb[2]), mb[1].min(mb[3]));
-    let page_height = (mb[3] - mb[1]).abs();
+    let (base, page_height) = rotation_base(inh.rotate, mb, mx0, my0);
 
     let mut content_buf: Vec<u8> = Vec::new();
     match pdf.dict_get(&page, b"Contents")? {
@@ -1234,14 +1508,8 @@ pub(crate) fn page_image_placements<'a>(
         segments: Vec::new(),
         image_bboxes: Vec::new(),
         image_xobjects: Vec::new(),
-        ctm: Mat {
-            a: 1.0,
-            b: 0.0,
-            c: 0.0,
-            d: 1.0,
-            e: -mx0,
-            f: -my0,
-        },
+        text_ops: 0,
+        ctm: base,
         ctm_stack: Vec::new(),
         ts: TextState::default(),
         path_start: None,
@@ -1272,4 +1540,67 @@ pub(crate) fn page_image_placements<'a>(
         out.push(interp.image_xobjects[i].clone());
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture(name: &str) -> Option<Vec<u8>> {
+        let path = format!("../test/fixtures/pdfs/encrypted/{name}");
+        std::fs::read(path).ok()
+    }
+
+    fn text_of(pages: &[PageContent]) -> String {
+        pages
+            .iter()
+            .flat_map(|p| p.text_boxes.iter())
+            .map(|t| t.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Every empty-password encryption revision must decrypt to exactly
+    /// the plaintext document's extraction. Fixtures generated with qpdf
+    /// from our own t.pdf (see test/fixtures/pdfs/encrypted/).
+    #[test]
+    fn encrypted_variants_match_plaintext() {
+        let Some(plain) = fixture("plain.pdf") else {
+            eprintln!("Skipping: encrypted fixtures not found");
+            return;
+        };
+        let expect = text_of(&extract_pages_fast(&plain).unwrap());
+        assert!(!expect.is_empty());
+
+        for name in ["rc4-40.pdf", "rc4-128.pdf", "aesv2.pdf", "aes256.pdf"] {
+            let bytes = fixture(name).unwrap();
+            let pages = extract_pages_fast(&bytes)
+                .unwrap_or_else(|e| panic!("{name}: fast path failed: {e}"));
+            assert_eq!(text_of(&pages), expect, "{name} extraction differs");
+        }
+    }
+
+    /// A rotated page must still extract its text (geometry transformed,
+    /// not rejected).
+    #[test]
+    fn rotated_page_extracts() {
+        // Minimal uncompressed PDF, /Rotate 90.
+        let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Rotate 90 /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj
+4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+5 0 obj << /Length 44 >> stream
+BT /F1 12 Tf 72 720 Td (Hello rotated) Tj ET
+endstream endobj
+trailer << /Root 1 0 R >>";
+        // No xref: exercises the repair scan too.
+        let pages = extract_pages_fast(pdf).expect("rotated page");
+        let text = text_of(&pages);
+        assert!(text.contains("Hello rotated"), "got: {text}");
+        // 90° rotation swaps visual dimensions: the text box must sit
+        // within the rotated page's width (the original height).
+        let tb = &pages[0].text_boxes[0];
+        assert!(tb.bounds.left >= 0.0 && tb.bounds.right <= 792.0);
+    }
 }
