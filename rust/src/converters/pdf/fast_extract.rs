@@ -8,8 +8,9 @@
 //! regions keep the MuPDF path's device-space (y-down) convention.
 
 use anyhow::{anyhow, bail, Result};
-use lopdf::{Dictionary, Document, Object, ObjectId};
 use rustc_hash::FxHashMap;
+
+use super::own_pdf::{decode_stream, dget, Dict, Pdf, Val};
 
 use super::types::{PageContent, Segment};
 
@@ -60,32 +61,6 @@ impl Mat {
     }
 }
 
-fn mat_from(operands: &[Object]) -> Option<Mat> {
-    if operands.len() != 6 {
-        return None;
-    }
-    let v: Vec<f64> = operands.iter().filter_map(num).collect();
-    if v.len() != 6 {
-        return None;
-    }
-    Some(Mat {
-        a: v[0],
-        b: v[1],
-        c: v[2],
-        d: v[3],
-        e: v[4],
-        f: v[5],
-    })
-}
-
-fn num(o: &Object) -> Option<f64> {
-    match o {
-        Object::Integer(i) => Some(*i as f64),
-        Object::Real(r) => Some(*r as f64),
-        _ => None,
-    }
-}
-
 // ── Fonts ────────────────────────────────────────────────────────────────────
 
 pub(crate) struct FontInfo {
@@ -119,71 +94,44 @@ impl Default for FontInfo {
     }
 }
 
-fn resolve<'a>(doc: &'a Document, obj: &'a Object) -> &'a Object {
-    let mut cur = obj;
-    for _ in 0..32 {
-        match cur {
-            Object::Reference(id) => match doc.get_object(*id) {
-                Ok(o) => cur = o,
-                Err(_) => return cur,
-            },
-            _ => return cur,
-        }
-    }
-    cur
-}
-
-fn dict_get<'a>(doc: &'a Document, dict: &'a Dictionary, key: &[u8]) -> Option<&'a Object> {
-    dict.get(key).ok().map(|o| resolve(doc, o))
-}
-
-fn name_of(o: &Object) -> Option<&[u8]> {
-    match o {
-        Object::Name(n) => Some(n),
-        _ => None,
-    }
-}
-
-fn build_font(doc: &Document, dict: &Dictionary) -> FontInfo {
+fn build_font(pdf: &Pdf, dict: &Dict) -> FontInfo {
     let mut info = FontInfo::default();
+    let g = |key: &[u8]| pdf.dict_get(dict, key).ok().flatten();
 
-    let base_name = dict_get(doc, dict, b"BaseFont")
-        .and_then(name_of)
-        .map(|n| String::from_utf8_lossy(n).to_lowercase())
+    let base_name = g(b"BaseFont")
+        .and_then(|v| {
+            v.as_name()
+                .map(|n| String::from_utf8_lossy(n).to_lowercase())
+        })
         .unwrap_or_default();
     info.is_bold =
         base_name.contains("bold") || base_name.contains("black") || base_name.contains("heavy");
     info.size_hint_monospace = base_name.contains("courier") || base_name.contains("mono");
 
-    let subtype = dict_get(doc, dict, b"Subtype")
-        .and_then(name_of)
-        .unwrap_or(b"");
+    let is_type0 = matches!(g(b"Subtype"), Some(Val::Name(b"Type0")));
 
-    if subtype == b"Type0" {
+    if is_type0 {
         info.two_byte = true; // Identity-H / 2-byte CMaps (the practical case)
-        if let Some(Object::Array(desc)) = dict_get(doc, dict, b"DescendantFonts") {
+        if let Some(Val::Array(desc)) = g(b"DescendantFonts") {
             if let Some(d0) = desc.first() {
-                if let Object::Dictionary(cid_font) = resolve(doc, d0) {
-                    info.default_width = dict_get(doc, cid_font, b"DW")
-                        .and_then(num)
-                        .unwrap_or(1000.0);
-                    if let Some(Object::Array(w)) = dict_get(doc, cid_font, b"W") {
-                        parse_cid_widths(doc, w, &mut info.cid_widths);
+                if let Ok(Val::Dict(cid_font)) = pdf.resolve(d0) {
+                    let cg = |key: &[u8]| pdf.dict_get(&cid_font, key).ok().flatten();
+                    info.default_width = cg(b"DW").and_then(|v| v.as_num()).unwrap_or(1000.0);
+                    if let Some(Val::Array(w)) = cg(b"W") {
+                        parse_cid_widths(pdf, &w, &mut info.cid_widths);
                     }
                     if !info.is_bold {
-                        info.is_bold = descriptor_bold(doc, cid_font);
+                        info.is_bold = descriptor_bold(pdf, &cid_font);
                     }
                 }
             }
         }
     } else {
         info.default_width = 0.0;
-        let first_char = dict_get(doc, dict, b"FirstChar")
-            .and_then(num)
-            .unwrap_or(0.0) as usize;
-        if let Some(Object::Array(w)) = dict_get(doc, dict, b"Widths") {
+        let first_char = g(b"FirstChar").and_then(|v| v.as_num()).unwrap_or(0.0) as usize;
+        if let Some(Val::Array(w)) = g(b"Widths") {
             for (i, o) in w.iter().enumerate() {
-                if let Some(v) = num(resolve(doc, o)) {
+                if let Some(v) = pdf.resolve(o).ok().and_then(|v| v.as_num()) {
                     if first_char + i < 256 {
                         info.widths[first_char + i] = v;
                     }
@@ -200,14 +148,14 @@ fn build_font(doc: &Document, dict: &Dictionary) -> FontInfo {
             info.widths = [w; 256];
         }
         if !info.is_bold {
-            info.is_bold = descriptor_bold(doc, dict);
+            info.is_bold = descriptor_bold(pdf, dict);
         }
-        build_simple_encoding(doc, dict, &mut info);
+        build_simple_encoding(pdf, dict, &mut info);
     }
 
     // ToUnicode overrides encoding-derived mappings.
-    if let Some(Object::Stream(s)) = dict_get(doc, dict, b"ToUnicode") {
-        if let Ok(data) = s.decompressed_content() {
+    if let Some(Val::Stream(sd, raw)) = g(b"ToUnicode") {
+        if let Ok(data) = decode_stream(&sd, raw, pdf) {
             parse_tounicode(&data, &mut info);
         }
     }
@@ -215,40 +163,46 @@ fn build_font(doc: &Document, dict: &Dictionary) -> FontInfo {
     info
 }
 
-fn descriptor_bold(doc: &Document, font_dict: &Dictionary) -> bool {
+fn descriptor_bold(pdf: &Pdf, font_dict: &Dict) -> bool {
     const FORCE_BOLD: i64 = 1 << 18;
-    if let Some(Object::Dictionary(fd)) = dict_get(doc, font_dict, b"FontDescriptor") {
-        if let Some(Object::Integer(flags)) = dict_get(doc, fd, b"Flags") {
-            if flags & FORCE_BOLD != 0 {
+    if let Ok(Some(Val::Dict(fd))) = pdf.dict_get(font_dict, b"FontDescriptor") {
+        if let Ok(Some(Val::Num(flags))) = pdf.dict_get(&fd, b"Flags") {
+            if (flags as i64) & FORCE_BOLD != 0 {
                 return true;
             }
         }
-        if let Some(v) = dict_get(doc, fd, b"StemV").and_then(num) {
-            return v >= 140.0;
+        if let Ok(Some(v)) = pdf.dict_get(&fd, b"StemV") {
+            if let Some(v) = v.as_num() {
+                return v >= 140.0;
+            }
         }
     }
     false
 }
 
-fn parse_cid_widths(doc: &Document, w: &[Object], out: &mut FxHashMap<u32, f64>) {
+fn parse_cid_widths(pdf: &Pdf, w: &[Val], out: &mut FxHashMap<u32, f64>) {
     // W format: [ c [w1 w2 …] ] or [ c_first c_last w ]
     let mut i = 0;
     while i < w.len() {
-        let Some(first) = num(resolve(doc, &w[i])) else {
+        let Some(first) = pdf.resolve(&w[i]).ok().and_then(|v| v.as_num()) else {
             break;
         };
-        match w.get(i + 1).map(|o| resolve(doc, o)) {
-            Some(Object::Array(list)) => {
+        match w.get(i + 1).and_then(|o| pdf.resolve(o).ok()) {
+            Some(Val::Array(list)) => {
                 for (j, o) in list.iter().enumerate() {
-                    if let Some(v) = num(resolve(doc, o)) {
+                    if let Some(v) = pdf.resolve(o).ok().and_then(|v| v.as_num()) {
                         out.insert(first as u32 + j as u32, v);
                     }
                 }
                 i += 2;
             }
             Some(other) => {
-                let Some(last) = num(other) else { break };
-                let Some(v) = w.get(i + 2).and_then(|o| num(resolve(doc, o))) else {
+                let Some(last) = other.as_num() else { break };
+                let Some(v) = w
+                    .get(i + 2)
+                    .and_then(|o| pdf.resolve(o).ok())
+                    .and_then(|v| v.as_num())
+                else {
                     break;
                 };
                 for c in first as u32..=last as u32 {
@@ -359,7 +313,7 @@ fn glyph_to_unicode(name: &[u8]) -> Option<char> {
     })
 }
 
-fn build_simple_encoding(doc: &Document, dict: &Dictionary, info: &mut FontInfo) {
+fn build_simple_encoding(pdf: &Pdf, dict: &Dict, info: &mut FontInfo) {
     // Default: treat as WinAnsi-flavoured Latin (covers Standard/WinAnsi
     // ASCII range; MacRoman divergence is handled only via Differences).
     for b in 0u16..256 {
@@ -371,22 +325,19 @@ fn build_simple_encoding(doc: &Document, dict: &Dictionary, info: &mut FontInfo)
         info.to_unicode_simple[b as usize] = c.filter(|c| *c != '\0');
     }
 
-    if let Some(Object::Dictionary(enc)) = dict_get(doc, dict, b"Encoding") {
-        {
-            if let Some(Object::Array(diffs)) = dict_get(doc, enc, b"Differences") {
-                let mut code = 0usize;
-                for o in diffs {
-                    match resolve(doc, o) {
-                        Object::Integer(i) => code = *i as usize,
-                        Object::Real(r) => code = *r as usize,
-                        Object::Name(n) => {
-                            if code < 256 {
-                                info.to_unicode_simple[code] = glyph_to_unicode(n);
-                            }
-                            code += 1;
+    if let Ok(Some(Val::Dict(enc))) = pdf.dict_get(dict, b"Encoding") {
+        if let Ok(Some(Val::Array(diffs))) = pdf.dict_get(&enc, b"Differences") {
+            let mut code = 0usize;
+            for o in &diffs {
+                match pdf.resolve(o) {
+                    Ok(Val::Num(v)) => code = v as usize,
+                    Ok(Val::Name(n)) => {
+                        if code < 256 {
+                            info.to_unicode_simple[code] = glyph_to_unicode(n);
                         }
-                        _ => {}
+                        code += 1;
                     }
+                    _ => {}
                 }
             }
         }
@@ -576,7 +527,7 @@ impl Default for TextState {
 }
 
 struct Interp<'a> {
-    doc: &'a Document,
+    pdf: &'a Pdf<'a>,
     items: Vec<RawItem>,
     segments: Vec<Segment>,
     image_bboxes: Vec<(f64, f64, f64, f64)>, // user-space x0,y0,x1,y1
@@ -594,7 +545,7 @@ struct Interp<'a> {
 }
 
 impl<'a> Interp<'a> {
-    fn run(&mut self, content: &[u8], resources: Option<&'a Dictionary>) -> Result<()> {
+    fn run(&mut self, content: &[u8], resources: Option<&Dict<'a>>) -> Result<()> {
         use super::content_lex::{Lexer, Operand};
 
         if self.depth > 6 {
@@ -764,16 +715,13 @@ impl<'a> Interp<'a> {
         self.ts.tm = self.ts.tlm;
     }
 
-    fn font_map(
-        &self,
-        resources: Option<&'a Dictionary>,
-    ) -> FxHashMap<Vec<u8>, std::rc::Rc<FontInfo>> {
+    fn font_map(&self, resources: Option<&Dict<'a>>) -> FxHashMap<Vec<u8>, std::rc::Rc<FontInfo>> {
         let mut map = FxHashMap::default();
         if let Some(res) = resources {
-            if let Some(Object::Dictionary(fonts)) = dict_get(self.doc, res, b"Font") {
-                for (name, obj) in fonts.iter() {
-                    if let Object::Dictionary(fd) = resolve(self.doc, obj) {
-                        map.insert(name.clone(), std::rc::Rc::new(build_font(self.doc, fd)));
+            if let Ok(Some(Val::Dict(fonts))) = self.pdf.dict_get(res, b"Font") {
+                for (name, obj) in &fonts {
+                    if let Ok(Val::Dict(fd)) = self.pdf.resolve(obj) {
+                        map.insert(name.to_vec(), std::rc::Rc::new(build_font(self.pdf, &fd)));
                     }
                 }
             }
@@ -948,23 +896,19 @@ impl<'a> Interp<'a> {
         self.clear_path();
     }
 
-    fn do_xobject(&mut self, name: &[u8], resources: Option<&'a Dictionary>) {
+    fn do_xobject(&mut self, name: &[u8], resources: Option<&Dict<'a>>) {
         let Some(res) = resources else { return };
-        let Some(Object::Dictionary(xobjects)) = dict_get(self.doc, res, b"XObject") else {
+        let Ok(Some(Val::Dict(xobjects))) = self.pdf.dict_get(res, b"XObject") else {
             return;
         };
-        let Some(obj) = xobjects.get(name).ok() else {
+        let Some(obj) = dget(&xobjects, name) else {
             return;
         };
-        let resolved = resolve(self.doc, obj);
-        let Object::Stream(stream) = resolved else {
+        let Ok(Val::Stream(sdict, raw)) = self.pdf.resolve(obj) else {
             return;
         };
-        let subtype = stream
-            .dict
-            .get(b"Subtype")
-            .ok()
-            .and_then(|o| name_of(o))
+        let subtype = dget(&sdict, b"Subtype")
+            .and_then(|v| v.as_name())
             .unwrap_or(b"");
 
         if subtype == b"Image" {
@@ -977,31 +921,33 @@ impl<'a> Interp<'a> {
         }
 
         if subtype == b"Form" {
-            let Ok(data) = stream.decompressed_content() else {
+            let Ok(data) = decode_stream(&sdict, raw, self.pdf) else {
                 return;
             };
-            let form_res = match stream
-                .dict
-                .get(b"Resources")
-                .ok()
-                .map(|o| resolve(self.doc, o))
-            {
-                Some(Object::Dictionary(d)) => Some(d),
-                _ => resources,
+            let form_res = match self.pdf.dict_get(&sdict, b"Resources") {
+                Ok(Some(Val::Dict(d))) => Some(d),
+                _ => None,
             };
             let saved_ctm = self.ctm;
-            if let Some(Object::Array(m)) = stream
-                .dict
-                .get(b"Matrix")
-                .ok()
-                .map(|o| resolve(self.doc, o))
-            {
-                if let Some(mat) = mat_from(m) {
-                    self.ctm = mat.mul(self.ctm);
+            if let Some(Val::Array(m)) = dget(&sdict, b"Matrix") {
+                let v: Vec<f64> = m.iter().filter_map(|o| o.as_num()).collect();
+                if v.len() == 6 {
+                    self.ctm = Mat {
+                        a: v[0],
+                        b: v[1],
+                        c: v[2],
+                        d: v[3],
+                        e: v[4],
+                        f: v[5],
+                    }
+                    .mul(self.ctm);
                 }
             }
             self.depth += 1;
-            let _ = self.run(&data, form_res);
+            let _ = match &form_res {
+                Some(fr) => self.run(&data, Some(fr)),
+                None => self.run(&data, resources),
+            };
             self.depth -= 1;
             self.ctm = saved_ctm;
         }
@@ -1010,55 +956,108 @@ impl<'a> Interp<'a> {
 
 // ── Page assembly ───────────────────────────────────────────────────────────
 
-/// Extract all pages via lopdf. Errors mean "use the MuPDF fallback".
+/// Extract all pages via the own object layer. Errors mean "use the
+/// MuPDF fallback" (encryption, non-Flate filters, rotated pages,
+/// zero-text documents, structural surprises).
 pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
-    let mut doc = Document::load_mem(input).map_err(|e| anyhow!("lopdf: {e}"))?;
-    if doc.is_encrypted() {
-        doc.decrypt("").map_err(|e| anyhow!("lopdf decrypt: {e}"))?;
+    let pdf = Pdf::parse(input)?;
+
+    // Page tree walk (Root → Pages → Kids), tracking inheritable attrs.
+    let Some(Val::Dict(root)) = pdf.dict_get(&pdf.trailer, b"Root")? else {
+        bail!("no Root");
+    };
+    let Some(Val::Dict(pages_root)) = pdf.dict_get(&root, b"Pages")? else {
+        bail!("no Pages");
+    };
+
+    #[derive(Clone, Default)]
+    struct Inherit<'a> {
+        media: Option<Vec<f64>>,
+        rotate: Option<f64>,
+        resources: Option<Dict<'a>>,
     }
 
-    let pages = doc.get_pages();
-    let mut out: Vec<PageContent> = Vec::with_capacity(pages.len());
+    fn walk<'a>(
+        pdf: &'a Pdf<'a>,
+        node: &Dict<'a>,
+        inh: &Inherit<'a>,
+        out: &mut Vec<(Dict<'a>, Inherit<'a>)>,
+        depth: usize,
+    ) -> Result<()> {
+        if depth > 32 {
+            bail!("page tree too deep");
+        }
+        let mut inh = inh.clone();
+        if let Some(Val::Array(a)) = pdf.dict_get(node, b"MediaBox")? {
+            let v: Vec<f64> = a
+                .iter()
+                .filter_map(|o| pdf.resolve(o).ok().and_then(|v| v.as_num()))
+                .collect();
+            if v.len() == 4 {
+                inh.media = Some(v);
+            }
+        }
+        if let Some(v) = pdf.dict_get(node, b"Rotate")?.and_then(|v| v.as_num()) {
+            inh.rotate = Some(v);
+        }
+        if let Some(Val::Dict(r)) = pdf.dict_get(node, b"Resources")? {
+            inh.resources = Some(r);
+        }
+
+        if matches!(pdf.dict_get(node, b"Type")?, Some(Val::Name(b"Pages"))) {
+            let Some(Val::Array(kids)) = pdf.dict_get(node, b"Kids")? else {
+                bail!("Pages without Kids");
+            };
+            for kid in kids {
+                let Val::Dict(kd) = pdf.resolve(&kid)? else {
+                    continue;
+                };
+                walk(pdf, &kd, &inh, out, depth + 1)?;
+            }
+        } else {
+            out.push((node.clone(), inh));
+        }
+        Ok(())
+    }
+
+    let mut page_dicts = Vec::new();
+    walk(&pdf, &pages_root, &Inherit::default(), &mut page_dicts, 0)?;
+
+    let mut out: Vec<PageContent> = Vec::with_capacity(page_dicts.len());
     let mut any_text = false;
+    let mut content_buf: Vec<u8> = Vec::new();
 
-    for (page_no, page_id) in pages {
-        let page_dict = doc
-            .get_dictionary(page_id)
-            .map_err(|e| anyhow!("page dict: {e}"))?;
+    for (idx, (page, inh)) in page_dicts.iter().enumerate() {
+        let page_no = (idx + 1) as u32;
 
-        // Rotated pages: geometry the interpreter does not model.
-        if let Some(r) = inherited(&doc, page_id, b"Rotate").and_then(|o| num(&o)) {
+        if let Some(r) = inh.rotate {
             if r as i64 % 360 != 0 {
                 bail!("rotated page");
             }
         }
-
-        let media = inherited(&doc, page_id, b"MediaBox").ok_or_else(|| anyhow!("no MediaBox"))?;
-        let mb: Vec<f64> = match &media {
-            Object::Array(a) => a.iter().map(|o| resolve(&doc, o)).filter_map(num).collect(),
-            _ => bail!("bad MediaBox"),
-        };
-        if mb.len() != 4 {
-            bail!("bad MediaBox");
-        }
+        let mb = inh.media.as_ref().ok_or_else(|| anyhow!("no MediaBox"))?;
         let (mx0, my0) = (mb[0].min(mb[2]), mb[1].min(mb[3]));
         let page_height = (mb[3] - mb[1]).abs();
-        let _ = page_dict;
 
-        let content_data = doc
-            .get_page_content(page_id)
-            .map_err(|e| anyhow!("content: {e}"))?;
-
-        // Resources are inheritable through the page tree; lopdf's
-        // get_page_resources only surfaces the direct dictionary.
-        let resources_obj = inherited(&doc, page_id, b"Resources");
-        let resources = match &resources_obj {
-            Some(Object::Dictionary(d)) => Some(d),
-            _ => None,
-        };
+        // Concatenate content streams.
+        content_buf.clear();
+        match pdf.dict_get(page, b"Contents")? {
+            Some(Val::Stream(d, raw)) => {
+                content_buf.extend_from_slice(&decode_stream(&d, raw, &pdf)?);
+            }
+            Some(Val::Array(items)) => {
+                for it in items {
+                    if let Val::Stream(d, raw) = pdf.resolve(&it)? {
+                        content_buf.extend_from_slice(&decode_stream(&d, raw, &pdf)?);
+                        content_buf.push(b'\n');
+                    }
+                }
+            }
+            _ => {}
+        }
 
         let mut interp = Interp {
-            doc: &doc,
+            pdf: &pdf,
             items: Vec::new(),
             segments: Vec::new(),
             image_bboxes: Vec::new(),
@@ -1081,7 +1080,7 @@ pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
             page_number: page_no,
             depth: 0,
         };
-        interp.run(&content_data, resources)?;
+        interp.run(&content_buf, inh.resources.as_ref())?;
 
         if !interp.items.is_empty() {
             any_text = true;
@@ -1133,19 +1132,4 @@ pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
     }
 
     Ok(out)
-}
-
-fn inherited(doc: &Document, page_id: ObjectId, key: &[u8]) -> Option<Object> {
-    let mut current = page_id;
-    for _ in 0..32 {
-        let dict = doc.get_dictionary(current).ok()?;
-        if let Ok(v) = dict.get(key) {
-            return Some(resolve(doc, v).clone());
-        }
-        match dict.get(b"Parent").ok()? {
-            Object::Reference(id) => current = *id,
-            _ => return None,
-        }
-    }
-    None
 }

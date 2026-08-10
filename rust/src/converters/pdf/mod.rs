@@ -7,6 +7,7 @@ pub mod fast_extract;
 pub mod grid;
 pub mod headers;
 pub mod index;
+pub mod own_pdf;
 pub mod render;
 pub mod types;
 

@@ -332,6 +332,10 @@ impl<'a> Lexer<'a> {
 }
 
 /// Fast decimal float parse for content-stream numbers (no exponents).
+pub fn fast_float_pub(s: &[u8]) -> f64 {
+    fast_float(s)
+}
+
 fn fast_float(s: &[u8]) -> f64 {
     let mut i = 0usize;
     let neg = match s.first() {
