@@ -34,7 +34,10 @@ benchmark/results/
 .charts/
 
 # Test fixtures (downloaded on demand via test/download-fixtures.sh)
-test/fixtures/pdfs/
+test/fixtures/pdfs/*
+# ...except the encryption fixtures generated from our own t.pdf
+!test/fixtures/pdfs/encrypted/
+!test/fixtures/pdfs/encrypted/**
 test/fixtures/.DS_Store
 .pi/
 test/fixtures/pdfs/*.pdf
