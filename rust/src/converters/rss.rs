@@ -5,6 +5,9 @@
 //! compatible.  We intentionally avoid a full XML parser so CDATA, namespace
 //! prefixes (\`content:encoded\`), and malformed feeds all behave identically.
 
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
+
 use anyhow::{anyhow, Result};
 use regex::Regex;
 
@@ -25,13 +28,37 @@ const MIMETYPES: &[&str] = &[
 // ─────────────────────────────── helpers ────────────────────────────────────
 
 impl RssConverter {
-    /// Extract the text content of the first matching \`<tag>…</tag>\` element.
-    /// Strips CDATA wrappers and trims.  Returns \`None\` when missing or empty.
-    fn extract(xml: &str, tag: &str) -> Option<String> {
+    /// Compiled per-tag regexes. The patterns embed the tag name, so they
+    /// cannot be plain statics — but the tag set is closed (the handful of
+    /// RSS/Atom element names used below), so a tiny global cache makes the
+    /// compilation once-per-process.
+    fn cached_tag_regex(tag: &str, capture: bool) -> Option<Regex> {
+        // regex-hygiene: allow — dynamic pattern, cached in TAG_REGEXES below.
+        type Cache = HashMap<(String, bool), Regex>;
+        static TAG_REGEXES: LazyLock<Mutex<Cache>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+        let key = (tag.to_string(), capture);
+        let mut cache = TAG_REGEXES.lock().ok()?;
+        if let Some(re) = cache.get(&key) {
+            return Some(re.clone());
+        }
         let escaped = regex::escape(tag);
         // [\s\S]*? matches any char including newlines (lazy)
-        let pattern = format!(r"(?si)<{escaped}[^>]*>([\s\S]*?)</{escaped}>");
+        let pattern = if capture {
+            format!(r"(?si)<{escaped}[^>]*>([\s\S]*?)</{escaped}>")
+        } else {
+            format!(r"(?si)<{escaped}[^>]*>[\s\S]*?</{escaped}>")
+        };
+        // regex-hygiene: allow — dynamic tag-name pattern, cached above.
         let re = Regex::new(&pattern).ok()?;
+        cache.insert(key, re.clone());
+        Some(re)
+    }
+
+    /// Extract the text content of the first matching `<tag>…</tag>` element.
+    /// Strips CDATA wrappers and trims.  Returns `None` when missing or empty.
+    fn extract(xml: &str, tag: &str) -> Option<String> {
+        let re = Self::cached_tag_regex(tag, true)?;
         let caps = re.captures(xml)?;
         let content = caps.get(1)?.as_str();
         let stripped = strip_cdata(content);
@@ -43,13 +70,10 @@ impl RssConverter {
         }
     }
 
-    /// Collect all \`<tag>…</tag>\` blocks (case-insensitive, multi-line).
+    /// Collect all `<tag>…</tag>` blocks (case-insensitive, multi-line).
     fn extract_all(xml: &str, tag: &str) -> Vec<String> {
-        let escaped = regex::escape(tag);
-        let pattern = format!(r"(?si)<{escaped}[^>]*>[\s\S]*?</{escaped}>");
-        let re = match Regex::new(&pattern) {
-            Ok(r) => r,
-            Err(_) => return vec![],
+        let Some(re) = Self::cached_tag_regex(tag, false) else {
+            return vec![];
         };
         re.find_iter(xml).map(|m| m.as_str().to_string()).collect()
     }
@@ -76,7 +100,9 @@ impl RssConverter {
 
         // Limit channel-level extraction to the <channel> block so that item
         // titles / descriptions do not bleed into the feed header.
-        let re_channel = Regex::new(r"(?si)<channel>([\s\S]*?)</channel>").unwrap();
+        static RE_CHANNEL: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"(?si)<channel>([\s\S]*?)</channel>").unwrap());
+        let re_channel = &*RE_CHANNEL;
         let channel_xml: &str = re_channel
             .captures(xml)
             .and_then(|c| c.get(1))
@@ -209,8 +235,9 @@ impl Converter for RssConverter {
 
 /// Replace every \`<![CDATA[…]]>\` wrapper with its inner text.
 fn strip_cdata(s: &str) -> String {
-    let re = Regex::new(r"(?s)<!\[CDATA\[([\s\S]*?)\]\]>").unwrap();
-    re.replace_all(s, "$1").into_owned()
+    static RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?s)<!\[CDATA\[([\s\S]*?)\]\]>").unwrap());
+    RE.replace_all(s, "$1").into_owned()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
