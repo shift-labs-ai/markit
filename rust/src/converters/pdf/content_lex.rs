@@ -1,6 +1,6 @@
 //! Zero-copy streaming lexer for PDF content streams.
 //!
-//! Replaces lopdf's Content::decode on the fast path: no operation list,
+//! No operation list is ever materialized:
 //! no per-op Strings — operands accumulate in reused buffers and each
 //! operator dispatches through a callback. String/hex operands are
 //! unescaped into a scratch arena that resets per operator.

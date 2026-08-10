@@ -1,7 +1,8 @@
-//! Fast PDF page extraction on lopdf: a pure-Rust content-stream
-//! interpreter producing the same PageContent the MuPDF path produces,
-//! at a fraction of the cost. MuPDF remains the fallback for anything
-//! this interpreter cannot handle faithfully (see extract_pages).
+//! markit's PDF extraction engine: a pure-Rust content-stream
+//! interpreter over the own_pdf object layer, producing the same
+//! PageContent shape the MuPDF path produces at a fraction of the cost.
+//! MuPDF remains the rasterizer (render_image_region) and the fallback
+//! for anything this engine cannot handle faithfully (see extract_pages).
 //!
 //! Coordinates: PDF user space is bottom-left/y-up, which is what the
 //! downstream pipeline consumes for text boxes and segments. Image

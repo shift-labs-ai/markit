@@ -362,8 +362,8 @@ fn parse_text_boxes_json(json: &str, page_number: u32, page_height: f64) -> Resu
     finish_text_boxes(raws, page_number)
 }
 
-/// Public shims for the lopdf fast path (fast_extract.rs), which feeds
-/// the same downstream pipeline.
+/// Public shims for the fast extraction engine (fast_extract.rs), which
+/// feeds the same downstream pipeline.
 pub(crate) struct RawTextItemPub {
     pub text: String,
     pub x: f64,
@@ -960,10 +960,11 @@ pub fn render_image_region(input: &[u8], region: &ImageRegion) -> Result<Vec<u8>
 
 /// Extract text boxes and vector segments from all pages of a PDF buffer.
 ///
-/// The lopdf fast path handles text-based PDFs at a fraction of MuPDF's
-/// cost; anything it cannot model faithfully (encryption lopdf cannot
-/// decrypt, rotated pages, no extractable text, parse errors) falls back
-/// to the MuPDF path. MARKIT_PDF_ENGINE=mupdf forces the fallback.
+/// The own engine (fast_extract) handles text-based PDFs — including
+/// empty-password AES-256 — at a fraction of MuPDF's cost; anything it
+/// cannot model faithfully (other encryption, rotated pages, no
+/// extractable text, non-Flate-family filters, parse errors) falls back
+/// to MuPDF. MARKIT_PDF_ENGINE=mupdf forces the fallback.
 pub fn extract_pages(input: &[u8]) -> Result<Vec<PageContent>> {
     if std::env::var("MARKIT_PDF_ENGINE").as_deref() != Ok("mupdf") {
         match super::fast_extract::extract_pages_fast(input) {
