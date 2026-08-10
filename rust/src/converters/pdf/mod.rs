@@ -10,6 +10,7 @@ pub mod image_extract;
 pub mod index;
 pub mod own_pdf;
 pub mod render;
+pub mod truetype;
 pub mod types;
 
 /// JavaScriptCore-faithful Array#sort for comparators that do not implement

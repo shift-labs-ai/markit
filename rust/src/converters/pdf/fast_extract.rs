@@ -124,6 +124,13 @@ fn build_font(pdf: &Pdf, dict: &Dict) -> FontInfo {
                     if !info.is_bold {
                         info.is_bold = descriptor_bold(pdf, &cid_font);
                     }
+                    // No ToUnicode on the parent: recover CID->unicode
+                    // through the descendant's font program (gid->unicode
+                    // from the inverted cmap; CID->gid via CIDToGIDMap,
+                    // Identity in the common case).
+                    if g(b"ToUnicode").is_none() {
+                        recover_cid_unicode(pdf, &cid_font, &mut info);
+                    }
                 }
             }
         }
@@ -162,9 +169,45 @@ fn build_font(pdf: &Pdf, dict: &Dict) -> FontInfo {
     }
 
     // ToUnicode overrides encoding-derived mappings.
+    let mut has_tounicode = false;
     if let Some(Val::Stream(sd, raw)) = g(b"ToUnicode") {
         if let Ok(data) = decode_stream(&sd, raw, pdf) {
             parse_tounicode(&data, &mut info);
+            has_tounicode = true;
+        }
+    }
+
+    // No ToUnicode and no /Encoding: the codes are font-specific and the
+    // WinAnsi default is a guess. The embedded TrueType program knows the
+    // truth — recover code->unicode from its cmap/post tables.
+    if !has_tounicode && !is_type0 {
+        let has_encoding = match g(b"Encoding") {
+            Some(Val::Name(_)) => true,
+            Some(Val::Dict(d)) => dget(&d, b"Differences").is_some(),
+            _ => false,
+        };
+        if !has_encoding {
+            if let Some(Val::Dict(fd)) = g(b"FontDescriptor") {
+                if let Ok(Some(Val::Stream(sd, raw))) = pdf.dict_get(&fd, b"FontFile2") {
+                    if let Ok(program) = decode_stream(&sd, raw, pdf) {
+                        let map = super::truetype::code_to_unicode(&program);
+                        if std::env::var("MARKIT_DEBUG").is_ok() {
+                            eprintln!(
+                                "[tt-recover] {} {}",
+                                base_name,
+                                if map.is_some() { "OK" } else { "MISS" }
+                            );
+                        }
+                        if let Some(map) = map {
+                            for (code, &u) in map.iter().enumerate() {
+                                if u != 0 {
+                                    info.to_unicode_simple[code] = char::from_u32(u);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -340,6 +383,11 @@ fn glyph_to_unicode(name: &[u8]) -> Option<char> {
         return agl_lookup(&s[..dot]);
     }
     None
+}
+
+/// Public shim for the truetype module's post-table name lookup.
+pub fn glyph_to_unicode_pub(name: &[u8]) -> Option<char> {
+    glyph_to_unicode(name)
 }
 
 fn agl_lookup(s: &str) -> Option<char> {
@@ -619,6 +667,51 @@ fn agl_lookup(s: &str) -> Option<char> {
             }
         }
     })
+}
+
+/// CIDFontType2 without ToUnicode: read the descendant's TrueType
+/// program, invert its unicode cmap, and translate CIDs through
+/// CIDToGIDMap (Identity, or the explicit 2-bytes-per-CID stream).
+fn recover_cid_unicode(pdf: &Pdf, cid_font: &Dict, info: &mut FontInfo) {
+    let Ok(Some(Val::Dict(fd))) = pdf.dict_get(cid_font, b"FontDescriptor") else {
+        return;
+    };
+    let Ok(Some(Val::Stream(sd, raw))) = pdf.dict_get(&fd, b"FontFile2") else {
+        return;
+    };
+    let Ok(program) = decode_stream(&sd, raw, pdf) else {
+        return;
+    };
+    let Some(gid_uni) = super::truetype::gid_to_unicode(&program) else {
+        return;
+    };
+
+    match pdf.dict_get(cid_font, b"CIDToGIDMap") {
+        Ok(Some(Val::Stream(md, mraw))) => {
+            if let Ok(map) = decode_stream(&md, mraw, pdf) {
+                for (cid, gb) in map.chunks_exact(2).enumerate() {
+                    let gid = u16::from_be_bytes([gb[0], gb[1]]);
+                    if let Some(&u) = gid_uni.get(&gid) {
+                        if let Some(c) = char::from_u32(u) {
+                            info.to_unicode
+                                .entry(cid as u32)
+                                .or_insert_with(|| c.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        _ => {
+            // Identity (the default): cid == gid.
+            for (&gid, &u) in &gid_uni {
+                if let Some(c) = char::from_u32(u) {
+                    info.to_unicode
+                        .entry(gid as u32)
+                        .or_insert_with(|| c.to_string());
+                }
+            }
+        }
+    }
 }
 
 fn build_simple_encoding(pdf: &Pdf, dict: &Dict, info: &mut FontInfo) {
