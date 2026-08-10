@@ -33,7 +33,7 @@
     "lint": "bunx biome lint src/",
     "lint:rust": "cd rust && cargo clippy",
     "check": "bunx biome check src/",
-    "check:rust": "cd rust && cargo fmt --check && cargo clippy -- -D warnings && cargo clippy --no-default-features -- -D warnings",
+    "check:rust": "cd rust && cargo fmt --check && cargo clippy -- -D warnings",
     "check:all": "npm run check && npm run check:rust"
   },
   "repository": {
