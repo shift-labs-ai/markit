@@ -78,13 +78,44 @@ function groupRows(textBoxes: TextBox[]): Row[] {
   return rows;
 }
 
-function rowIsTabular(row: Row): boolean {
-  if (row.boxes.length < 2) return false;
-  for (let i = 1; i < row.boxes.length; i++) {
-    if (row.boxes[i].bounds.left - row.boxes[i - 1].bounds.right < MIN_CELL_GAP)
-      return false;
+/**
+ * A row fragment: one or more adjacent boxes forming a single cell
+ * candidate (word boxes separated by less than a cell gap).
+ */
+interface Fragment {
+  boxes: TextBox[];
+  left: number;
+  right: number;
+}
+
+function fragmentText(fragment: Fragment): string {
+  return fragment.boxes.map((tb) => tb.text).join(" ");
+}
+
+/**
+ * Cluster a row's boxes (sorted by left) into cell fragments: adjacent
+ * boxes closer than the cell gap belong to the same cell.
+ */
+function rowFragments(row: Row): Fragment[] {
+  const fragments: Fragment[] = [];
+  for (const tb of row.boxes) {
+    const last = fragments[fragments.length - 1];
+    if (last && tb.bounds.left - last.right < MIN_CELL_GAP) {
+      last.boxes.push(tb);
+      last.right = Math.max(last.right, tb.bounds.right);
+    } else {
+      fragments.push({
+        boxes: [tb],
+        left: tb.bounds.left,
+        right: tb.bounds.right,
+      });
+    }
   }
-  return true;
+  return fragments;
+}
+
+function rowIsTabular(row: Row): boolean {
+  return row.boxes.length >= 2 && rowFragments(row).length >= 2;
 }
 
 /**
@@ -94,8 +125,8 @@ function rowIsTabular(row: Row): boolean {
  */
 function clusterColumns(rows: Row[]): Array<[number, number]> | null {
   const intervals: Array<[number, number]> = rows
-    .flatMap((row) => row.boxes)
-    .map((tb) => [tb.bounds.left, tb.bounds.right]);
+    .flatMap((row) => rowFragments(row))
+    .map((fragment) => [fragment.left, fragment.right]);
   intervals.sort((a, b) => a[0] - b[0]);
   const columns: Array<[number, number]> = [];
   for (const [left, right] of intervals) {
@@ -112,12 +143,11 @@ function clusterColumns(rows: Row[]): Array<[number, number]> | null {
 
 function columnOf(
   columns: Array<[number, number]>,
-  tb: TextBox,
+  left: number,
+  right: number,
 ): number | null {
-  const center = (tb.bounds.left + tb.bounds.right) / 2;
-  const idx = columns.findIndex(
-    ([left, right]) => center >= left && center <= right,
-  );
+  const center = (left + right) / 2;
+  const idx = columns.findIndex(([l, r]) => center >= l && center <= r);
   return idx < 0 ? null : idx;
 }
 
@@ -171,16 +201,17 @@ export function detectBorderlessTables(
     let ok = true;
     outer: for (let rowIndex = 0; rowIndex < run.length; rowIndex++) {
       const rowCells: Array<string | null> = columns.map(() => null);
-      for (const tb of run[rowIndex].boxes) {
-        const column = columnOf(columns, tb);
+      for (const fragment of rowFragments(run[rowIndex])) {
+        const column = columnOf(columns, fragment.left, fragment.right);
         if (column === null) {
           ok = false;
           break outer;
         }
+        const text = fragmentText(fragment);
         if (rowCells[column] !== null) {
-          rowCells[column] = `${rowCells[column]} ${tb.text}`;
+          rowCells[column] = `${rowCells[column]} ${text}`;
         } else {
-          rowCells[column] = tb.text;
+          rowCells[column] = text;
           filled++;
         }
       }

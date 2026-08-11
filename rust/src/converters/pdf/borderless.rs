@@ -45,6 +45,44 @@ struct Row<'a> {
     bottom: f64,
 }
 
+/// A row fragment: one or more adjacent boxes forming a single cell
+/// candidate (word boxes separated by less than a cell gap).
+struct Fragment<'a> {
+    boxes: Vec<&'a TextBox>,
+    left: f64,
+    right: f64,
+}
+
+impl<'a> Fragment<'a> {
+    fn text(&self) -> String {
+        self.boxes
+            .iter()
+            .map(|tb| tb.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
+/// Cluster a row's boxes (sorted by left) into cell fragments: adjacent
+/// boxes closer than the cell gap belong to the same cell.
+fn row_fragments<'a>(row: &Row<'a>) -> Vec<Fragment<'a>> {
+    let mut fragments: Vec<Fragment<'a>> = Vec::new();
+    for tb in &row.boxes {
+        match fragments.last_mut() {
+            Some(fragment) if tb.bounds.left - fragment.right < MIN_CELL_GAP => {
+                fragment.boxes.push(tb);
+                fragment.right = fragment.right.max(tb.bounds.right);
+            }
+            _ => fragments.push(Fragment {
+                boxes: vec![tb],
+                left: tb.bounds.left,
+                right: tb.bounds.right,
+            }),
+        }
+    }
+    fragments
+}
+
 fn group_rows(text_boxes: &[TextBox]) -> Vec<Row<'_>> {
     let mut sorted: Vec<&TextBox> = text_boxes.iter().collect();
     sorted.sort_by(|a, b| {
@@ -85,21 +123,20 @@ fn group_rows(text_boxes: &[TextBox]) -> Vec<Row<'_>> {
 }
 
 fn row_is_tabular(row: &Row) -> bool {
-    if row.boxes.len() < 2 {
-        return false;
-    }
-    row.boxes
-        .windows(2)
-        .all(|pair| pair[1].bounds.left - pair[0].bounds.right >= MIN_CELL_GAP)
+    row.boxes.len() >= 2 && row_fragments(row).len() >= 2
 }
 
-/// Cluster the x-intervals of a run's fragments into columns. Returns
-/// the (left, right) extents per column, or None when a fragment would
-/// straddle two clusters.
+/// Cluster the x-intervals of a run's cell fragments into columns.
+/// Returns the (left, right) extents per column, or None when the
+/// column count is implausible.
 fn cluster_columns(rows: &[&Row]) -> Option<Vec<(f64, f64)>> {
     let mut intervals: Vec<(f64, f64)> = rows
         .iter()
-        .flat_map(|row| row.boxes.iter().map(|tb| (tb.bounds.left, tb.bounds.right)))
+        .flat_map(|row| {
+            row_fragments(row)
+                .into_iter()
+                .map(|fragment| (fragment.left, fragment.right))
+        })
         .collect();
     intervals.sort_by(|a, b| a.0.total_cmp(&b.0));
     let mut columns: Vec<(f64, f64)> = Vec::new();
@@ -117,11 +154,11 @@ fn cluster_columns(rows: &[&Row]) -> Option<Vec<(f64, f64)>> {
     Some(columns)
 }
 
-fn column_of(columns: &[(f64, f64)], tb: &TextBox) -> Option<usize> {
-    let center = (tb.bounds.left + tb.bounds.right) / 2.0;
+fn column_of(columns: &[(f64, f64)], left: f64, right: f64) -> Option<usize> {
+    let center = (left + right) / 2.0;
     columns
         .iter()
-        .position(|(left, right)| center >= *left && center <= *right)
+        .position(|(l, r)| center >= *l && center <= *r)
 }
 
 /// Detect borderless tables among free text boxes. Returns the grids
@@ -163,24 +200,25 @@ pub fn detect_borderless_tables(
             continue;
         };
 
-        // Assign fragments to columns; abort on any straddler.
+        // Assign cell fragments to columns; abort on any straddler.
         let mut cells: Vec<TableCell> = Vec::new();
         let mut filled = 0usize;
         let mut ok = true;
         'rows: for (row_index, row) in run.iter().enumerate() {
             let mut row_cells: Vec<Option<String>> = vec![None; columns.len()];
-            for tb in &row.boxes {
-                let Some(column) = column_of(&columns, tb) else {
+            for fragment in row_fragments(row) {
+                let Some(column) = column_of(&columns, fragment.left, fragment.right) else {
                     ok = false;
                     break 'rows;
                 };
+                let text = fragment.text();
                 match &mut row_cells[column] {
-                    Some(text) => {
-                        text.push(' ');
-                        text.push_str(&tb.text);
+                    Some(existing) => {
+                        existing.push(' ');
+                        existing.push_str(&text);
                     }
                     slot @ None => {
-                        *slot = Some(tb.text.clone());
+                        *slot = Some(text);
                         filled += 1;
                     }
                 }
@@ -298,6 +336,33 @@ mod tests {
         assert_eq!(cell(0, 0), "Name");
         assert_eq!(cell(2, 1), "CTO");
         assert_eq!(cell(3, 2), "39");
+    }
+
+    #[test]
+    fn multi_word_cells_cluster_into_one_column() {
+        // "TAM 107" split into two boxes 5pt apart must still read as
+        // one cell; the 120pt gap to the value column is the divider.
+        let mut boxes = Vec::new();
+        for r in 0..3 {
+            let y = 700.0 - r as f64 * 15.0;
+            boxes.push(tb(&format!("a{r}"), "TAM", 72.0, y, 30.0));
+            boxes.push(tb(&format!("b{r}"), "107", 107.0, y, 25.0));
+            boxes.push(tb(&format!("c{r}"), "13.5", 252.0, y, 30.0));
+        }
+        let (grids, _) = detect_borderless_tables(&boxes, 1);
+        assert_eq!(grids.len(), 1);
+        let grid = &grids[0];
+        assert_eq!(grid.cols, 2);
+        let cell = |r: usize, c: usize| -> &str {
+            &grid
+                .cells
+                .iter()
+                .find(|cell| cell.row == r && cell.col == c)
+                .unwrap()
+                .text
+        };
+        assert_eq!(cell(0, 0), "TAM 107");
+        assert_eq!(cell(1, 1), "13.5");
     }
 
     #[test]

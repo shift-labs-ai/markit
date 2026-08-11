@@ -48,6 +48,25 @@ describe("detectBorderlessTables", () => {
     expect(cell(3, 2)).toBe("39");
   });
 
+  it("clusters multi-word cells into one column", () => {
+    // "TAM 107" split into two boxes 5pt apart must still read as one
+    // cell; the 120pt gap to the value column is the divider.
+    const boxes: TextBox[] = [];
+    for (let r = 0; r < 3; r++) {
+      const y = 700 - r * 15;
+      boxes.push(tb(`a${r}`, "TAM", 72, y, 30));
+      boxes.push(tb(`b${r}`, "107", 107, y, 25));
+      boxes.push(tb(`c${r}`, "13.5", 252, y, 30));
+    }
+    const { grids } = detectBorderlessTables(boxes, 1);
+    expect(grids).toHaveLength(1);
+    expect(grids[0].cols).toBe(2);
+    const cell = (r: number, c: number) =>
+      grids[0].cells.find((cell) => cell.row === r && cell.col === c)?.text;
+    expect(cell(0, 0)).toBe("TAM 107");
+    expect(cell(1, 1)).toBe("13.5");
+  });
+
   it("does not turn prose lines into a table", () => {
     const boxes = Array.from({ length: 5 }, (_, i) =>
       tb(`p${i}`, "A full sentence of body prose text.", 72, 700 - i * 15, 400),
