@@ -146,6 +146,42 @@ describe("stripSinglePageChrome", () => {
     expect(pages[0].textBoxes.length).toBe(3);
   });
 
+  it("strips a multi-line footer group when one line matches a pattern", () => {
+    // A citation line (patternless) directly above a page number: the
+    // group strips as one unit.
+    const pages = [
+      singlePage([
+        box("b1", "Body prose one.", 500, 490),
+        box("b2", "Body prose two.", 480, 470),
+        box("b3", "Body prose three.", 460, 450),
+        box("b4", "Body prose four.", 440, 430),
+        box("cite", "IRIARTE, Sara. El conjuro del matrerismo.", 48, 38),
+        box("folio", "362", 30, 20),
+      ]),
+    ];
+    stripSinglePageChrome(pages);
+    expect(pages[0].textBoxes.map((t) => t.id)).toEqual([
+      "b1",
+      "b2",
+      "b3",
+      "b4",
+    ]);
+  });
+
+  it("recognizes et-al heads, journal v/n markers and roman folios", () => {
+    expect(matchesChromePattern("Tao et al.")).toBe(true);
+    expect(matchesChromePattern("Scripta Uniandrade, v. 19, n. 1 (2021)")).toBe(
+      true,
+    );
+    expect(matchesChromePattern("xvii")).toBe(true);
+    expect(matchesChromePattern("Volume 81, Number 6, November 1975")).toBe(
+      true,
+    );
+    // Not chrome: prose containing a stray v-word, ordinary words.
+    expect(matchesChromePattern("seven")).toBe(false);
+    expect(matchesChromePattern("mixed")).toBe(false);
+  });
+
   it("keeps chrome-looking text that has no isolation gap", () => {
     const pages = [
       singlePage([

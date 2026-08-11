@@ -13,7 +13,7 @@
  *   4. Remove matching text boxes before further processing
  */
 
-import type { PageContent } from "./types.js";
+import type { PageContent, TextBox } from "./types.js";
 
 /** Minimum number of pages to enable header/footer detection. */
 const MIN_PAGES = 5;
@@ -142,6 +142,13 @@ const SP_ISOLATION_GAP_RATIO = 1.0;
 const SP_MAX_CHARS = 200;
 
 /**
+ * Maximum lines in a strippable chrome group. Running chrome is 1–4
+ * short lines; a larger block is a title/abstract and must survive
+ * even when a stray page number rides along.
+ */
+const SP_MAX_GROUP_LINES = 4;
+
+/**
  * Does the text match an unambiguous running-chrome signature?
  * URLs/DOIs, journal-banner phrases, copyright marks, `Page N`,
  * standalone page numbers, volume/issue markers, and journal citation
@@ -188,11 +195,25 @@ export function matchesChromePattern(text: string): boolean {
   // "Page N" / "Page N of M".
   if (/^page \d/.test(lower)) return true;
 
-  // Lone page number (≤4 digits).
+  // Lone page number (≤4 digits) or roman-numeral folio.
   if (/^\d{1,4}$/.test(t)) return true;
+  if (
+    t.length >= 2 &&
+    t.length <= 7 &&
+    /^m{0,3}(cm|cd|d?c{0,3})(xc|xl|l?x{0,3})(ix|iv|v?i{0,3})$/.test(lower) &&
+    lower.length > 0
+  ) {
+    return true;
+  }
 
-  // Volume markers ("Vol. 24" / "Vol 24" / "Vol, 24") with a digit later.
-  if (/(?:^|[^a-z0-9])vol[. ,].*\d/.test(lower)) return true;
+  // Volume markers ("Vol. 24" / "Volume 81" / "v. 19, n. 1") with a
+  // digit later.
+  if (/(?:^|[^a-z0-9])vol(?:ume)?[. ,].*\d/.test(lower)) return true;
+  if (/(?:^|[^a-z0-9])[vn]\. ?\d/.test(lower)) return true;
+
+  // Author running heads ("Tao et al.", "Martinez et al. Respiratory
+  // Research (2019)") — short lines only.
+  if (t.length <= 80 && lower.includes("et al")) return true;
 
   // Journal-cite style: a 4-digit year AND a numeric page range, short
   // enough to plausibly be chrome.
@@ -252,34 +273,66 @@ export function stripSinglePageChrome(pages: PageContent[]): void {
     const topBandFloor = h * (1 - SP_BAND_RATIO);
     const bottomBandCeil = h * SP_BAND_RATIO;
     const bodySize = bodyFontSize(page);
+    const requiredGap = SP_ISOLATION_GAP_RATIO * (bodySize > 0 ? bodySize : 10);
 
+    // Band boxes chained into groups: consecutive lines (by Y) whose
+    // inter-line gap is below the isolation gap belong together. A
+    // running footer is often several lines (citation + page number);
+    // one pattern hit licenses the whole group once the GROUP is
+    // isolated from the body.
     const strip = new Set<string>();
-    for (const tb of page.textBoxes) {
-      const text = tb.text.trim();
-      if (text.length === 0 || text.length > SP_MAX_CHARS) continue;
-      const inTop = tb.bounds.bottom >= topBandFloor;
-      const inBottom = tb.bounds.top <= bottomBandCeil;
-      if (!inTop && !inBottom) continue;
-      if (!matchesChromePattern(text)) continue;
+    for (const band of ["top", "bottom"] as const) {
+      const inBand = (tb: TextBox) =>
+        band === "top"
+          ? tb.bounds.bottom >= topBandFloor
+          : tb.bounds.top <= bottomBandCeil;
+      const bandBoxes = page.textBoxes
+        .filter((tb) => inBand(tb) && tb.text.trim().length > 0)
+        .sort((a, b) => b.bounds.top - a.bounds.top);
+      if (bandBoxes.length === 0) continue;
 
-      const gapRef =
-        bodySize > 0 ? bodySize : Math.max(tb.bounds.top - tb.bounds.bottom, 1);
-      const requiredGap = SP_ISOLATION_GAP_RATIO * gapRef;
-
-      // Gap from this box to the nearest non-chrome line on the body side.
-      let nearest = Number.POSITIVE_INFINITY;
-      for (const other of page.textBoxes) {
-        if (other.id === tb.id) continue;
-        if (matchesChromePattern(other.text.trim())) continue;
-        if (inTop && other.bounds.top < tb.bounds.bottom) {
-          nearest = Math.min(nearest, tb.bounds.bottom - other.bounds.top);
-        } else if (inBottom && other.bounds.bottom > tb.bounds.top) {
-          nearest = Math.min(nearest, other.bounds.bottom - tb.bounds.top);
+      // Chain into groups.
+      const groups: TextBox[][] = [];
+      let cur: TextBox[] = [bandBoxes[0]];
+      for (let i = 1; i < bandBoxes.length; i++) {
+        const prev = cur[cur.length - 1];
+        const gap = prev.bounds.bottom - bandBoxes[i].bounds.top;
+        if (gap <= requiredGap) {
+          cur.push(bandBoxes[i]);
+        } else {
+          groups.push(cur);
+          cur = [bandBoxes[i]];
         }
       }
-      if (nearest < requiredGap) continue;
+      groups.push(cur);
 
-      strip.add(tb.id);
+      for (const group of groups) {
+        if (group.length > SP_MAX_GROUP_LINES) continue;
+        // A group that is most of the page is content, not chrome.
+        if (group.length * 2 > page.textBoxes.length) continue;
+        if (group.some((tb) => tb.text.trim().length > SP_MAX_CHARS)) continue;
+        if (!group.some((tb) => matchesChromePattern(tb.text.trim()))) continue;
+
+        // Isolation: gap from the group's body-side edge to the nearest
+        // line outside the group.
+        const groupIds = new Set(group.map((tb) => tb.id));
+        const edge =
+          band === "top"
+            ? Math.min(...group.map((tb) => tb.bounds.bottom))
+            : Math.max(...group.map((tb) => tb.bounds.top));
+        let nearest = Number.POSITIVE_INFINITY;
+        for (const other of page.textBoxes) {
+          if (groupIds.has(other.id)) continue;
+          if (band === "top" && other.bounds.top < edge) {
+            nearest = Math.min(nearest, edge - other.bounds.top);
+          } else if (band === "bottom" && other.bounds.bottom > edge) {
+            nearest = Math.min(nearest, other.bounds.bottom - edge);
+          }
+        }
+        if (nearest < requiredGap) continue;
+
+        for (const tb of group) strip.add(tb.id);
+      }
     }
 
     if (strip.size > 0) {

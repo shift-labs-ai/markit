@@ -13,7 +13,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::types::PageContent;
+use super::types::{PageContent, TextBox};
 
 /// Minimum number of pages to enable header/footer detection.
 const MIN_PAGES: usize = 5;
@@ -137,6 +137,11 @@ const SP_ISOLATION_GAP_RATIO: f64 = 1.0;
 /// Chrome candidates longer than this are body prose, never chrome.
 const SP_MAX_CHARS: usize = 200;
 
+/// Maximum lines in a strippable chrome group. Running chrome is 1–4
+/// short lines; a larger block is a title/abstract and must survive
+/// even when a stray page number rides along.
+const SP_MAX_GROUP_LINES: usize = 4;
+
 /// Does the text match an unambiguous running-chrome signature?
 /// URLs/DOIs, journal-banner phrases, copyright marks, `Page N`,
 /// standalone page numbers, volume/issue markers, and journal citation
@@ -183,13 +188,23 @@ pub(crate) fn matches_chrome_pattern(text: &str) -> bool {
         }
     }
 
-    // Lone page number (≤4 digits).
+    // Lone page number (≤4 digits) or roman-numeral folio.
     if !t.is_empty() && t.len() <= 4 && t.bytes().all(|b| b.is_ascii_digit()) {
         return true;
     }
+    if (2..=7).contains(&lower.len()) && is_roman_numeral(&lower) {
+        return true;
+    }
 
-    // Volume markers ("Vol. 24" / "Vol 24" / "Vol, 24") with a digit later.
-    if has_vol_marker(&lower) {
+    // Volume markers ("Vol. 24" / "Volume 81" / "v. 19, n. 1") with a
+    // digit later.
+    if has_vol_marker(&lower) || has_vn_marker(&lower) {
+        return true;
+    }
+
+    // Author running heads ("Tao et al.", "Martinez et al. Respiratory
+    // Research (2019)") — short lines only.
+    if t.len() <= 80 && lower.contains("et al") {
         return true;
     }
 
@@ -202,22 +217,75 @@ pub(crate) fn matches_chrome_pattern(text: &str) -> bool {
     false
 }
 
-/// `vol` at a word start followed by `.`, ` ` or `,`, with any digit later.
+/// `vol`/`volume` at a word start followed by `.`, ` ` or `,`, with any
+/// digit later.
 fn has_vol_marker(lower: &str) -> bool {
     let b = lower.as_bytes();
     for i in 0..b.len().saturating_sub(4) {
         let starts_word = i == 0 || !b[i - 1].is_ascii_alphanumeric();
-        if starts_word
-            && b[i] == b'v'
-            && b[i + 1] == b'o'
-            && b[i + 2] == b'l'
-            && matches!(b[i + 3], b'.' | b' ' | b',')
-            && b[i + 4..].iter().any(u8::is_ascii_digit)
+        if !starts_word || b[i] != b'v' || b[i + 1] != b'o' || b[i + 2] != b'l' {
+            continue;
+        }
+        // Optional "ume" suffix.
+        let sep_at = if b[i + 3..].starts_with(b"ume") {
+            i + 6
+        } else {
+            i + 3
+        };
+        if sep_at < b.len()
+            && matches!(b[sep_at], b'.' | b' ' | b',')
+            && b[sep_at + 1..].iter().any(u8::is_ascii_digit)
         {
             return true;
         }
     }
     false
+}
+
+/// Journal `v. N` / `n. N` abbreviations at a word start.
+fn has_vn_marker(lower: &str) -> bool {
+    let b = lower.as_bytes();
+    for i in 0..b.len().saturating_sub(2) {
+        let starts_word = i == 0 || !b[i - 1].is_ascii_alphanumeric();
+        if starts_word && matches!(b[i], b'v' | b'n') && b[i + 1] == b'.' {
+            let mut j = i + 2;
+            if j < b.len() && b[j] == b' ' {
+                j += 1;
+            }
+            if j < b.len() && b[j].is_ascii_digit() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Strict roman numeral (folio pages: `xvii`, `iv`, `xii`).
+fn is_roman_numeral(lower: &str) -> bool {
+    if lower.is_empty() || !lower.bytes().all(|b| b"mdclxvi".contains(&b)) {
+        return false;
+    }
+    // Validate with the canonical grammar: thousands, hundreds, tens,
+    // units, each segment optional.
+    let mut s = lower;
+    for _ in 0..3 {
+        s = s.strip_prefix('m').unwrap_or(s);
+    }
+    for (nine, four, five, one) in [
+        ("cm", "cd", 'd', 'c'),
+        ("xc", "xl", 'l', 'x'),
+        ("ix", "iv", 'v', 'i'),
+    ] {
+        if let Some(rest) = s.strip_prefix(nine).or_else(|| s.strip_prefix(four)) {
+            s = rest;
+            continue;
+        }
+        s = s.strip_prefix(five).unwrap_or(s);
+        for _ in 0..3 {
+            s = s.strip_prefix(one).unwrap_or(s);
+        }
+    }
+    s.is_empty()
 }
 
 /// A 19xx/20xx group standing alone as a word.
@@ -323,47 +391,98 @@ pub fn strip_single_page_chrome(pages: &mut [PageContent]) {
         let top_band_floor = h * (1.0 - SP_BAND_RATIO);
         let bottom_band_ceil = h * SP_BAND_RATIO;
         let body_size = body_font_size(page);
+        let required_gap = SP_ISOLATION_GAP_RATIO * if body_size > 0.0 { body_size } else { 10.0 };
 
+        // Band boxes chained into groups: consecutive lines (by Y) whose
+        // inter-line gap is below the isolation gap belong together. A
+        // running footer is often several lines (citation + page number);
+        // one pattern hit licenses the whole group once the GROUP is
+        // isolated from the body.
         let mut strip: HashSet<String> = HashSet::new();
-        for tb in &page.text_boxes {
-            let text = tb.text.trim();
-            if text.is_empty() || text.len() > SP_MAX_CHARS {
-                continue;
-            }
-            let in_top = tb.bounds.bottom >= top_band_floor;
-            let in_bottom = tb.bounds.top <= bottom_band_ceil;
-            if !in_top && !in_bottom {
-                continue;
-            }
-            if !matches_chrome_pattern(text) {
+        for band_top in [true, false] {
+            let mut band_boxes: Vec<&TextBox> = page
+                .text_boxes
+                .iter()
+                .filter(|tb| {
+                    !tb.text.trim().is_empty()
+                        && if band_top {
+                            tb.bounds.bottom >= top_band_floor
+                        } else {
+                            tb.bounds.top <= bottom_band_ceil
+                        }
+                })
+                .collect();
+            band_boxes.sort_by(|a, b| b.bounds.top.total_cmp(&a.bounds.top));
+            if band_boxes.is_empty() {
                 continue;
             }
 
-            let gap_ref = if body_size > 0.0 {
-                body_size
-            } else {
-                (tb.bounds.top - tb.bounds.bottom).max(1.0)
-            };
-            let required_gap = SP_ISOLATION_GAP_RATIO * gap_ref;
+            // Chain into groups.
+            let mut groups: Vec<Vec<&TextBox>> = Vec::new();
+            let mut cur: Vec<&TextBox> = vec![band_boxes[0]];
+            for tb in band_boxes.iter().skip(1) {
+                let prev = cur.last().unwrap();
+                let gap = prev.bounds.bottom - tb.bounds.top;
+                if gap <= required_gap {
+                    cur.push(tb);
+                } else {
+                    groups.push(std::mem::take(&mut cur));
+                    cur.push(tb);
+                }
+            }
+            groups.push(cur);
 
-            // Gap from this box to the nearest non-chrome line on the
-            // body side.
-            let mut nearest = f64::INFINITY;
-            for other in &page.text_boxes {
-                if other.id == tb.id || matches_chrome_pattern(other.text.trim()) {
+            for group in groups {
+                if group.len() > SP_MAX_GROUP_LINES {
                     continue;
                 }
-                if in_top && other.bounds.top < tb.bounds.bottom {
-                    nearest = nearest.min(tb.bounds.bottom - other.bounds.top);
-                } else if in_bottom && other.bounds.bottom > tb.bounds.top {
-                    nearest = nearest.min(other.bounds.bottom - tb.bounds.top);
+                // A group that is most of the page is content, not chrome.
+                if group.len() * 2 > page.text_boxes.len() {
+                    continue;
+                }
+                if group.iter().any(|tb| tb.text.trim().len() > SP_MAX_CHARS) {
+                    continue;
+                }
+                if !group
+                    .iter()
+                    .any(|tb| matches_chrome_pattern(tb.text.trim()))
+                {
+                    continue;
+                }
+
+                // Isolation: gap from the group's body-side edge to the
+                // nearest line outside the group.
+                let group_ids: HashSet<&str> = group.iter().map(|tb| tb.id.as_str()).collect();
+                let edge = if band_top {
+                    group
+                        .iter()
+                        .map(|tb| tb.bounds.bottom)
+                        .fold(f64::INFINITY, f64::min)
+                } else {
+                    group
+                        .iter()
+                        .map(|tb| tb.bounds.top)
+                        .fold(f64::NEG_INFINITY, f64::max)
+                };
+                let mut nearest = f64::INFINITY;
+                for other in &page.text_boxes {
+                    if group_ids.contains(other.id.as_str()) {
+                        continue;
+                    }
+                    if band_top && other.bounds.top < edge {
+                        nearest = nearest.min(edge - other.bounds.top);
+                    } else if !band_top && other.bounds.bottom > edge {
+                        nearest = nearest.min(other.bounds.bottom - edge);
+                    }
+                }
+                if nearest < required_gap {
+                    continue;
+                }
+
+                for tb in group {
+                    strip.insert(tb.id.clone());
                 }
             }
-            if nearest < required_gap {
-                continue;
-            }
-
-            strip.insert(tb.id.clone());
         }
 
         if !strip.is_empty() {
@@ -658,6 +777,40 @@ mod tests {
         ]);
         strip_single_page_chrome(&mut pages);
         assert_eq!(pages[0].text_boxes.len(), 3);
+    }
+
+    #[test]
+    fn strips_multi_line_footer_group_with_one_pattern_hit() {
+        // A citation line (patternless) directly above a page number:
+        // the group strips as one unit.
+        let mut pages = single_page(vec![
+            chrome_box("b1", "Body prose one.", 500.0, 490.0),
+            chrome_box("b2", "Body prose two.", 480.0, 470.0),
+            chrome_box("b3", "Body prose three.", 460.0, 450.0),
+            chrome_box("b4", "Body prose four.", 440.0, 430.0),
+            chrome_box(
+                "cite",
+                "IRIARTE, Sara. El conjuro del matrerismo.",
+                48.0,
+                38.0,
+            ),
+            chrome_box("folio", "362", 30.0, 20.0),
+        ]);
+        strip_single_page_chrome(&mut pages);
+        let ids: Vec<&str> = pages[0].text_boxes.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, ["b1", "b2", "b3", "b4"]);
+    }
+
+    #[test]
+    fn recognizes_et_al_vn_markers_and_roman_folios() {
+        assert!(matches_chrome_pattern("Tao et al."));
+        assert!(matches_chrome_pattern(
+            "Scripta Uniandrade, v. 19, n. 1 (2021)"
+        ));
+        assert!(matches_chrome_pattern("xvii"));
+        assert!(matches_chrome_pattern("Volume 81, Number 6, November 1975"));
+        assert!(!matches_chrome_pattern("seven"));
+        assert!(!matches_chrome_pattern("mixed"));
     }
 
     #[test]
