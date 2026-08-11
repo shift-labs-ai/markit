@@ -103,6 +103,63 @@ fn main() {
         }
     }
 
+    // Dense synthetic grid: isolates table resolution/raycasting without
+    // parse noise (20 rows × 10 columns, 200 text boxes, 32 borders).
+    {
+        use markit::converters::pdf::grid::resolve_table_grids;
+        use markit::converters::pdf::types::{Bounds, Segment, TextBox};
+        let mut segments = Vec::new();
+        for col in 0..=10 {
+            let x = col as f64 * 50.0;
+            segments.push(Segment {
+                id: format!("v{col}"),
+                x1: x,
+                y1: 0.0,
+                x2: x,
+                y2: 400.0,
+            });
+        }
+        for row in 0..=20 {
+            let y = row as f64 * 20.0;
+            segments.push(Segment {
+                id: format!("h{row}"),
+                x1: 0.0,
+                y1: y,
+                x2: 500.0,
+                y2: y,
+            });
+        }
+        let mut boxes = Vec::new();
+        for row in 0..20 {
+            for col in 0..10 {
+                boxes.push(TextBox {
+                    id: format!("t{row}-{col}"),
+                    text: "cell".into(),
+                    page_number: 1,
+                    font_size: 10.0,
+                    is_bold: false,
+                    bounds: Bounds {
+                        left: col as f64 * 50.0 + 5.0,
+                        right: (col + 1) as f64 * 50.0 - 5.0,
+                        bottom: row as f64 * 20.0 + 3.0,
+                        top: (row + 1) as f64 * 20.0 - 3.0,
+                    },
+                });
+            }
+        }
+        rows.push(Row {
+            name: "dense grid resolve",
+            ms: median_ms(
+                || {
+                    std::hint::black_box(resolve_table_grids(1, &boxes, &segments));
+                },
+                20,
+                200,
+            ),
+            ceiling: 2.0,
+        });
+    }
+
     // Full corpus, when available.
     if let Ok(dir) = std::env::var("MARKIT_BENCH_CORPUS") {
         let mut files: Vec<_> = std::fs::read_dir(&dir)

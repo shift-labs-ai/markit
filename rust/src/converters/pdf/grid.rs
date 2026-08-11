@@ -14,97 +14,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::converters::pdf::types::*;
 
-// ---------------------------------------------------------------------------
-// Raycasting
-// ---------------------------------------------------------------------------
+mod raycast;
 
-#[derive(Debug, Clone)]
-struct RayHit {
-    /// Kept for parity with the TS RayHit shape (debugging aid there).
-    #[allow(dead_code)]
-    direction: &'static str, // "up", "down", "left", "right"
-    segment_id: Option<String>,
-    distance: f64,
-}
-
-fn cast_rays_for_text_box(text_box: &TextBox, segments: &[Segment]) -> Vec<RayHit> {
-    let cx = (text_box.bounds.left + text_box.bounds.right) / 2.0;
-    let cy = (text_box.bounds.top + text_box.bounds.bottom) / 2.0;
-
-    let mut up = RayHit {
-        direction: "up",
-        segment_id: None,
-        distance: f64::INFINITY,
-    };
-    let mut down = RayHit {
-        direction: "down",
-        segment_id: None,
-        distance: f64::INFINITY,
-    };
-    let mut left = RayHit {
-        direction: "left",
-        segment_id: None,
-        distance: f64::INFINITY,
-    };
-    let mut right = RayHit {
-        direction: "right",
-        segment_id: None,
-        distance: f64::INFINITY,
-    };
-
-    for seg in segments {
-        let is_h = (seg.y1 - seg.y2).abs() < 0.5;
-        let is_v = (seg.x1 - seg.x2).abs() < 0.5;
-
-        if is_h {
-            let min_x = seg.x1.min(seg.x2);
-            let max_x = seg.x1.max(seg.x2);
-            if cx >= min_x && cx <= max_x {
-                let d = seg.y1 - cy;
-                if d >= 0.0 && d < up.distance {
-                    up = RayHit {
-                        direction: "up",
-                        segment_id: Some(seg.id.clone()),
-                        distance: d,
-                    };
-                }
-                let dd = cy - seg.y1;
-                if dd >= 0.0 && dd < down.distance {
-                    down = RayHit {
-                        direction: "down",
-                        segment_id: Some(seg.id.clone()),
-                        distance: dd,
-                    };
-                }
-            }
-        }
-
-        if is_v {
-            let min_y = seg.y1.min(seg.y2);
-            let max_y = seg.y1.max(seg.y2);
-            if cy >= min_y && cy <= max_y {
-                let d = cx - seg.x1;
-                if d >= 0.0 && d < left.distance {
-                    left = RayHit {
-                        direction: "left",
-                        segment_id: Some(seg.id.clone()),
-                        distance: d,
-                    };
-                }
-                let rd = seg.x1 - cx;
-                if rd >= 0.0 && rd < right.distance {
-                    right = RayHit {
-                        direction: "right",
-                        segment_id: Some(seg.id.clone()),
-                        distance: rd,
-                    };
-                }
-            }
-        }
-    }
-
-    vec![up, down, left, right]
-}
+use raycast::cast as cast_rays_for_text_box;
 
 // ---------------------------------------------------------------------------
 // Utility
@@ -676,8 +588,7 @@ fn build_table_grid(
             continue;
         }
 
-        let rays = cast_rays_for_text_box(tb, filtered_segments);
-        let ray_confidence = rays.iter().filter(|r| r.segment_id.is_some()).count();
+        let ray_confidence = cast_rays_for_text_box(tb, filtered_segments).count();
 
         let row_opt = y_lines.windows(2).position(|w| cy <= w[0] && cy >= w[1]);
         let mut row = match row_opt {
