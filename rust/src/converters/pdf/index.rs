@@ -59,16 +59,73 @@ fn process_column(
     render_page_content(&free_text_boxes, &grids, image_blocks, Some(text_boxes))
 }
 
-fn image_blocks_in_x_range(
+/// A group's bounding extents (with margin) for content assignment.
+struct GroupExtent {
+    x_min: f64,
+    x_max: f64,
+    y_min: f64,
+    y_max: f64,
+}
+
+fn group_extent(boxes: &[TextBox], margin: f64) -> GroupExtent {
+    GroupExtent {
+        x_min: boxes
+            .iter()
+            .map(|tb| tb.bounds.left)
+            .fold(f64::INFINITY, f64::min)
+            - margin,
+        x_max: boxes
+            .iter()
+            .map(|tb| tb.bounds.right)
+            .fold(f64::NEG_INFINITY, f64::max)
+            + margin,
+        y_min: boxes
+            .iter()
+            .map(|tb| tb.bounds.bottom)
+            .fold(f64::INFINITY, f64::min)
+            - margin,
+        y_max: boxes
+            .iter()
+            .map(|tb| tb.bounds.top)
+            .fold(f64::NEG_INFINITY, f64::max)
+            + margin,
+    }
+}
+
+/// Assign each image to exactly one group: the x-containing group with
+/// the smallest vertical distance. Unclaimed images fall to the group
+/// with the nearest vertical distance regardless of x.
+fn assign_images_to_groups(
     blocks: &[(f64, ImageBlock)],
-    min_x: f64,
-    max_x: f64,
-) -> Vec<ImageBlock> {
-    blocks
-        .iter()
-        .filter(|(center_x, _)| *center_x >= min_x && *center_x <= max_x)
-        .map(|(_, block)| block.clone())
-        .collect()
+    extents: &[GroupExtent],
+) -> Vec<Vec<ImageBlock>> {
+    let mut assigned: Vec<Vec<ImageBlock>> = vec![Vec::new(); extents.len()];
+    for (center_x, block) in blocks {
+        let mut best: Option<(usize, f64, bool)> = None; // (group, dy, x_match)
+        for (gi, extent) in extents.iter().enumerate() {
+            let x_match = *center_x >= extent.x_min && *center_x <= extent.x_max;
+            let dy = if block.top_y > extent.y_max {
+                block.top_y - extent.y_max
+            } else if block.top_y < extent.y_min {
+                extent.y_min - block.top_y
+            } else {
+                0.0
+            };
+            let better = match best {
+                None => true,
+                Some((_, best_dy, best_x)) => {
+                    (x_match && !best_x) || (x_match == best_x && dy < best_dy)
+                }
+            };
+            if better {
+                best = Some((gi, dy, x_match));
+            }
+        }
+        if let Some((gi, _, _)) = best {
+            assigned[gi].push(block.clone());
+        }
+    }
+    assigned
 }
 
 pub struct PdfConverter;
@@ -169,7 +226,7 @@ impl Converter for PdfConverter {
                 .collect();
 
             // Detect column layout
-            let mut layout = detect_columns(&page.text_boxes);
+            let mut layout = detect_columns(&page.text_boxes, &page.segments);
 
             // If the page has vertical segments (tables), suppress column detection
             // when one detected column is very narrow
@@ -229,41 +286,41 @@ impl Converter for PdfConverter {
                     page_markdowns.push(md);
                 }
             } else {
-                let mut column_markdowns: Vec<String> = Vec::new();
-                for col_boxes in &layout.columns {
-                    // Filter segments to those within this column's X range
-                    let col_x_min = col_boxes
-                        .iter()
-                        .map(|tb| tb.bounds.left)
-                        .fold(f64::INFINITY, f64::min);
-                    let col_x_max = col_boxes
-                        .iter()
-                        .map(|tb| tb.bounds.right)
-                        .fold(f64::NEG_INFINITY, f64::max);
-                    let margin = 10.0;
+                let margin = 10.0;
+                let extents: Vec<GroupExtent> = layout
+                    .columns
+                    .iter()
+                    .map(|col| group_extent(col, margin))
+                    .collect();
+                let group_images = assign_images_to_groups(&positioned_image_blocks, &extents);
 
+                let mut column_markdowns: Vec<String> = Vec::new();
+                for (gi, col_boxes) in layout.columns.iter().enumerate() {
+                    let extent = &extents[gi];
+                    // Segments must overlap the group in BOTH axes —
+                    // stacked slices share x-ranges, and an x-only filter
+                    // would duplicate table rules into every slice.
                     let col_segments: Vec<Segment> = page
                         .segments
                         .iter()
                         .filter(|seg| {
                             let seg_x_min = seg.x1.min(seg.x2);
                             let seg_x_max = seg.x1.max(seg.x2);
-                            seg_x_max >= col_x_min - margin && seg_x_min <= col_x_max + margin
+                            let seg_y_min = seg.y1.min(seg.y2);
+                            let seg_y_max = seg.y1.max(seg.y2);
+                            seg_x_max >= extent.x_min
+                                && seg_x_min <= extent.x_max
+                                && seg_y_max >= extent.y_min
+                                && seg_y_min <= extent.y_max
                         })
                         .cloned()
                         .collect();
-
-                    let column_image_blocks = image_blocks_in_x_range(
-                        &positioned_image_blocks,
-                        col_x_min - margin,
-                        col_x_max + margin,
-                    );
 
                     let md = process_column(
                         page.page_number,
                         col_boxes,
                         &col_segments,
-                        &column_image_blocks,
+                        &group_images[gi],
                     );
                     if !md.is_empty() {
                         column_markdowns.push(md);
@@ -286,6 +343,15 @@ mod tests {
     use super::*;
     use std::path::Path;
 
+    fn extent(x_min: f64, x_max: f64, y_min: f64, y_max: f64) -> GroupExtent {
+        GroupExtent {
+            x_min,
+            x_max,
+            y_min,
+            y_max,
+        }
+    }
+
     #[test]
     fn images_are_assigned_to_their_own_text_column() {
         let blocks = vec![
@@ -304,9 +370,34 @@ mod tests {
                 },
             ),
         ];
-        let right = image_blocks_in_x_range(&blocks, 300.0, 500.0);
-        assert_eq!(right.len(), 1);
-        assert_eq!(right[0].markdown, "right");
+        let extents = vec![
+            extent(50.0, 250.0, 100.0, 700.0),
+            extent(300.0, 500.0, 100.0, 700.0),
+        ];
+        let assigned = assign_images_to_groups(&blocks, &extents);
+        assert_eq!(assigned[0].len(), 1);
+        assert_eq!(assigned[0][0].markdown, "left");
+        assert_eq!(assigned[1].len(), 1);
+        assert_eq!(assigned[1][0].markdown, "right");
+    }
+
+    #[test]
+    fn stacked_slices_claim_images_by_vertical_distance_without_duplication() {
+        let blocks = vec![(
+            300.0,
+            ImageBlock {
+                top_y: 500.0,
+                markdown: "figure".into(),
+            },
+        )];
+        // Two full-width stacked slices; the image sits in the upper one.
+        let extents = vec![
+            extent(50.0, 550.0, 450.0, 700.0),
+            extent(50.0, 550.0, 100.0, 400.0),
+        ];
+        let assigned = assign_images_to_groups(&blocks, &extents);
+        assert_eq!(assigned[0].len(), 1);
+        assert_eq!(assigned[1].len(), 0);
     }
 
     #[test]

@@ -1,29 +1,40 @@
 //! Multi-column layout detection and text box reordering.
 //!
-//! Many PDFs (legal documents, datasheets, academic papers) use two-column
-//! layouts. Without column detection, text boxes are ordered by Y position
-//! only, interleaving left and right column content.
+//! Reading order is recursive whitespace decomposition (an XY-cut with
+//! crossing tolerance):
 //!
-//! Algorithm (article-level, coverage-based):
-//!   1. Build an x-coverage histogram: for each 1pt bin, count the boxes
-//!      whose horizontal interval strictly crosses it.
-//!   2. A gutter is a run of bins that almost no box crosses (full-width
-//!      titles and headings are allowed to cross), wide enough, with
-//!      enough boxes fully on each side.
-//!   3. Boxes crossing a gutter are full-width "bands" (titles, section
-//!      headings, footers). The rest are column-bound.
-//!   4. Walk the page top-to-bottom: bands split the page into vertical
-//!      regions; each region's boxes are emitted column by column
-//!      (left to right), preserving article reading order.
+//!   1. Split the region at every horizontal whitespace band tall
+//!      enough to be structural (≥ 2.5 line heights) — stacked slices
+//!      in top-to-bottom order.
+//!   2. Within a slice, find vertical gutters via an x-coverage
+//!      histogram: a gutter is a run of bins that almost no box
+//!      crosses (full-width titles and headings may cross), wide
+//!      enough, with enough boxes fully on each side.
+//!   3. Boxes crossing a gutter are full-width "bands"; they partition
+//!      the slice vertically. Each partition's columns are emitted
+//!      left to right — and each column recurses, so a column may
+//!      contain its own headings, sub-columns, and structure
+//!      (magazine layouts).
 //!
 //! This only detects the structure. The caller is responsible for
 //! processing each group's text boxes independently (table detection,
 //! rendering, etc.).
 
-use crate::converters::pdf::types::TextBox;
+use crate::converters::pdf::types::{Segment, TextBox};
 
 /// Minimum number of text boxes fully on each side of a gutter.
 const MIN_BOXES_PER_COLUMN: usize = 4;
+
+/// Recursion cap for the layout tree (each level is a horizontal
+/// slice or a column).
+const MAX_LAYOUT_DEPTH: usize = 6;
+
+/// A horizontal whitespace band must be at least this tall in points…
+const H_SPLIT_MIN_GAP_PTS: f64 = 18.0;
+
+/// …and at least this many median line-heights, to count as a
+/// structural break rather than paragraph leading.
+const H_SPLIT_GAP_LINES: f64 = 2.5;
 
 /// Minimum gutter width in points.
 const MIN_GUTTER_PTS: i64 = 12;
@@ -128,6 +139,13 @@ fn find_gutters(text_boxes: &[TextBox]) -> Vec<f64> {
         centers.push((center, run_width));
     }
 
+    // Many parallel qualifying gutters mean the whitespace comes from
+    // TABLE columns — leave the region whole so table detection can
+    // have it.
+    if centers.len() > MAX_GUTTERS {
+        return vec![];
+    }
+
     centers.sort_by_key(|c| std::cmp::Reverse(c.1));
     centers.truncate(MAX_GUTTERS);
     let mut gutters: Vec<f64> = centers.into_iter().map(|(c, _)| c).collect();
@@ -135,20 +153,164 @@ fn find_gutters(text_boxes: &[TextBox]) -> Vec<f64> {
     gutters
 }
 
-/// Detect column layout and return text boxes grouped in reading order.
-///
-/// For single-column pages, returns all boxes in one group. For
-/// multi-column pages, returns full-width bands and per-region columns
-/// as separate groups in article reading order.
-pub fn detect_columns(text_boxes: &[TextBox]) -> ColumnLayout {
-    if text_boxes.len() < MIN_BOXES_PER_COLUMN * 2 {
-        return single(text_boxes);
+/// Does a ruled grid (≥2 vertical and ≥2 horizontal segments) cover
+/// most of the region's text? Such a region is a table and must stay
+/// whole — but a figure's box elsewhere on the page must not freeze
+/// column detection, so coverage of the text matters, not presence.
+fn region_has_ruled_grid(boxes: &[TextBox], segments: &[Segment]) -> bool {
+    if segments.len() < 4 || boxes.is_empty() {
+        return false;
+    }
+    let x_min = boxes
+        .iter()
+        .map(|tb| tb.bounds.left)
+        .fold(f64::INFINITY, f64::min);
+    let x_max = boxes
+        .iter()
+        .map(|tb| tb.bounds.right)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let y_min = boxes
+        .iter()
+        .map(|tb| tb.bounds.bottom)
+        .fold(f64::INFINITY, f64::min);
+    let y_max = boxes
+        .iter()
+        .map(|tb| tb.bounds.top)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let overlaps = |seg: &Segment| -> bool {
+        seg.x1.max(seg.x2) >= x_min
+            && seg.x1.min(seg.x2) <= x_max
+            && seg.y1.max(seg.y2) >= y_min
+            && seg.y1.min(seg.y2) <= y_max
+    };
+    let vertical: Vec<&Segment> = segments
+        .iter()
+        .filter(|s| (s.x1 - s.x2).abs() <= 1.0 && overlaps(s))
+        .collect();
+    let horizontal: Vec<&Segment> = segments
+        .iter()
+        .filter(|s| (s.y1 - s.y2).abs() <= 1.0 && overlaps(s))
+        .collect();
+    if vertical.len() < 2 || horizontal.len() < 2 {
+        return false;
+    }
+    // Grid bbox: union of the qualifying segments.
+    let all = vertical.iter().chain(horizontal.iter());
+    let (mut gx0, mut gy0, mut gx1, mut gy1) = (
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NEG_INFINITY,
+    );
+    for seg in all {
+        gx0 = gx0.min(seg.x1.min(seg.x2));
+        gx1 = gx1.max(seg.x1.max(seg.x2));
+        gy0 = gy0.min(seg.y1.min(seg.y2));
+        gy1 = gy1.max(seg.y1.max(seg.y2));
+    }
+    let inside = boxes
+        .iter()
+        .filter(|tb| {
+            let cx = (tb.bounds.left + tb.bounds.right) / 2.0;
+            let cy = (tb.bounds.top + tb.bounds.bottom) / 2.0;
+            cx >= gx0 && cx <= gx1 && cy >= gy0 && cy <= gy1
+        })
+        .count();
+    inside * 10 >= boxes.len() * 6
+}
+
+/// Median glyph-box height — the line-height reference for horizontal
+/// splitting.
+fn median_height(boxes: &[TextBox]) -> f64 {
+    let mut heights: Vec<f64> = boxes
+        .iter()
+        .map(|tb| tb.bounds.top - tb.bounds.bottom)
+        .filter(|h| *h > 0.0)
+        .collect();
+    if heights.is_empty() {
+        return 10.0;
+    }
+    heights.sort_by(|a, b| a.total_cmp(b));
+    heights[heights.len() / 2]
+}
+
+/// Does a vertical segment span the whitespace band [lower, upper]?
+/// A table border crossing the gap proves the region is one object and
+/// must not be sliced.
+fn vertical_segment_spans_gap(segments: &[Segment], lower: f64, upper: f64) -> bool {
+    segments.iter().any(|seg| {
+        (seg.x1 - seg.x2).abs() <= 1.0 && {
+            let seg_min = seg.y1.min(seg.y2);
+            let seg_max = seg.y1.max(seg.y2);
+            seg_min < lower + 1.0 && seg_max > upper - 1.0
+        }
+    })
+}
+
+/// Split a region at horizontal whitespace bands taller than the
+/// structural threshold. Returns None when the region is one piece.
+fn horizontal_splits(boxes: &[TextBox], segments: &[Segment]) -> Option<Vec<Vec<TextBox>>> {
+    let threshold = (H_SPLIT_GAP_LINES * median_height(boxes)).max(H_SPLIT_MIN_GAP_PTS);
+    let mut sorted = boxes.to_vec();
+    sorted.sort_by(|a, b| b.bounds.top.total_cmp(&a.bounds.top));
+
+    let mut parts: Vec<Vec<TextBox>> = Vec::new();
+    let mut current: Vec<TextBox> = Vec::new();
+    let mut min_bottom = f64::INFINITY;
+    for tb in sorted {
+        if !current.is_empty()
+            && min_bottom - tb.bounds.top >= threshold
+            && !vertical_segment_spans_gap(segments, tb.bounds.top, min_bottom)
+        {
+            parts.push(std::mem::take(&mut current));
+            min_bottom = f64::INFINITY;
+        }
+        min_bottom = min_bottom.min(tb.bounds.bottom);
+        current.push(tb);
+    }
+    if !current.is_empty() {
+        parts.push(current);
+    }
+    (parts.len() >= 2).then_some(parts)
+}
+
+/// Recursive layout: horizontal slices first, then tolerant gutter
+/// detection, recursing into each column. `is_band` records the leaf's
+/// provenance — horizontal slices and crossing boxes are full-width
+/// bands, column leaves are not.
+fn layout_region(
+    boxes: Vec<TextBox>,
+    segments: &[Segment],
+    depth: usize,
+    is_band: bool,
+    out: &mut Vec<(Vec<TextBox>, bool)>,
+    gutters_out: &mut Vec<f64>,
+) {
+    if depth >= MAX_LAYOUT_DEPTH || boxes.len() < MIN_BOXES_PER_COLUMN * 2 {
+        out.push((boxes, is_band));
+        return;
     }
 
-    let gutters = find_gutters(text_boxes);
-    if gutters.is_empty() {
-        return single(text_boxes);
+    if let Some(parts) = horizontal_splits(&boxes, segments) {
+        for part in parts {
+            layout_region(part, segments, depth + 1, true, out, gutters_out);
+        }
+        return;
     }
+
+    // A ruled table region must not be column-split — its interior
+    // whitespace belongs to the grid, not the page layout.
+    if region_has_ruled_grid(&boxes, segments) {
+        out.push((boxes, is_band));
+        return;
+    }
+
+    let gutters = find_gutters(&boxes);
+    if gutters.is_empty() {
+        out.push((boxes, is_band));
+        return;
+    }
+    gutters_out.extend(gutters.iter().copied());
 
     let crosses_gutter = |tb: &TextBox| -> bool {
         gutters
@@ -163,53 +325,84 @@ pub fn detect_columns(text_boxes: &[TextBox]) -> ColumnLayout {
             .unwrap_or(gutters.len())
     };
 
-    // Walk top-to-bottom (Y-up: larger top first). Bands flush the open
-    // region; consecutive band boxes group together.
-    let mut ordered = text_boxes.to_vec();
+    // Walk top-to-bottom (Y-up: larger top first). Crossing boxes
+    // (bands) flush the open partition; consecutive band boxes group.
+    let mut ordered = boxes;
     ordered.sort_by(|a, b| b.bounds.top.total_cmp(&a.bounds.top));
 
-    let mut groups: Vec<Vec<TextBox>> = Vec::new();
-    let mut bands: Vec<bool> = Vec::new();
     let mut region_columns: Vec<Vec<TextBox>> = vec![Vec::new(); gutters.len() + 1];
     let mut open_band: Vec<TextBox> = Vec::new();
 
+    // Local flush helpers expressed as small closures over `out`.
+    fn flush_columns(
+        region_columns: &mut [Vec<TextBox>],
+        segments: &[Segment],
+        depth: usize,
+        out: &mut Vec<(Vec<TextBox>, bool)>,
+        gutters_out: &mut Vec<f64>,
+    ) {
+        for column in region_columns.iter_mut() {
+            if !column.is_empty() {
+                layout_region(
+                    std::mem::take(column),
+                    segments,
+                    depth + 1,
+                    false,
+                    out,
+                    gutters_out,
+                );
+            }
+        }
+    }
+
     for tb in ordered {
         if crosses_gutter(&tb) {
-            // Flush the open region.
-            for column in region_columns.iter_mut() {
-                if !column.is_empty() {
-                    groups.push(std::mem::take(column));
-                    bands.push(false);
-                }
-            }
+            flush_columns(&mut region_columns, segments, depth, out, gutters_out);
             open_band.push(tb);
         } else {
-            // Flush the open band.
             if !open_band.is_empty() {
-                groups.push(std::mem::take(&mut open_band));
-                bands.push(true);
+                out.push((std::mem::take(&mut open_band), true));
             }
             region_columns[column_of(&tb)].push(tb);
         }
     }
-    for column in region_columns.iter_mut() {
-        if !column.is_empty() {
-            groups.push(std::mem::take(column));
-            bands.push(false);
-        }
-    }
+    flush_columns(&mut region_columns, segments, depth, out, gutters_out);
     if !open_band.is_empty() {
-        groups.push(open_band);
-        bands.push(true);
+        out.push((open_band, true));
     }
+}
+
+/// Detect column layout and return text boxes grouped in reading order.
+///
+/// For single-column pages, returns all boxes in one group. For
+/// structured pages, returns full-width bands, horizontal slices, and
+/// per-region columns (recursively decomposed) in reading order.
+pub fn detect_columns(text_boxes: &[TextBox], segments: &[Segment]) -> ColumnLayout {
+    if text_boxes.len() < MIN_BOXES_PER_COLUMN * 2 {
+        return single(text_boxes);
+    }
+
+    let mut groups: Vec<(Vec<TextBox>, bool)> = Vec::new();
+    let mut gutters: Vec<f64> = Vec::new();
+    layout_region(
+        text_boxes.to_vec(),
+        segments,
+        0,
+        false,
+        &mut groups,
+        &mut gutters,
+    );
 
     if groups.len() <= 1 {
         return single(text_boxes);
     }
+    gutters.sort_by(|a, b| a.total_cmp(b));
+    gutters.dedup_by(|a, b| (*a - *b).abs() < 1.0);
 
+    let (columns, bands): (Vec<Vec<TextBox>>, Vec<bool>) = groups.into_iter().unzip();
     ColumnLayout {
-        column_count: groups.len(),
-        columns: groups,
+        column_count: columns.len(),
+        columns,
         bands,
         boundaries: gutters,
     }
@@ -247,7 +440,7 @@ mod tests {
     #[test]
     fn returns_1_column_for_too_few_boxes() {
         let boxes = vec![tb_default("A", 100.0, 500.0), tb_default("B", 100.0, 480.0)];
-        let result = detect_columns(&boxes);
+        let result = detect_columns(&boxes, &[]);
         assert_eq!(result.column_count, 1);
         assert_eq!(result.columns.len(), 1);
     }
@@ -257,7 +450,7 @@ mod tests {
         let boxes: Vec<TextBox> = (0..20)
             .map(|i| tb_default(&format!("Line {i}"), 72.0, 700.0 - i as f64 * 15.0))
             .collect();
-        let result = detect_columns(&boxes);
+        let result = detect_columns(&boxes, &[]);
         assert_eq!(result.column_count, 1);
     }
 
@@ -271,7 +464,7 @@ mod tests {
             .map(|i| tb_default(&format!("Right {i}"), 315.0, 700.0 - i as f64 * 15.0))
             .collect();
         let combined: Vec<TextBox> = left.into_iter().chain(right).collect();
-        let result = detect_columns(&combined);
+        let result = detect_columns(&combined, &[]);
         assert_eq!(result.column_count, 2);
         assert_eq!(result.columns.len(), 2);
         assert_eq!(result.boundaries.len(), 1);
@@ -287,7 +480,7 @@ mod tests {
                     .map(move |i| tb(&format!("C{column}-{i}"), x, 700.0 - i as f64 * 15.0, 100.0))
             })
             .collect();
-        let result = detect_columns(&boxes);
+        let result = detect_columns(&boxes, &[]);
         assert_eq!(result.column_count, 3);
         assert_eq!(result.columns.len(), 3);
         assert_eq!(result.boundaries.len(), 2);
@@ -303,7 +496,7 @@ mod tests {
             .collect();
         // shuffled input: right first, then left
         let combined: Vec<TextBox> = right.into_iter().chain(left).collect();
-        let result = detect_columns(&combined);
+        let result = detect_columns(&combined, &[]);
         assert!(result.columns[0].iter().all(|b| b.text.starts_with('L')));
         assert!(result.columns[1].iter().all(|b| b.text.starts_with('R')));
     }
@@ -320,7 +513,7 @@ mod tests {
             .map(|i| tb_default(&format!("B{i}"), 100.0, 700.0 - i as f64 * 15.0))
             .collect();
         let combined: Vec<TextBox> = left.into_iter().chain(right).collect();
-        let result = detect_columns(&combined);
+        let result = detect_columns(&combined, &[]);
         assert_eq!(result.column_count, 1);
     }
 
@@ -331,7 +524,7 @@ mod tests {
             .collect();
         let right = vec![tb_default("Margin note", 400.0, 600.0)]; // only 1 box on right
         let combined: Vec<TextBox> = left.into_iter().chain(right).collect();
-        let result = detect_columns(&combined);
+        let result = detect_columns(&combined, &[]);
         assert_eq!(result.column_count, 1);
     }
 
@@ -352,7 +545,7 @@ mod tests {
             .chain(left)
             .chain(right)
             .collect();
-        let result = detect_columns(&combined);
+        let result = detect_columns(&combined, &[]);
         assert_eq!(result.column_count, 3);
         assert_eq!(result.bands, [true, false, false]);
         let texts: Vec<&str> = result.columns[0].iter().map(|b| b.text.as_str()).collect();
@@ -362,6 +555,40 @@ mod tests {
         );
         assert!(result.columns[1].iter().all(|b| b.text.starts_with('L')));
         assert!(result.columns[2].iter().all(|b| b.text.starts_with('R')));
+    }
+
+    #[test]
+    fn nested_headings_stay_inside_their_own_column() {
+        // Magazine layout: two columns, each with its own heading above
+        // its own body. The flat model interleaved the headings into one
+        // line; the recursive cut keeps each heading with its column.
+        let left_heading = tb("QUIENES SOMOS", 72.0, 700.0, 180.0);
+        let left_body: Vec<TextBox> = (0..6)
+            .map(|i| tb(&format!("L{i}"), 72.0, 680.0 - i as f64 * 15.0, 200.0))
+            .collect();
+        let right_heading = tb("NUESTRO IMPACTO", 315.0, 700.0, 180.0);
+        let right_body: Vec<TextBox> = (0..6)
+            .map(|i| tb(&format!("R{i}"), 315.0, 680.0 - i as f64 * 15.0, 200.0))
+            .collect();
+        let combined: Vec<TextBox> = [left_heading]
+            .into_iter()
+            .chain(left_body)
+            .chain([right_heading])
+            .chain(right_body)
+            .collect();
+        let result = detect_columns(&combined, &[]);
+        // Two groups: the whole left column (heading + body), then the
+        // whole right column.
+        assert_eq!(result.column_count, 2);
+        let texts: Vec<Vec<&str>> = result
+            .columns
+            .iter()
+            .map(|g| g.iter().map(|b| b.text.as_str()).collect())
+            .collect();
+        assert_eq!(texts[0][0], "QUIENES SOMOS");
+        assert!(texts[0][1..].iter().all(|t| t.starts_with('L')));
+        assert_eq!(texts[1][0], "NUESTRO IMPACTO");
+        assert!(texts[1][1..].iter().all(|t| t.starts_with('R')));
     }
 
     #[test]
@@ -391,7 +618,7 @@ mod tests {
             .chain(lower_left)
             .chain(lower_right)
             .collect();
-        let result = detect_columns(&combined);
+        let result = detect_columns(&combined, &[]);
         assert_eq!(result.bands, [false, false, true, false, false]);
         let firsts: Vec<&str> = result.columns.iter().map(|g| g[0].text.as_str()).collect();
         assert_eq!(

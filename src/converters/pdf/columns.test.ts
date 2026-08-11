@@ -113,6 +113,32 @@ describe("detectColumns", () => {
     expect(result.columns[2].every((b) => b.text.startsWith("R"))).toBe(true);
   });
 
+  it("keeps nested headings inside their own column", () => {
+    // Magazine layout: two columns, each with its own heading above
+    // its own body. The flat model interleaved the headings into one
+    // line; the recursive cut keeps each heading with its column.
+    const leftHeading = tb("QUIENES SOMOS", 72, 700, 180);
+    const leftBody = Array.from({ length: 6 }, (_, i) =>
+      tb(`L${i}`, 72, 680 - i * 15),
+    );
+    const rightHeading = tb("NUESTRO IMPACTO", 315, 700, 180);
+    const rightBody = Array.from({ length: 6 }, (_, i) =>
+      tb(`R${i}`, 315, 680 - i * 15),
+    );
+    const result = detectColumns([
+      leftHeading,
+      ...leftBody,
+      rightHeading,
+      ...rightBody,
+    ]);
+    expect(result.columnCount).toBe(2);
+    const texts = result.columns.map((g) => g.map((b) => b.text));
+    expect(texts[0][0]).toBe("QUIENES SOMOS");
+    expect(texts[0].slice(1).every((t) => t.startsWith("L"))).toBe(true);
+    expect(texts[1][0]).toBe("NUESTRO IMPACTO");
+    expect(texts[1].slice(1).every((t) => t.startsWith("R"))).toBe(true);
+  });
+
   it("splits regions at a mid-page full-width heading", () => {
     const upperLeft = Array.from({ length: 5 }, (_, i) =>
       tb(`UL${i}`, 72, 700 - i * 15),
