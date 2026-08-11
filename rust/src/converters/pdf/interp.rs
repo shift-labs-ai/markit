@@ -349,10 +349,8 @@ impl<'a> Interp<'a> {
                                 _ => None,
                             }
                         });
-                        if let Some(xd) = xd.take() {
-                            let name = lex.name_bytes(o).to_vec();
-                            self.do_xobject(&name, &xd, resources);
-                            xobjects = Some(Some(xd));
+                        if let Some(xd) = xd {
+                            self.do_xobject(lex.name_bytes(o), xd, resources);
                         }
                     }
                 }
@@ -963,9 +961,6 @@ fn clip_images(images: &mut Vec<ImagePlacement<'_>>, start: usize, clip: ClipRec
     });
 }
 
-/// Pull /ActualText out of a raw BDC property dict. Handles literal
-/// strings (with escapes) and hex strings; UTF-16BE by BOM, else
-/// PDFDocEncoding treated as latin1.
 /// An open /ActualText marked-content span: replacement text plus the
 /// geometry accumulated from the suppressed show-text operators.
 struct ActualTextSpan {
