@@ -228,16 +228,10 @@ export function matchesChromePattern(text: string): boolean {
   }
 
   // A bare date line ("26 mai 1978", "March 8, 2003").
-  if (
-    t.length <= 30 &&
-    /^\d{1,2}\.? +\p{L}+\.? +(?:19|20)\d\d\.?$/u.test(t)
-  ) {
+  if (t.length <= 30 && /^\d{1,2}\.? +\p{L}+\.? +(?:19|20)\d\d\.?$/u.test(t)) {
     return true;
   }
-  if (
-    t.length <= 30 &&
-    /^\p{L}+ +\d{1,2}, +(?:19|20)\d\d\.?$/u.test(t)
-  ) {
+  if (t.length <= 30 && /^\p{L}+ +\d{1,2}, +(?:19|20)\d\d\.?$/u.test(t)) {
     return true;
   }
 
@@ -288,6 +282,22 @@ function bodyFontSize(page: PageContent): number {
  * Coordinates are PDF user space: Y grows upward, `bounds.top` is the
  * numerically larger edge.
  */
+/** A standalone page-number line: bare digits or a roman folio. */
+function isLoneFolio(text: string): boolean {
+  const t = text.trim();
+  if (/^\d{1,4}$/.test(t)) return true;
+  return (
+    t.length >= 1 &&
+    t.length <= 7 &&
+    /^m{0,3}(cm|cd|d?c{0,3})(xc|xl|l?x{0,3})(ix|iv|v?i{0,3})$/.test(
+      t.toLowerCase(),
+    )
+  );
+}
+
+/** Edge fraction of page height where extreme-most folios always strip. */
+const SP_EDGE_RATIO = 0.1;
+
 export function stripSinglePageChrome(pages: PageContent[]): void {
   for (const page of pages) {
     const h = page.pageHeight;
@@ -354,6 +364,34 @@ export function stripSinglePageChrome(pages: PageContent[]): void {
         if (nearest < requiredGap) continue;
 
         for (const tb of group) strip.add(tb.id);
+      }
+    }
+
+    // A lone number that is the extreme-most line of the page, hard
+    // against the margin, is a page number regardless of isolation —
+    // folios sit directly beneath footnotes all the time. Runs after
+    // group stripping so a folio can still anchor its chrome group.
+    if (page.textBoxes.length > 2) {
+      const remaining = page.textBoxes.filter((tb) => !strip.has(tb.id));
+      if (remaining.length > 0) {
+        const bottomMost = remaining.reduce((a, b) =>
+          b.bounds.bottom < a.bounds.bottom ? b : a,
+        );
+        const topMost = remaining.reduce((a, b) =>
+          b.bounds.top > a.bounds.top ? b : a,
+        );
+        if (
+          isLoneFolio(bottomMost.text) &&
+          bottomMost.bounds.bottom <= h * SP_EDGE_RATIO
+        ) {
+          strip.add(bottomMost.id);
+        }
+        if (
+          isLoneFolio(topMost.text) &&
+          topMost.bounds.top >= h * (1 - SP_EDGE_RATIO)
+        ) {
+          strip.add(topMost.id);
+        }
       }
     }
 

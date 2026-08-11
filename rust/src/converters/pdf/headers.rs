@@ -426,6 +426,19 @@ fn body_font_size(page: &PageContent) -> f64 {
 ///
 /// Coordinates are PDF user space: Y grows upward, `bounds.top` is the
 /// numerically larger edge.
+/// A standalone page-number line: bare digits or a roman folio.
+fn is_lone_folio(text: &str) -> bool {
+    let t = text.trim();
+    if !t.is_empty() && t.len() <= 4 && t.bytes().all(|b| b.is_ascii_digit()) {
+        return true;
+    }
+    let lower = t.to_lowercase();
+    (1..=7).contains(&lower.len()) && is_roman_numeral(&lower)
+}
+
+/// Edge fraction of page height where extreme-most folios always strip.
+const SP_EDGE_RATIO: f64 = 0.1;
+
 pub fn strip_single_page_chrome(pages: &mut [PageContent]) {
     for page in pages.iter_mut() {
         let h = page.page_height;
@@ -525,6 +538,36 @@ pub fn strip_single_page_chrome(pages: &mut [PageContent]) {
 
                 for tb in group {
                     strip.insert(tb.id.clone());
+                }
+            }
+        }
+
+        // A lone number that is the extreme-most line of the page, hard
+        // against the margin, is a page number regardless of isolation —
+        // folios sit directly beneath footnotes all the time. Runs after
+        // group stripping so a folio can still anchor its chrome group.
+        if page.text_boxes.len() > 2 {
+            if let Some(bottom_most) = page
+                .text_boxes
+                .iter()
+                .filter(|tb| !strip.contains(&tb.id))
+                .min_by(|a, b| a.bounds.bottom.total_cmp(&b.bounds.bottom))
+            {
+                if is_lone_folio(&bottom_most.text)
+                    && bottom_most.bounds.bottom <= h * SP_EDGE_RATIO
+                {
+                    strip.insert(bottom_most.id.clone());
+                }
+            }
+            if let Some(top_most) = page
+                .text_boxes
+                .iter()
+                .filter(|tb| !strip.contains(&tb.id))
+                .max_by(|a, b| a.bounds.top.total_cmp(&b.bounds.top))
+            {
+                if is_lone_folio(&top_most.text) && top_most.bounds.top >= h * (1.0 - SP_EDGE_RATIO)
+                {
+                    strip.insert(top_most.id.clone());
                 }
             }
         }
@@ -855,6 +898,24 @@ mod tests {
         assert!(matches_chrome_pattern("Volume 81, Number 6, November 1975"));
         assert!(!matches_chrome_pattern("seven"));
         assert!(!matches_chrome_pattern("mixed"));
+    }
+
+    #[test]
+    fn extreme_edge_folio_strips_despite_adjacent_footnotes() {
+        // A page number directly beneath a footnote block: vertical
+        // isolation fails, but the extreme-most lone number at the
+        // margin is chrome regardless.
+        let mut pages = single_page(vec![
+            chrome_box("b1", "Body prose one.", 500.0, 490.0),
+            chrome_box("b2", "Body prose two.", 480.0, 470.0),
+            chrome_box("fn1", "8 Response given by the Minister.", 110.0, 100.0),
+            chrome_box("fn2", "9 Ibid.", 96.0, 86.0),
+            chrome_box("folio", "6", 85.0, 71.0),
+        ]);
+        strip_single_page_chrome(&mut pages);
+        let ids: Vec<&str> = pages[0].text_boxes.iter().map(|t| t.id.as_str()).collect();
+        assert!(!ids.contains(&"folio"), "{ids:?}");
+        assert!(ids.contains(&"fn1"), "footnotes must survive: {ids:?}");
     }
 
     #[test]
