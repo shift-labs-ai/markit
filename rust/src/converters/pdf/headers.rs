@@ -214,7 +214,51 @@ pub(crate) fn matches_chrome_pattern(text: &str) -> bool {
         return true;
     }
 
+    // Volume:page citations ("The Astrophysical Journal, 811:51 (9pp)").
+    if t.len() <= 120 && has_year(&lower) && has_colon_cite(t) {
+        return true;
+    }
+
+    // "(1974). 7, 222" reference-style volume/page after a year.
+    if t.len() <= 120 && has_paren_year_pages(t) {
+        return true;
+    }
+
+    // A bare date line ("26 mai 1978", "March 8, 2003").
+    if t.len() <= 30 && is_bare_date_line(t) {
+        return true;
+    }
+
     false
+}
+
+/// `NNN:NN` volume:page marker.
+fn has_colon_cite(t: &str) -> bool {
+    let b = t.as_bytes();
+    for i in 1..b.len().saturating_sub(1) {
+        if b[i] == b':' && b[i - 1].is_ascii_digit() && b[i + 1].is_ascii_digit() {
+            return true;
+        }
+    }
+    false
+}
+
+/// `(19xx)` or `(20xx)` followed by `N, N` volume/pages.
+fn has_paren_year_pages(t: &str) -> bool {
+    static RE: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"\((?:19|20)\d\d\)\.? *\d+, *\d+").unwrap());
+    RE.is_match(t)
+}
+
+/// `26 mai 1978` / `March 8, 2003` — a whole line that is only a date.
+fn is_bare_date_line(t: &str) -> bool {
+    static DMY: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"^\d{1,2}\.? +\p{L}+\.? +(?:19|20)\d\d\.?$").unwrap()
+    });
+    static MDY: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"^\p{L}+ +\d{1,2}, +(?:19|20)\d\d\.?$").unwrap()
+    });
+    DMY.is_match(t) || MDY.is_match(t)
 }
 
 /// `vol`/`volume` at a word start followed by `.`, ` ` or `,`, with any

@@ -219,6 +219,28 @@ export function matchesChromePattern(text: string): boolean {
   // enough to plausibly be chrome.
   if (t.length <= 120 && hasYear(lower) && hasDigitRange(t)) return true;
 
+  // Volume:page citations ("The Astrophysical Journal, 811:51 (9pp)").
+  if (t.length <= 120 && hasYear(lower) && /\d+:\d+/.test(t)) return true;
+
+  // "(1974). 7, 222" reference-style volume/page after a year.
+  if (t.length <= 120 && /\((?:19|20)\d\d\)\.? *\d+, *\d+/.test(t)) {
+    return true;
+  }
+
+  // A bare date line ("26 mai 1978", "March 8, 2003").
+  if (
+    t.length <= 30 &&
+    /^\d{1,2}\.? +\p{L}+\.? +(?:19|20)\d\d\.?$/u.test(t)
+  ) {
+    return true;
+  }
+  if (
+    t.length <= 30 &&
+    /^\p{L}+ +\d{1,2}, +(?:19|20)\d\d\.?$/u.test(t)
+  ) {
+    return true;
+  }
+
   return false;
 }
 
