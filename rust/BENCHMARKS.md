@@ -8,11 +8,11 @@ liteparse 2.11.1 (no OCR, markdown mode, one warm batch process).
 |  | markit | liteparse |
 |---|---:|---:|
 | **Quality (macro)** | **39.0% ± 0.9** | 38.8% ± 0.9 |
-| **Speed (1,403 PDFs)** | **1.73 s · 815 docs/s** | 6.1 s · 231 docs/s |
+| **Speed (1,403 PDFs)** | **1.31 s · 1,070 docs/s** | 6.1 s · 231 docs/s |
 | Conversion failures | 0 | 0 |
 
 Quality is a statistical tie at the top (CI overlap) with markit
-nominally ahead; markit is **3.5× faster**. markit was 27.1% and
+nominally ahead; markit is **4.7× faster**. markit was 27.1% and
 155 docs/s at 03a0d7f.
 
 Head-to-head by category:

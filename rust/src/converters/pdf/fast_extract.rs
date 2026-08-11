@@ -10,7 +10,7 @@ use anyhow::{anyhow, bail, Result};
 use rustc_hash::FxHashSet;
 
 use super::geom::rotation_base;
-use super::interp::{ImageSource, Interp};
+use super::interp::{FontCache, ImageSource, Interp};
 use super::own_pdf::{decode_stream, Dict, Pdf, Val};
 use super::pagetree::{collect_hidden_ocgs, walk_pages, Inherit};
 use super::types::PageContent;
@@ -55,6 +55,7 @@ fn interpret_page<'a>(
     inherited: &Inherit<'a>,
     page_number: u32,
     hidden_ocgs: Rc<FxHashSet<u32>>,
+    font_cache: FontCache,
     content: &mut Vec<u8>,
 ) -> Result<(Interp<'a>, f64, f64)> {
     let media = inherited
@@ -83,7 +84,7 @@ fn interpret_page<'a>(
     let (base, page_width, page_height) =
         rotation_base(inherited.rotate, &page_box, page_box[0], page_box[1]);
     decode_page_content(pdf, page, content)?;
-    let mut interp = Interp::new(pdf, page_number, base, hidden_ocgs);
+    let mut interp = Interp::new(pdf, page_number, base, hidden_ocgs, font_cache);
     interp.run(content, inherited.resources.as_ref())?;
     interp.clip_to_page(page_width, page_height);
     Ok((interp, page_width, page_height))
@@ -106,6 +107,7 @@ pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
     let mut any_text_ops = false;
     let mut any_decoded = false;
     let mut content = Vec::new();
+    let font_cache = FontCache::default();
 
     for (index, (page, inherited)) in pages.iter().enumerate() {
         let page_number = (index + 1) as u32;
@@ -115,6 +117,7 @@ pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
             inherited,
             page_number,
             hidden_ocgs.clone(),
+            font_cache.clone(),
             &mut content,
         )?;
         if interp.unsupported_font {
@@ -174,8 +177,15 @@ pub(crate) fn page_image_placements<'a>(
         bail!("page out of range");
     };
     let mut content = Vec::new();
-    let (interp, _page_width, page_height) =
-        interpret_page(pdf, page, inherited, page_number, hidden_ocgs, &mut content)?;
+    let (interp, _page_width, page_height) = interpret_page(
+        pdf,
+        page,
+        inherited,
+        page_number,
+        hidden_ocgs,
+        FontCache::default(),
+        &mut content,
+    )?;
     Ok(interp
         .image_placements
         .into_iter()

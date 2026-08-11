@@ -12,17 +12,43 @@ pub struct ObjLexer<'a> {
     pub(super) pos: usize,
 }
 
+/// 256-entry byte-class table: one L1-resident lookup classifies a
+/// byte as whitespace and/or delimiter in a single load, replacing two
+/// compare chains in every scan loop of both lexers.
+const WS_BIT: u8 = 1;
+const DELIM_BIT: u8 = 2;
+
+pub(crate) static LEX_CLASS: [u8; 256] = {
+    let mut t = [0u8; 256];
+    let ws = b" \t\r\n\x0c\0";
+    let delim = b"()<>[]{}/%";
+    let mut i = 0;
+    while i < ws.len() {
+        t[ws[i] as usize] |= WS_BIT;
+        i += 1;
+    }
+    let mut j = 0;
+    while j < delim.len() {
+        t[delim[j] as usize] |= DELIM_BIT;
+        j += 1;
+    }
+    t
+};
+
 #[inline]
 pub(crate) fn is_ws(b: u8) -> bool {
-    matches!(b, b' ' | b'\t' | b'\r' | b'\n' | b'\x0c' | b'\0')
+    LEX_CLASS[b as usize] & WS_BIT != 0
 }
 
 #[inline]
 pub(crate) fn is_delim(b: u8) -> bool {
-    matches!(
-        b,
-        b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%'
-    )
+    LEX_CLASS[b as usize] & DELIM_BIT != 0
+}
+
+/// Neither whitespace nor delimiter: a regular token byte.
+#[inline]
+pub(crate) fn is_regular(b: u8) -> bool {
+    LEX_CLASS[b as usize] == 0
 }
 
 impl<'a> ObjLexer<'a> {
@@ -312,10 +338,7 @@ impl<'a> ObjLexer<'a> {
     fn name_body(&mut self) -> &'a [u8] {
         self.pos += 1; // '/'
         let start = self.pos;
-        while self.pos < self.data.len()
-            && !is_ws(self.data[self.pos])
-            && !is_delim(self.data[self.pos])
-        {
+        while self.pos < self.data.len() && is_regular(self.data[self.pos]) {
             self.pos += 1;
         }
         // Note: '#'-escaped names are returned raw; the escape form is

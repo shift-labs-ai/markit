@@ -37,7 +37,7 @@ pub struct Lexer<'a> {
     pub scratch: Vec<u8>,
 }
 
-use super::own_pdf::{is_delim, is_ws};
+use super::own_pdf::{is_delim, is_regular, is_ws};
 
 fn is_known_content_operator(op: &[u8]) -> bool {
     matches!(
@@ -143,7 +143,7 @@ fn plausible_post_inline_syntax(mut data: &[u8]) -> bool {
             }
             b'/' => {
                 pos += 1;
-                while pos < data.len() && !is_ws(data[pos]) && !is_delim(data[pos]) {
+                while pos < data.len() && is_regular(data[pos]) {
                     pos += 1;
                 }
             }
@@ -177,7 +177,7 @@ fn plausible_post_inline_syntax(mut data: &[u8]) -> bool {
             _ if is_delim(data[pos]) => pos += 1,
             _ => {
                 let start = pos;
-                while pos < data.len() && !is_ws(data[pos]) && !is_delim(data[pos]) {
+                while pos < data.len() && is_regular(data[pos]) {
                     pos += 1;
                 }
                 let token = &data[start..pos];
@@ -260,10 +260,7 @@ impl<'a> Lexer<'a> {
                 b'/' => {
                     self.pos += 1;
                     let start = self.pos;
-                    while self.pos < self.data.len()
-                        && !is_ws(self.data[self.pos])
-                        && !is_delim(self.data[self.pos])
-                    {
+                    while self.pos < self.data.len() && is_regular(self.data[self.pos]) {
                         self.pos += 1;
                     }
                     self.operands.push(Operand::Name {
@@ -294,10 +291,7 @@ impl<'a> Lexer<'a> {
                 _ => {
                     // Operator or keyword.
                     let start = self.pos;
-                    while self.pos < self.data.len()
-                        && !is_ws(self.data[self.pos])
-                        && !is_delim(self.data[self.pos])
-                    {
+                    while self.pos < self.data.len() && is_regular(self.data[self.pos]) {
                         self.pos += 1;
                     }
                     let tok = &self.data[start..self.pos];

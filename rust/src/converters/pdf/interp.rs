@@ -89,8 +89,15 @@ struct GraphicsState {
     stroke_width: f64,
 }
 
+/// Fonts repeat across pages (and form recursions) in virtually every
+/// document; building one re-parses widths, encodings, and ToUnicode
+/// CMaps from raw bytes. Cache built fonts per font-dict object number
+/// for the lifetime of the document.
+pub(crate) type FontCache = std::rc::Rc<std::cell::RefCell<FxHashMap<u32, std::rc::Rc<FontInfo>>>>;
+
 pub(crate) struct Interp<'a> {
     pdf: &'a Pdf<'a>,
+    font_cache: FontCache,
     /// Raw text items in paint order — page assembly's input.
     pub(crate) items: Vec<RawItem>,
     /// Vector segments (fills/strokes) for table detection.
@@ -145,9 +152,11 @@ impl<'a> Interp<'a> {
         page_number: u32,
         base: Mat,
         hidden_ocgs: std::rc::Rc<FxHashSet<u32>>,
+        font_cache: FontCache,
     ) -> Self {
         Interp {
             pdf,
+            font_cache,
             items: Vec::new(),
             segments: Vec::new(),
             image_placements: Vec::new(),
@@ -502,8 +511,20 @@ impl<'a> Interp<'a> {
         if let Some(res) = resources {
             if let Ok(Some(Val::Dict(fonts))) = self.pdf.dict_get(res, b"Font") {
                 for (name, obj) in &fonts {
+                    // Referenced fonts hit the document-level cache;
+                    // inline font dicts (rare) build uncached.
+                    if let Val::Ref(num) = obj {
+                        if let Some(cached) = self.font_cache.borrow().get(num) {
+                            map.insert(name.to_vec(), cached.clone());
+                            continue;
+                        }
+                    }
                     if let Ok(Val::Dict(fd)) = self.pdf.resolve(obj) {
-                        map.insert(name.to_vec(), std::rc::Rc::new(build_font(self.pdf, &fd)));
+                        let built = std::rc::Rc::new(build_font(self.pdf, &fd));
+                        if let Val::Ref(num) = obj {
+                            self.font_cache.borrow_mut().insert(*num, built.clone());
+                        }
+                        map.insert(name.to_vec(), built);
                     }
                 }
             }
@@ -570,31 +591,9 @@ impl<'a> Interp<'a> {
         let mut text = String::new();
         let mut advance = 0.0f64; // text-space units (pre-scale)
 
-        // (code-or-cid, is-space-byte, resolved unicode override)
-        let codes: Vec<(u32, bool, Option<char>)> = if let Some(cjk) = &font.cjk {
-            // Variable-length codes; unicode comes straight from the
-            // ordering's CID->Unicode table.
-            cjk.decode(bytes)
-                .into_iter()
-                .map(|(cid, uni)| (cid, false, uni))
-                .collect()
-        } else if font.two_byte {
-            bytes
-                .chunks(2)
-                .map(|c| {
-                    let v = if c.len() == 2 {
-                        ((c[0] as u32) << 8) | c[1] as u32
-                    } else {
-                        c[0] as u32
-                    };
-                    (v, false, None)
-                })
-                .collect()
-        } else {
-            bytes.iter().map(|&b| (b as u32, b == 32, None)).collect()
-        };
-
-        for (code, is_space_byte, uni_override) in codes {
+        // Per-code work, streamed — no per-operator Vec of codes. Only
+        // the CJK path materializes (variable-length decode).
+        let mut per_code = |code: u32, is_space_byte: bool, uni_override: Option<char>| {
             let w = if font.two_byte || font.cjk.is_some() {
                 *font.cid_widths.get(&code).unwrap_or(&font.default_width)
             } else {
@@ -643,6 +642,27 @@ impl<'a> Interp<'a> {
                 text.push_str(s);
             } else if let Some(c) = font.to_unicode_simple[code as usize & 0xff] {
                 text.push(c);
+            }
+        };
+
+        if let Some(cjk) = &font.cjk {
+            // Variable-length codes; unicode comes straight from the
+            // ordering's CID->Unicode table.
+            for (cid, uni) in cjk.decode(bytes) {
+                per_code(cid, false, uni);
+            }
+        } else if font.two_byte {
+            for c in bytes.chunks(2) {
+                let v = if c.len() == 2 {
+                    ((c[0] as u32) << 8) | c[1] as u32
+                } else {
+                    c[0] as u32
+                };
+                per_code(v, false, None);
+            }
+        } else {
+            for &b in bytes {
+                per_code(b as u32, b == 32, None);
             }
         }
 
