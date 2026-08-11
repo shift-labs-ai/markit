@@ -172,6 +172,7 @@ pub(crate) fn build_font(pdf: &Pdf, dict: &Dict) -> FontInfo {
     } else {
         info.default_width = 0.0;
         let first_char = g(b"FirstChar").and_then(|v| v.as_num()).unwrap_or(0.0) as usize;
+        let mut std14: Option<(&'static [u16; 95], f64)> = None;
         if let Some(Val::Array(w)) = g(b"Widths") {
             for (i, o) in w.iter().enumerate() {
                 if let Some(v) = pdf.resolve(o).ok().and_then(|v| v.as_num()) {
@@ -183,7 +184,7 @@ pub(crate) fn build_font(pdf: &Pdf, dict: &Dict) -> FontInfo {
         } else {
             // No Widths: standard-14 territory. Real AFM metrics for the
             // Helvetica/Times/Courier families; sensible fill elsewhere.
-            standard14_widths(&base_name, &mut info.widths);
+            std14 = standard14_widths(&base_name, &mut info.widths);
         }
         // Type3 widths are expressed in glyph space: FontMatrix maps them
         // to text space (nominally /1000 units for other font types).
@@ -201,6 +202,20 @@ pub(crate) fn build_font(pdf: &Pdf, dict: &Dict) -> FontInfo {
             info.is_bold = descriptor_bold(pdf, dict);
         }
         build_simple_encoding(pdf, dict, &mut info);
+        // AFM widths are keyed by GLYPH, not by code. Documents with a
+        // custom /Differences encoding (old IRS forms remap the whole
+        // alphabet to high bytes) would otherwise get the average width
+        // for every letter — wide enough to fuse adjacent columns.
+        if let Some((table, _avg)) = std14 {
+            for code in 0..256 {
+                if let Some(c) = info.to_unicode_simple[code] {
+                    let u = c as u32;
+                    if (32..=126).contains(&u) {
+                        info.widths[code] = table[(u - 32) as usize] as f64;
+                    }
+                }
+            }
+        }
     }
 
     // ToUnicode overrides encoding-derived mappings — except when it
@@ -281,7 +296,10 @@ pub(crate) fn build_font(pdf: &Pdf, dict: &Dict) -> FontInfo {
 
 /// AFM widths for the standard-14 text fonts, ASCII 32..=126 (the range
 /// that drives line assembly). Codes outside get the font's average.
-fn standard14_widths(base: &str, widths: &mut [f64; 256]) {
+/// Returns the chosen table so callers can re-key widths by glyph once
+/// the encoding is known (custom /Differences move letters to other
+/// codes). None for the fixed-pitch Courier family.
+fn standard14_widths(base: &str, widths: &mut [f64; 256]) -> Option<(&'static [u16; 95], f64)> {
     const HELV: [u16; 95] = [
         278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278, 556, 556,
         556, 556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556, 1015, 667, 667, 722,
@@ -333,28 +351,30 @@ fn standard14_widths(base: &str, widths: &mut [f64; 256]) {
 
     let bold = base.contains("bold");
     let italic = base.contains("italic") || base.contains("oblique");
-    let (table, avg): (&[u16; 95], f64) = if base.contains("courier") || base.contains("mono") {
-        *widths = [600.0; 256];
-        return;
-    } else if base.contains("times") || base.contains("roman") || base.contains("serif") {
-        match (bold, italic) {
-            (true, true) => (&TIMES_BI, 500.0),
-            (true, false) => (&TIMES_B, 500.0),
-            (false, true) => (&TIMES_I, 500.0),
-            (false, false) => (&TIMES, 500.0),
-        }
-    } else {
-        // Helvetica/Arial and anything unknown: sans metrics.
-        if bold {
-            (&HELV_B, 556.0)
+    let (table, avg): (&'static [u16; 95], f64) =
+        if base.contains("courier") || base.contains("mono") {
+            *widths = [600.0; 256];
+            return None;
+        } else if base.contains("times") || base.contains("roman") || base.contains("serif") {
+            match (bold, italic) {
+                (true, true) => (&TIMES_BI, 500.0),
+                (true, false) => (&TIMES_B, 500.0),
+                (false, true) => (&TIMES_I, 500.0),
+                (false, false) => (&TIMES, 500.0),
+            }
         } else {
-            (&HELV, 556.0)
-        }
-    };
+            // Helvetica/Arial and anything unknown: sans metrics.
+            if bold {
+                (&HELV_B, 556.0)
+            } else {
+                (&HELV, 556.0)
+            }
+        };
     *widths = [avg; 256];
     for (i, &w) in table.iter().enumerate() {
         widths[32 + i] = w as f64;
     }
+    Some((table, avg))
 }
 
 fn descriptor_bold(pdf: &Pdf, font_dict: &Dict) -> bool {
