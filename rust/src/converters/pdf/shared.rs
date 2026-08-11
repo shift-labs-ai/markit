@@ -54,6 +54,38 @@ fn script_same_line(a: &RawTextItem, b: &RawTextItem) -> bool {
     overlap >= 0.5 * small.height.min(large.height).max(1.0)
 }
 
+/// Spacing accents that PDF text ops draw as separate glyphs overlaid
+/// on their base letter, mapped to combining marks for composition.
+fn spacing_accent_to_combining(c: char) -> Option<char> {
+    Some(match c {
+        '\u{B4}' | '\u{2CA}' => '\u{301}', // acute
+        '`' | '\u{2CB}' => '\u{300}',      // grave
+        '^' | '\u{2C6}' => '\u{302}',      // circumflex
+        '~' | '\u{2DC}' => '\u{303}',      // tilde
+        '\u{AF}' | '\u{2C9}' => '\u{304}', // macron
+        '\u{2D8}' => '\u{306}',            // breve
+        '\u{2D9}' => '\u{307}',            // dot above
+        '\u{A8}' => '\u{308}',             // dieresis
+        '\u{2DA}' => '\u{30A}',            // ring
+        '\u{2DD}' => '\u{30B}',            // double acute
+        '\u{2C7}' => '\u{30C}',            // caron
+        '\u{B8}' => '\u{327}',             // cedilla
+        '\u{2DB}' => '\u{328}',            // ogonek
+        _ => return None,
+    })
+}
+
+/// Compose base + combining into a single precomposed char, or None.
+fn compose(base: char, combining: char) -> Option<char> {
+    use unicode_normalization::UnicodeNormalization;
+    let composed: String = [base, combining].iter().collect::<String>().nfc().collect();
+    let mut chars = composed.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), None) => Some(c),
+        _ => None,
+    }
+}
+
 fn merge_into_words(raws: &[RawTextItem]) -> Vec<RawTextItem> {
     if raws.is_empty() {
         return Vec::new();
@@ -81,6 +113,49 @@ fn merge_into_words(raws: &[RawTextItem]) -> Vec<RawTextItem> {
             .max(cur.height.max(next.height));
         let gap_cap = (MERGE_GAP_EM * ref_size).clamp(MIN_MERGE_GAP, MAX_MERGE_GAP);
         let close = next.x <= cur.x + cur.width + gap_cap;
+
+        // Accent overlay: a spacing accent drawn over the previous
+        // glyph (or the base drawn over a leading accent) composes into
+        // the precomposed letter. Only when the glyphs overlap — real
+        // text never overlaps, so literal `^`/`~` stay untouched.
+        let overlaps = next.x < cur.x + cur.width - 1.0;
+        if same_y && overlaps {
+            let next_trim = next.text.trim();
+            let mut next_chars = next_trim.chars();
+            let (next_first, next_only) = (next_chars.next(), next_chars.next().is_none());
+            // Base then accent.
+            if let (Some(accent), true) = (next_first, next_only) {
+                if let Some(combining) = spacing_accent_to_combining(accent) {
+                    if let Some(base) = cur.text.chars().last() {
+                        if let Some(composed) = compose(base, combining) {
+                            cur.text.pop();
+                            cur.text.push(composed);
+                            cur.width = cur.width.max(next.x + next.width - cur.x);
+                            continue;
+                        }
+                    }
+                }
+            }
+            // Accent then base.
+            if let Some(accent) = cur.text.chars().last() {
+                if let Some(combining) = spacing_accent_to_combining(accent) {
+                    if let Some(base) = next_first {
+                        if let Some(composed) = compose(base, combining) {
+                            cur.text.pop();
+                            cur.text.push(composed);
+                            let rest: String = next.text.trim_start().chars().skip(1).collect();
+                            cur.text.push_str(&rest);
+                            cur.width = cur.width.max(next.x + next.width - cur.x);
+                            cur.height = cur.height.max(next.height);
+                            cur.font_size = cur.font_size.max(next.font_size);
+                            cur.is_bold |= next.is_bold;
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+
         if same_y && close {
             let sep = if next.x - (cur.x + cur.width) > 1.0 {
                 " "
@@ -284,6 +359,57 @@ mod tests {
     fn thin_rectangles_become_axis_aligned_segments() {
         assert!(thin_rect_to_segment_pub("h".into(), 0.0, 0.0, 100.0, 1.0).is_some());
         assert!(thin_rect_to_segment_pub("square".into(), 0.0, 0.0, 10.0, 10.0).is_none());
+    }
+
+    #[test]
+    fn overlapping_spacing_accent_composes_with_base() {
+        // "Guapore" + acute drawn over the final e → "Guaporé";
+        // accent-first order composes too ("~" then "a" → "ã").
+        let boxes = finish_text_boxes_pub(
+            vec![
+                RawTextItemPub {
+                    text: "Guapore".into(),
+                    x: 0.0,
+                    y: 10.0,
+                    width: 40.0,
+                    height: 10.0,
+                    font_size: 10.0,
+                    is_bold: false,
+                },
+                RawTextItemPub {
+                    text: "\u{B4}".into(),
+                    x: 35.0,
+                    y: 10.0,
+                    width: 3.0,
+                    height: 10.0,
+                    font_size: 10.0,
+                    is_bold: false,
+                },
+                RawTextItemPub {
+                    text: "~".into(),
+                    x: 50.0,
+                    y: 10.0,
+                    width: 4.0,
+                    height: 10.0,
+                    font_size: 10.0,
+                    is_bold: false,
+                },
+                RawTextItemPub {
+                    text: "ao".into(),
+                    x: 50.0,
+                    y: 10.0,
+                    width: 10.0,
+                    height: 10.0,
+                    font_size: 10.0,
+                    is_bold: false,
+                },
+            ],
+            1,
+        )
+        .unwrap();
+        assert_eq!(boxes.len(), 2, "{:?}", boxes[0].text);
+        assert_eq!(boxes[0].text, "Guapor\u{e9}");
+        assert_eq!(boxes[1].text, "\u{e3}o");
     }
 
     #[test]
