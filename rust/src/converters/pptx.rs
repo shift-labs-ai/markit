@@ -3,6 +3,9 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::Path;
 
+use crate::converters::ooxml::{
+    office_document_path, parse_relationships, relationship_part_path, resolve_part_path,
+};
 use crate::types::{ConversionResult, Converter, StreamInfo};
 
 const MIMETYPES: &[&str] =
@@ -10,6 +13,11 @@ const MIMETYPES: &[&str] =
 
 /// Namespace URI for the `r:` prefix used in OOXML relationship attributes.
 const R_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+fn relationship_attribute<'a>(node: roxmltree::Node<'a, '_>, name: &str) -> Option<&'a str> {
+    node.attribute((R_NS, name))
+        .or_else(|| node.attribute(name))
+}
 
 pub struct PptxConverter;
 
@@ -31,10 +39,14 @@ impl Converter for PptxConverter {
         // fighting the borrow checker across multiple reads.
         let files = read_zip_files(input)?;
 
-        // ── 1. Parse presentation.xml ────────────────────────────────────────
-        let pres_bytes = files
-            .get("ppt/presentation.xml")
-            .ok_or_else(|| anyhow!("Invalid PPTX: missing presentation.xml"))?;
+        // ── 1. Locate and parse the relationship-addressed main part ─────────
+        let presentation_path = files
+            .get("_rels/.rels")
+            .and_then(|bytes| office_document_path(&String::from_utf8_lossy(bytes)).ok())
+            .unwrap_or_else(|| "ppt/presentation.xml".to_string());
+        let pres_bytes = files.get(&presentation_path).ok_or_else(|| {
+            anyhow!("Invalid PPTX: missing presentation.xml main part {presentation_path}")
+        })?;
         let pres_xml = String::from_utf8_lossy(pres_bytes);
         let pres_doc = roxmltree::Document::parse(&pres_xml)
             .map_err(|e| anyhow!("Failed to parse presentation.xml: {}", e))?;
@@ -47,24 +59,28 @@ impl Converter for PptxConverter {
                 .children()
                 .filter(|n| n.is_element() && n.tag_name().name() == "sldId")
             {
-                if let Some(r_id) = node.attribute((R_NS, "id")) {
+                if let Some(r_id) = relationship_attribute(node, "id") {
                     sld_r_ids.push(r_id.to_string());
                 }
             }
         }
 
         // ── 2. Parse presentation rels → rId → target path ──────────────────
-        let rel_map = match files.get("ppt/_rels/presentation.xml.rels") {
-            Some(bytes) => parse_rels(&String::from_utf8_lossy(bytes)),
+        let presentation_rels_path = relationship_part_path(&presentation_path);
+        let rel_map = match files.get(&presentation_rels_path) {
+            Some(bytes) => parse_relationships(&String::from_utf8_lossy(bytes)),
             None => HashMap::new(),
         };
 
         // Build ordered slide paths: "ppt/slides/slideN.xml"
         let mut slide_paths: Vec<String> = Vec::new();
         for r_id in &sld_r_ids {
-            if let Some(target) = rel_map.get(r_id) {
-                // target is relative to ppt/, e.g. "slides/slide1.xml"
-                slide_paths.push(format!("ppt/{}", target));
+            if let Some((kind, target)) = rel_map.get(r_id) {
+                if kind.ends_with("/slide") {
+                    if let Some(path) = resolve_part_path(&presentation_path, target) {
+                        slide_paths.push(path);
+                    }
+                }
             }
         }
 
@@ -100,10 +116,9 @@ impl Converter for PptxConverter {
             };
 
             // Parse slide-level rels for image r:embed lookups.
-            let slide_rels_path =
-                slide_path.replace("slides/slide", "slides/_rels/slide") + ".rels";
+            let slide_rels_path = relationship_part_path(slide_path);
             let slide_rel_map = match files.get(&slide_rels_path) {
-                Some(bytes) => parse_rels(&String::from_utf8_lossy(bytes)),
+                Some(bytes) => parse_relationships(&String::from_utf8_lossy(bytes)),
                 None => HashMap::new(),
             };
 
@@ -138,7 +153,7 @@ impl Converter for PptxConverter {
                 {
                     // r:embed on a:blip
                     let r_embed = find_path(pic, &["blipFill", "blip"])
-                        .and_then(|n| n.attribute((R_NS, "embed")))
+                        .and_then(|n| relationship_attribute(n, "embed"))
                         .map(|s| s.to_string());
                     let r_embed = match r_embed {
                         Some(e) => e,
@@ -146,17 +161,13 @@ impl Converter for PptxConverter {
                     };
 
                     let target = match slide_rel_map.get(&r_embed) {
-                        Some(t) => t.clone(),
-                        None => continue,
+                        Some((kind, target)) if kind.ends_with("/image") => target.clone(),
+                        _ => continue,
                     };
 
-                    // Resolve relative path against ppt/slides/
-                    let raw_path = if let Some(stripped) = target.strip_prefix('/') {
-                        stripped.to_string()
-                    } else {
-                        format!("ppt/slides/{}", target)
+                    let Some(normalized) = resolve_part_path(slide_path, &target) else {
+                        continue;
                     };
-                    let normalized = normalize_path(&raw_path);
 
                     // Skip if the image is not in the archive.
                     if !files.contains_key(&normalized) {
@@ -204,8 +215,12 @@ impl Converter for PptxConverter {
             }
 
             // ── Slide notes ──
-            let note_path = slide_path.replace("slides/slide", "notesSlides/notesSlide");
-            if let Some(note_bytes) = files.get(&note_path) {
+            let note_path = slide_rel_map
+                .iter()
+                .filter(|(_, (kind, _))| kind.ends_with("/notesSlide"))
+                .min_by_key(|(id, _)| id.as_str())
+                .and_then(|(_, (_, target))| resolve_part_path(slide_path, target));
+            if let Some(note_bytes) = note_path.as_ref().and_then(|path| files.get(path)) {
                 let note_xml = String::from_utf8_lossy(note_bytes);
                 if let Ok(note_doc) = roxmltree::Document::parse(&note_xml) {
                     let note_el = note_doc.root_element(); // p:notes
@@ -262,23 +277,6 @@ fn read_zip_files(input: &[u8]) -> Result<HashMap<String, Vec<u8>>> {
 }
 
 // ── XML helpers ──────────────────────────────────────────────────────────────
-
-/// Parse an OOXML `.rels` file and return Id → Target map.
-fn parse_rels(xml: &str) -> HashMap<String, String> {
-    let mut map = HashMap::new();
-    if let Ok(doc) = roxmltree::Document::parse(xml) {
-        let root = doc.root_element();
-        for rel in root
-            .children()
-            .filter(|n| n.is_element() && n.tag_name().name() == "Relationship")
-        {
-            if let (Some(id), Some(target)) = (rel.attribute("Id"), rel.attribute("Target")) {
-                map.insert(id.to_string(), target.to_string());
-            }
-        }
-    }
-    map
-}
 
 /// Walk a chain of child element local-names from `node`.
 fn find_path<'a, 'input>(
@@ -342,24 +340,23 @@ fn extract_table(gf: roxmltree::Node) -> Option<String> {
             .filter(|n| n.is_element() && n.tag_name().name() == "tc")
         {
             if let Some(tx_body) = find_path(tc, &["txBody"]) {
-                let mut parts: Vec<String> = Vec::new();
-                for p in tx_body
+                let paragraphs: Vec<String> = tx_body
                     .children()
-                    .filter(|n| n.is_element() && n.tag_name().name() == "p")
-                {
-                    for r in p
-                        .children()
-                        .filter(|n| n.is_element() && n.tag_name().name() == "r")
-                    {
-                        if let Some(t) = r
+                    .filter(|node| node.is_element() && node.tag_name().name() == "p")
+                    .map(|paragraph| {
+                        paragraph
                             .children()
-                            .find(|n| n.is_element() && n.tag_name().name() == "t")
-                        {
-                            parts.push(t.text().unwrap_or("").to_string());
-                        }
-                    }
-                }
-                cell_texts.push(parts.join(" "));
+                            .filter(|node| node.is_element() && node.tag_name().name() == "r")
+                            .filter_map(|run| {
+                                run.children()
+                                    .find(|node| node.is_element() && node.tag_name().name() == "t")
+                                    .and_then(|text| text.text())
+                            })
+                            .collect::<String>()
+                    })
+                    .filter(|paragraph| !paragraph.is_empty())
+                    .collect();
+                cell_texts.push(paragraphs.join(" "));
             } else {
                 cell_texts.push(String::new());
             }
@@ -371,6 +368,10 @@ fn extract_table(gf: roxmltree::Node) -> Option<String> {
         return None;
     }
 
+    let column_count = md_rows.iter().map(Vec::len).max()?;
+    for row in &mut md_rows {
+        row.resize(column_count, String::new());
+    }
     let (header, body) = md_rows.split_first()?;
     let mut lines: Vec<String> = Vec::new();
     lines.push(format!("| {} |", header.join(" | ")));
@@ -379,10 +380,6 @@ fn extract_table(gf: roxmltree::Node) -> Option<String> {
         header.iter().map(|_| "---").collect::<Vec<_>>().join(" | ")
     ));
     for row in body {
-        let mut row = row.clone();
-        while row.len() < header.len() {
-            row.push(String::new());
-        }
         lines.push(format!("| {} |", row.join(" | ")));
     }
 
@@ -390,20 +387,6 @@ fn extract_table(gf: roxmltree::Node) -> Option<String> {
 }
 
 // ── Path helpers ─────────────────────────────────────────────────────────────
-
-/// Collapse `\..` segments: `ppt/slides/../media/image1.png` →
-/// `ppt/media/image1.png`.
-fn normalize_path(path: &str) -> String {
-    let mut parts: Vec<&str> = Vec::new();
-    for seg in path.split('/') {
-        if seg == ".." {
-            parts.pop();
-        } else if !seg.is_empty() {
-            parts.push(seg);
-        }
-    }
-    parts.join("/")
-}
 
 fn is_slide_path(path: &str) -> bool {
     if let Some(rest) = path.strip_prefix("ppt/slides/slide") {
@@ -762,14 +745,14 @@ mod tests {
     #[test]
     fn path_normalization() {
         assert_eq!(
-            normalize_path("ppt/slides/../media/image1.png"),
+            resolve_part_path("", "ppt/slides/../media/image1.png").unwrap(),
             "ppt/media/image1.png"
         );
         assert_eq!(
-            normalize_path("ppt/media/image1.png"),
+            resolve_part_path("", "ppt/media/image1.png").unwrap(),
             "ppt/media/image1.png"
         );
-        assert_eq!(normalize_path("a/b/c/../../d"), "a/d");
+        assert_eq!(resolve_part_path("", "a/b/c/../../d").unwrap(), "a/d");
     }
 
     #[test]
@@ -783,5 +766,71 @@ mod tests {
         assert!(!is_slide_path("ppt/slides/slideshow.xml"));
         assert!(is_slide_path("ppt/slides/slide1.xml"));
         assert!(is_slide_path("ppt/slides/slide12.xml"));
+    }
+
+    #[test]
+    fn resolves_presentation_and_slides_from_relationship_paths() {
+        let cursor = std::io::Cursor::new(Vec::new());
+        let mut zip = zip::ZipWriter::new(cursor);
+        let opts = stored();
+        let entries = [
+            (
+                "_rels/.rels",
+                r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="deck/pres.xml"/></Relationships>"#,
+            ),
+            (
+                "deck/pres.xml",
+                r#"<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst></p:presentation>"#,
+            ),
+            (
+                "deck/_rels/pres.xml.rels",
+                r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="s/one.xml"/></Relationships>"#,
+            ),
+            (
+                "deck/s/one.xml",
+                r#"<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Relocated deck title</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#,
+            ),
+        ];
+        for (path, xml) in entries {
+            zip.start_file(path, opts).unwrap();
+            zip.write_all(xml.as_bytes()).unwrap();
+        }
+        let bytes = zip.finish().unwrap().into_inner();
+        let markdown = PptxConverter
+            .convert(&bytes, &info_ext(".pptx"))
+            .unwrap()
+            .markdown;
+        assert_eq!(
+            markdown.matches("Relocated deck title").count(),
+            1,
+            "{markdown}"
+        );
+        assert!(!markdown.contains("### Notes:"), "{markdown}");
+    }
+
+    #[test]
+    fn strict_relationship_attributes_are_recognized() {
+        let doc = roxmltree::Document::parse(
+            r#"<p:sldId xmlns:p="urn:p" xmlns:r="http://purl.oclc.org/ooxml/officeDocument/relationships" r:id="rId7"/>"#,
+        ).unwrap();
+        assert_eq!(
+            relationship_attribute(doc.root_element(), "id"),
+            Some("rId7")
+        );
+    }
+
+    #[test]
+    fn table_runs_concatenate_and_wide_rows_extend_header() {
+        let xml = r#"<p:graphicFrame xmlns:p="urn:p" xmlns:a="urn:a"><a:graphic><a:graphicData><a:tbl>
+          <a:tr><a:tc><a:txBody><a:p><a:r><a:t>Hel</a:t></a:r><a:r><a:t>lo</a:t></a:r></a:p></a:txBody></a:tc></a:tr>
+          <a:tr><a:tc><a:txBody><a:p><a:r><a:t>A</a:t></a:r></a:p></a:txBody></a:tc><a:tc><a:txBody><a:p><a:r><a:t>B</a:t></a:r></a:p></a:txBody></a:tc></a:tr>
+        </a:tbl></a:graphicData></a:graphic></p:graphicFrame>"#;
+        let doc = roxmltree::Document::parse(xml).unwrap();
+        let markdown = extract_table(doc.root_element()).unwrap();
+        assert!(
+            markdown.starts_with("| Hello |  |\n| --- | --- |"),
+            "{markdown}"
+        );
+        assert!(markdown.contains("| A | B |"), "{markdown}");
     }
 }

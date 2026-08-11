@@ -13,6 +13,9 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{Cursor, Read};
 
+use crate::converters::ooxml::{
+    office_document_path, parse_relationships, relationship_part_path, resolve_part_path,
+};
 use crate::types::{ConversionResult, Converter, StreamInfo};
 use crate::utils::html_to_md::{html_to_markdown_generated, normalize_tables_html};
 
@@ -20,10 +23,6 @@ use crate::utils::html_to_md::{html_to_markdown_generated, normalize_tables_html
 const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 const A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
-// Relationship types
-const REL_HYPERLINK: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
-
 // Placeholder token embedded in plain text so the HTML stripper won't eat it.
 const IMG_TOKEN_PREFIX: &str = "MARKITIMGTOKEN";
 
@@ -50,18 +49,22 @@ impl Converter for DocxConverter {
         let mut archive =
             zip::ZipArchive::new(cursor).map_err(|e| anyhow!("Invalid DOCX: {}", e))?;
 
-        // Relationship map: id → (rel_type, target)
-        let rels = read_rels(&mut archive).unwrap_or_default();
+        let document_path = read_zip_str(&mut archive, "_rels/.rels")
+            .ok()
+            .and_then(|xml| office_document_path(&xml).ok())
+            .unwrap_or_else(|| "word/document.xml".to_string());
 
-        // document.xml
-        let doc_xml = read_zip_str(&mut archive, "word/document.xml")
-            .map_err(|_| anyhow!("Invalid DOCX: missing word/document.xml"))?;
+        // Relationship map: id → (rel_type, target)
+        let rels = read_rels(&mut archive, &document_path).unwrap_or_default();
+
+        let doc_xml = read_zip_str(&mut archive, &document_path)
+            .map_err(|_| anyhow!("Invalid DOCX: missing main document part {document_path}"))?;
 
         // Numbering: numId → isOrdered (optional)
-        let num_types = read_numbering(&mut archive).unwrap_or_default();
+        let num_types = read_numbering(&mut archive, &rels, &document_path).unwrap_or_default();
 
         // Image blobs: rel_id → (bytes, extension)
-        let images = load_images(&mut archive, &rels);
+        let images = load_images(&mut archive, &rels, &document_path);
 
         // Prepare image output dir
         let image_dir = info.image_dir.as_deref();
@@ -123,28 +126,29 @@ fn read_zip_str(archive: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Res
 /// Returns id → (rel_type, target)
 fn read_rels(
     archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    document_path: &str,
 ) -> Result<HashMap<String, (String, String)>> {
-    let xml = read_zip_str(archive, "word/_rels/document.xml.rels")?;
-    let doc = roxmltree::Document::parse(&xml)?;
-    let mut map = HashMap::new();
-    for node in doc.root_element().children().filter(|n| n.is_element()) {
-        if node.tag_name().name() == "Relationship" {
-            let id = node.attribute("Id").unwrap_or("").to_string();
-            let rel_type = node.attribute("Type").unwrap_or("").to_string();
-            let target = node.attribute("Target").unwrap_or("").to_string();
-            if !id.is_empty() {
-                map.insert(id, (rel_type, target));
-            }
-        }
-    }
-    Ok(map)
+    let xml = read_zip_str(archive, &relationship_part_path(document_path))?;
+    Ok(parse_relationships(&xml))
 }
 
 // ── Numbering (list type detection) ──────────────────────────────────────────
 
 /// Returns numId → true(ordered) / false(unordered).
-fn read_numbering(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> Result<HashMap<String, bool>> {
-    let xml = match read_zip_str(archive, "word/numbering.xml") {
+fn read_numbering(
+    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    rels: &HashMap<String, (String, String)>,
+    document_path: &str,
+) -> Result<HashMap<String, bool>> {
+    let numbering_path = rels
+        .values()
+        .find(|(kind, _)| kind.ends_with("/numbering"))
+        .and_then(|(_, target)| resolve_part_path(document_path, target))
+        .unwrap_or_else(|| {
+            resolve_part_path(document_path, "numbering.xml")
+                .unwrap_or_else(|| "word/numbering.xml".to_string())
+        });
+    let xml = match read_zip_str(archive, &numbering_path) {
         Ok(s) => s,
         Err(_) => return Ok(HashMap::new()),
     };
@@ -190,30 +194,22 @@ fn read_numbering(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> Result<HashMa
 fn load_images(
     archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
     rels: &HashMap<String, (String, String)>,
+    document_path: &str,
 ) -> HashMap<String, (Vec<u8>, String)> {
     let mut map = HashMap::new();
     for (rel_id, (rel_type, target)) in rels {
         if !rel_type.contains("image") {
             continue;
         }
-        let zip_path = resolve_path(target);
+        let Some(zip_path) = resolve_part_path(document_path, target) else {
+            continue;
+        };
         let ext = zip_path.rsplit('.').next().unwrap_or("png").to_lowercase();
         if let Ok(bytes) = read_zip_bytes(archive, &zip_path) {
             map.insert(rel_id.clone(), (bytes, ext));
         }
     }
     map
-}
-
-/// Resolve a relationship target (relative to word/) to a ZIP entry path.
-fn resolve_path(target: &str) -> String {
-    if target.starts_with('/') {
-        target.trim_start_matches('/').to_string()
-    } else if target.starts_with("../") {
-        target.trim_start_matches("../").to_string()
-    } else {
-        format!("word/{}", target)
-    }
 }
 
 // ── Main HTML generation ──────────────────────────────────────────────────────
@@ -446,7 +442,7 @@ fn para_content_html(
                 .attribute((R, "id"))
                 .or_else(|| child.attribute("id"))
                 .and_then(|id| rels.get(id))
-                .filter(|(rt, _)| rt.contains("hyperlink") || rt == REL_HYPERLINK)
+                .filter(|(kind, _)| kind.ends_with("/hyperlink") || kind == "hyperlink")
                 .map(|(_, target)| target.as_str())
                 .unwrap_or("");
 
@@ -484,7 +480,10 @@ fn run_html(
 
     if let Some(drawing) = drawing {
         if let Some(blip) = find_descendant_ns(drawing, "blip", A) {
-            let embed = blip.attribute((R, "embed")).unwrap_or("");
+            let embed = blip
+                .attribute((R, "embed"))
+                .or_else(|| blip.attribute("embed"))
+                .unwrap_or("");
             if !embed.is_empty() {
                 if let Some((img_bytes, ext)) = images.get(embed) {
                     *image_count += 1;
@@ -549,12 +548,21 @@ fn run_html(
 
 // ── XML helpers ───────────────────────────────────────────────────────────────
 
+fn is_word_namespace(namespace: Option<&str>) -> bool {
+    namespace.is_some_and(|value| value == W || value.ends_with("/wordprocessingml/main"))
+}
+
 fn is_wn(node: roxmltree::Node, name: &str) -> bool {
-    node.is_element() && node.tag_name().name() == name && node.tag_name().namespace() == Some(W)
+    node.is_element()
+        && node.tag_name().name() == name
+        && is_word_namespace(node.tag_name().namespace())
 }
 
 fn wattr<'a>(node: roxmltree::Node<'a, '_>, name: &str) -> Option<&'a str> {
-    node.attribute((W, name)).or_else(|| node.attribute(name))
+    node.attributes()
+        .find(|attribute| attribute.name() == name && is_word_namespace(attribute.namespace()))
+        .map(|attribute| attribute.value())
+        .or_else(|| node.attribute(name))
 }
 
 fn find_wchild<'a, 'input>(
@@ -562,7 +570,7 @@ fn find_wchild<'a, 'input>(
     name: &str,
 ) -> Option<roxmltree::Node<'a, 'input>> {
     node.children().find(|n| {
-        n.is_element() && n.tag_name().name() == name && n.tag_name().namespace() == Some(W)
+        n.is_element() && n.tag_name().name() == name && is_word_namespace(n.tag_name().namespace())
     })
 }
 
@@ -904,5 +912,63 @@ mod tests {
             .convert(b"not a zip", &info_ext(".docx"))
             .unwrap_err();
         assert!(err.to_string().contains("Invalid DOCX"), "{}", err);
+    }
+
+    fn custom_path_docx(part: &str, namespace: &str, text: &str) -> Vec<u8> {
+        let cursor = Cursor::new(Vec::new());
+        let mut zip = zip::ZipWriter::new(cursor);
+        let opts = SimpleFileOptions::default();
+        zip.start_file("_rels/.rels", opts).unwrap();
+        zip.write_all(format!(r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="{part}"/></Relationships>"#).as_bytes()).unwrap();
+        zip.start_file(part, opts).unwrap();
+        zip.write_all(format!(r#"<w:document xmlns:w="{namespace}"><w:body><w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>{text}</w:t></w:r></w:p></w:body></w:document>"#).as_bytes()).unwrap();
+        let (dir, name) = part.rsplit_once('/').unwrap_or(("", part));
+        let rels_path = if dir.is_empty() {
+            format!("_rels/{name}.rels")
+        } else {
+            format!("{dir}/_rels/{name}.rels")
+        };
+        zip.start_file(rels_path, opts).unwrap();
+        zip.write_all(base_rels("").as_bytes()).unwrap();
+        zip.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn resolves_main_document_from_root_relationship() {
+        let bytes = custom_path_docx(
+            "content/main.xml",
+            "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+            "Relocated heading",
+        );
+        let markdown = DocxConverter
+            .convert(&bytes, &info_ext(".docx"))
+            .unwrap()
+            .markdown;
+        assert!(markdown.contains("Relocated heading"), "{markdown}");
+    }
+
+    #[test]
+    fn accepts_strict_wordprocessing_namespace() {
+        let bytes = custom_path_docx(
+            "word/document.xml",
+            "http://purl.oclc.org/ooxml/wordprocessingml/main",
+            "Strict heading",
+        );
+        let markdown = DocxConverter
+            .convert(&bytes, &info_ext(".docx"))
+            .unwrap()
+            .markdown;
+        assert!(markdown.contains("Strict heading"), "{markdown}");
+    }
+
+    #[test]
+    fn strict_relationship_attributes_preserve_hyperlinks() {
+        let xml = r#"<w:document xmlns:w="http://purl.oclc.org/ooxml/wordprocessingml/main" xmlns:r="http://purl.oclc.org/ooxml/officeDocument/relationships"><w:body><w:p><w:hyperlink r:id="rId1"><w:r><w:t>strict link</w:t></w:r></w:hyperlink></w:p></w:body></w:document>"#;
+        let rels = HashMap::from([(
+            "rId1".to_string(),
+            ("hyperlink".to_string(), "https://example.com".to_string()),
+        )]);
+        let html = doc_to_html(xml, &rels, &HashMap::new(), &HashMap::new(), None, &mut 0).unwrap();
+        assert!(html.contains("href=\"https://example.com\""), "{html}");
     }
 }

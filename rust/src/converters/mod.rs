@@ -8,6 +8,7 @@ pub mod image;
 pub mod ipynb;
 pub mod iwork;
 pub mod json;
+pub(crate) mod ooxml;
 pub mod pdf;
 pub mod plain_text;
 pub mod pptx;
