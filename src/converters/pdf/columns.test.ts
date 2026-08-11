@@ -90,4 +90,57 @@ describe("detectColumns", () => {
     const result = detectColumns([...left, ...right]);
     expect(result.columnCount).toBe(1);
   });
+
+  it("keeps a full-width title as a band above two columns", () => {
+    // Title spans both columns; body is two columns below it. The old
+    // left-edge heuristic collapsed this page to one row-wise column.
+    const title = tb("A Full Width Paper Title", 100, 760, 350);
+    const authors = tb("A. Author and B. Author", 150, 740, 250);
+    const left = Array.from({ length: 8 }, (_, i) =>
+      tb(`L${i}`, 72, 700 - i * 15),
+    );
+    const right = Array.from({ length: 8 }, (_, i) =>
+      tb(`R${i}`, 315, 700 - i * 15),
+    );
+    const result = detectColumns([title, authors, ...left, ...right]);
+    expect(result.columnCount).toBe(3);
+    expect(result.bands).toEqual([true, false, false]);
+    expect(result.columns[0].map((b) => b.text)).toEqual([
+      "A Full Width Paper Title",
+      "A. Author and B. Author",
+    ]);
+    expect(result.columns[1].every((b) => b.text.startsWith("L"))).toBe(true);
+    expect(result.columns[2].every((b) => b.text.startsWith("R"))).toBe(true);
+  });
+
+  it("splits regions at a mid-page full-width heading", () => {
+    const upperLeft = Array.from({ length: 5 }, (_, i) =>
+      tb(`UL${i}`, 72, 700 - i * 15),
+    );
+    const upperRight = Array.from({ length: 5 }, (_, i) =>
+      tb(`UR${i}`, 315, 700 - i * 15),
+    );
+    const heading = tb("A Section Heading Spanning Both Columns", 90, 600, 380);
+    const lowerLeft = Array.from({ length: 5 }, (_, i) =>
+      tb(`LL${i}`, 72, 560 - i * 15),
+    );
+    const lowerRight = Array.from({ length: 5 }, (_, i) =>
+      tb(`LR${i}`, 315, 560 - i * 15),
+    );
+    const result = detectColumns([
+      ...upperLeft,
+      ...upperRight,
+      heading,
+      ...lowerLeft,
+      ...lowerRight,
+    ]);
+    expect(result.bands).toEqual([false, false, true, false, false]);
+    expect(result.columns.map((g) => g[0].text)).toEqual([
+      "UL0",
+      "UR0",
+      "A Section Heading Spanning Both Columns",
+      "LL0",
+      "LR0",
+    ]);
+  });
 });

@@ -4,130 +4,214 @@
 //! layouts. Without column detection, text boxes are ordered by Y position
 //! only, interleaving left and right column content.
 //!
-//! Algorithm:
-//!   1. Collect left edges of all text boxes on the page
-//!   2. Find the largest horizontal gap between consecutive left edges
-//!   3. If gap > MIN_GAP_RATIO of the text width and both sides have
-//!      enough boxes → multi-column detected
-//!   4. Assign each text box to a column based on its center X
-//!   5. Return columns in reading order (left-to-right, top-to-bottom)
+//! Algorithm (article-level, coverage-based):
+//!   1. Build an x-coverage histogram: for each 1pt bin, count the boxes
+//!      whose horizontal interval strictly crosses it.
+//!   2. A gutter is a run of bins that almost no box crosses (full-width
+//!      titles and headings are allowed to cross), wide enough, with
+//!      enough boxes fully on each side.
+//!   3. Boxes crossing a gutter are full-width "bands" (titles, section
+//!      headings, footers). The rest are column-bound.
+//!   4. Walk the page top-to-bottom: bands split the page into vertical
+//!      regions; each region's boxes are emitted column by column
+//!      (left to right), preserving article reading order.
 //!
-//! This only detects the column structure. The caller is responsible for
-//! processing each column's text boxes independently (table detection,
+//! This only detects the structure. The caller is responsible for
+//! processing each group's text boxes independently (table detection,
 //! rendering, etc.).
-
-use std::collections::BTreeSet;
 
 use crate::converters::pdf::types::TextBox;
 
-/// Minimum gap as a fraction of the total text width to consider a column
-/// boundary. A two-column layout typically has ~50% gap; we use a lower
-/// threshold to catch asymmetric columns.
-const MIN_GAP_RATIO: f64 = 0.15;
-
-/// Minimum number of text boxes on each side of the gap.
+/// Minimum number of text boxes fully on each side of a gutter.
 const MIN_BOXES_PER_COLUMN: usize = 4;
 
-/// Minimum gap in absolute points to avoid splitting on small whitespace.
-const MIN_GAP_PTS: f64 = 40.0;
+/// Minimum gutter width in points.
+const MIN_GUTTER_PTS: i64 = 12;
+
+/// Fraction of the text width excluded at each edge when searching for
+/// gutters — a gutter in the outer margins is ragged-edge whitespace,
+/// not a column separator.
+const GUTTER_SEARCH_MARGIN: f64 = 0.15;
+
+/// Fraction of the page's boxes allowed to cross a gutter (full-width
+/// titles, headings, footnote rules). More crossings than this means the
+/// whitespace is coincidental, not structural.
+const MAX_CROSSING_FRACTION: f64 = 0.15;
+
+/// Maximum number of gutters (three-column layouts).
+const MAX_GUTTERS: usize = 2;
 
 /// Result of column layout detection.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColumnLayout {
-    /// Number of columns detected (1 = single column, 2+ = multi-column).
+    /// Number of groups in reading order (1 = single column).
     pub column_count: usize,
-    /// Text boxes grouped by column, in reading order (left to right).
+    /// Text boxes grouped in reading order.
     pub columns: Vec<Vec<TextBox>>,
-    /// X positions of column boundaries (between columns).
+    /// True for groups that are full-width bands (titles, headings).
+    pub bands: Vec<bool>,
+    /// X positions of column gutter centers.
     pub boundaries: Vec<f64>,
 }
 
-/// Detect column layout and return text boxes grouped by column.
+fn single(text_boxes: &[TextBox]) -> ColumnLayout {
+    ColumnLayout {
+        column_count: 1,
+        columns: vec![text_boxes.to_vec()],
+        bands: vec![false],
+        boundaries: vec![],
+    }
+}
+
+/// Gutter centers found via the crossing histogram, best-first capped.
+fn find_gutters(text_boxes: &[TextBox]) -> Vec<f64> {
+    let x_min = text_boxes
+        .iter()
+        .map(|tb| tb.bounds.left)
+        .fold(f64::INFINITY, f64::min);
+    let x_max = text_boxes
+        .iter()
+        .map(|tb| tb.bounds.right)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let width = x_max - x_min;
+    if width <= 0.0 {
+        return vec![];
+    }
+
+    let lo = (x_min + width * GUTTER_SEARCH_MARGIN).ceil() as i64;
+    let hi = (x_min + width * (1.0 - GUTTER_SEARCH_MARGIN)).floor() as i64;
+    if hi <= lo {
+        return vec![];
+    }
+
+    let max_crossing = 1.max((text_boxes.len() as f64 * MAX_CROSSING_FRACTION) as usize);
+
+    // Runs of bins crossed by at most max_crossing boxes.
+    let mut runs: Vec<(i64, i64)> = Vec::new();
+    let mut run_start: Option<i64> = None;
+    for x in lo..=hi {
+        let crossing = text_boxes
+            .iter()
+            .filter(|tb| tb.bounds.left + 2.0 < x as f64 && (x as f64) < tb.bounds.right - 2.0)
+            .count();
+        if crossing <= max_crossing {
+            if run_start.is_none() {
+                run_start = Some(x);
+            }
+        } else if let Some(start) = run_start.take() {
+            runs.push((start, x - 1));
+        }
+    }
+    if let Some(start) = run_start {
+        runs.push((start, hi));
+    }
+
+    // Validate: wide enough, and enough boxes fully on each side.
+    let mut centers: Vec<(f64, i64)> = Vec::new();
+    for (start, end) in runs {
+        let run_width = end - start + 1;
+        if run_width < MIN_GUTTER_PTS {
+            continue;
+        }
+        let center = (start + end) as f64 / 2.0;
+        let left_count = text_boxes
+            .iter()
+            .filter(|tb| tb.bounds.right <= center)
+            .count();
+        let right_count = text_boxes
+            .iter()
+            .filter(|tb| tb.bounds.left >= center)
+            .count();
+        if left_count < MIN_BOXES_PER_COLUMN || right_count < MIN_BOXES_PER_COLUMN {
+            continue;
+        }
+        centers.push((center, run_width));
+    }
+
+    centers.sort_by_key(|c| std::cmp::Reverse(c.1));
+    centers.truncate(MAX_GUTTERS);
+    let mut gutters: Vec<f64> = centers.into_iter().map(|(c, _)| c).collect();
+    gutters.sort_by(|a, b| a.total_cmp(b));
+    gutters
+}
+
+/// Detect column layout and return text boxes grouped in reading order.
 ///
-/// For single-column pages, returns all boxes in one group.
-/// For multi-column pages, returns boxes split by column in reading order.
+/// For single-column pages, returns all boxes in one group. For
+/// multi-column pages, returns full-width bands and per-region columns
+/// as separate groups in article reading order.
 pub fn detect_columns(text_boxes: &[TextBox]) -> ColumnLayout {
     if text_boxes.len() < MIN_BOXES_PER_COLUMN * 2 {
-        return ColumnLayout {
-            column_count: 1,
-            columns: vec![text_boxes.to_vec()],
-            boundaries: vec![],
-        };
+        return single(text_boxes);
     }
 
-    // Collect unique left edges (rounded to avoid float noise)
-    let lefts_set: BTreeSet<i64> = text_boxes
-        .iter()
-        .map(|tb| tb.bounds.left.round() as i64)
-        .collect();
-    let lefts: Vec<i64> = lefts_set.into_iter().collect(); // already sorted by BTreeSet
-
-    if lefts.len() < 2 {
-        return ColumnLayout {
-            column_count: 1,
-            columns: vec![text_boxes.to_vec()],
-            boundaries: vec![],
-        };
+    let gutters = find_gutters(text_boxes);
+    if gutters.is_empty() {
+        return single(text_boxes);
     }
 
-    let text_x_min = lefts[0] as f64;
-    let text_x_max = text_boxes
-        .iter()
-        .map(|tb| tb.bounds.right.round() as i64)
-        .max()
-        .unwrap_or(0) as f64;
-    let text_width = text_x_max - text_x_min;
-
-    if text_width <= 0.0 {
-        return ColumnLayout {
-            column_count: 1,
-            columns: vec![text_boxes.to_vec()],
-            boundaries: vec![],
-        };
-    }
-
-    let boundaries: Vec<f64> = lefts
-        .windows(2)
-        .filter_map(|pair| {
-            let gap = pair[1] - pair[0];
-            ((gap as f64) >= MIN_GAP_PTS && gap as f64 / text_width >= MIN_GAP_RATIO)
-                .then(|| (pair[0] as f64 + pair[1] as f64) / 2.0)
-        })
-        .collect();
-
-    if boundaries.is_empty() {
-        return ColumnLayout {
-            column_count: 1,
-            columns: vec![text_boxes.to_vec()],
-            boundaries: vec![],
-        };
-    }
-
-    let mut columns = vec![Vec::new(); boundaries.len() + 1];
-    for text_box in text_boxes {
-        let center_x = (text_box.bounds.left + text_box.bounds.right) / 2.0;
-        let column = boundaries
+    let crosses_gutter = |tb: &TextBox| -> bool {
+        gutters
             .iter()
-            .position(|boundary| center_x < *boundary)
-            .unwrap_or(boundaries.len());
-        columns[column].push(text_box.clone());
+            .any(|g| tb.bounds.left + 2.0 < *g && *g < tb.bounds.right - 2.0)
+    };
+    let column_of = |tb: &TextBox| -> usize {
+        let center_x = (tb.bounds.left + tb.bounds.right) / 2.0;
+        gutters
+            .iter()
+            .position(|g| center_x < *g)
+            .unwrap_or(gutters.len())
+    };
+
+    // Walk top-to-bottom (Y-up: larger top first). Bands flush the open
+    // region; consecutive band boxes group together.
+    let mut ordered = text_boxes.to_vec();
+    ordered.sort_by(|a, b| b.bounds.top.total_cmp(&a.bounds.top));
+
+    let mut groups: Vec<Vec<TextBox>> = Vec::new();
+    let mut bands: Vec<bool> = Vec::new();
+    let mut region_columns: Vec<Vec<TextBox>> = vec![Vec::new(); gutters.len() + 1];
+    let mut open_band: Vec<TextBox> = Vec::new();
+
+    for tb in ordered {
+        if crosses_gutter(&tb) {
+            // Flush the open region.
+            for column in region_columns.iter_mut() {
+                if !column.is_empty() {
+                    groups.push(std::mem::take(column));
+                    bands.push(false);
+                }
+            }
+            open_band.push(tb);
+        } else {
+            // Flush the open band.
+            if !open_band.is_empty() {
+                groups.push(std::mem::take(&mut open_band));
+                bands.push(true);
+            }
+            region_columns[column_of(&tb)].push(tb);
+        }
+    }
+    for column in region_columns.iter_mut() {
+        if !column.is_empty() {
+            groups.push(std::mem::take(column));
+            bands.push(false);
+        }
+    }
+    if !open_band.is_empty() {
+        groups.push(open_band);
+        bands.push(true);
     }
 
-    if columns
-        .iter()
-        .any(|column| column.len() < MIN_BOXES_PER_COLUMN)
-    {
-        return ColumnLayout {
-            column_count: 1,
-            columns: vec![text_boxes.to_vec()],
-            boundaries: vec![],
-        };
+    if groups.len() <= 1 {
+        return single(text_boxes);
     }
 
     ColumnLayout {
-        column_count: columns.len(),
-        columns,
-        boundaries,
+        column_count: groups.len(),
+        columns: groups,
+        bands,
+        boundaries: gutters,
     }
 }
 
@@ -249,5 +333,76 @@ mod tests {
         let combined: Vec<TextBox> = left.into_iter().chain(right).collect();
         let result = detect_columns(&combined);
         assert_eq!(result.column_count, 1);
+    }
+
+    #[test]
+    fn keeps_full_width_title_as_band_above_two_columns() {
+        // Title spans both columns; body is two columns below it. The old
+        // left-edge heuristic collapsed this page to one row-wise column.
+        let title = tb("A Full Width Paper Title", 100.0, 760.0, 350.0);
+        let authors = tb("A. Author and B. Author", 150.0, 740.0, 250.0);
+        let left: Vec<TextBox> = (0..8)
+            .map(|i| tb_default(&format!("L{i}"), 72.0, 700.0 - i as f64 * 15.0))
+            .collect();
+        let right: Vec<TextBox> = (0..8)
+            .map(|i| tb_default(&format!("R{i}"), 315.0, 700.0 - i as f64 * 15.0))
+            .collect();
+        let combined: Vec<TextBox> = [title, authors]
+            .into_iter()
+            .chain(left)
+            .chain(right)
+            .collect();
+        let result = detect_columns(&combined);
+        assert_eq!(result.column_count, 3);
+        assert_eq!(result.bands, [true, false, false]);
+        let texts: Vec<&str> = result.columns[0].iter().map(|b| b.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            ["A Full Width Paper Title", "A. Author and B. Author"]
+        );
+        assert!(result.columns[1].iter().all(|b| b.text.starts_with('L')));
+        assert!(result.columns[2].iter().all(|b| b.text.starts_with('R')));
+    }
+
+    #[test]
+    fn splits_regions_at_mid_page_full_width_heading() {
+        let upper_left: Vec<TextBox> = (0..5)
+            .map(|i| tb_default(&format!("UL{i}"), 72.0, 700.0 - i as f64 * 15.0))
+            .collect();
+        let upper_right: Vec<TextBox> = (0..5)
+            .map(|i| tb_default(&format!("UR{i}"), 315.0, 700.0 - i as f64 * 15.0))
+            .collect();
+        let heading = tb(
+            "A Section Heading Spanning Both Columns",
+            90.0,
+            600.0,
+            380.0,
+        );
+        let lower_left: Vec<TextBox> = (0..5)
+            .map(|i| tb_default(&format!("LL{i}"), 72.0, 560.0 - i as f64 * 15.0))
+            .collect();
+        let lower_right: Vec<TextBox> = (0..5)
+            .map(|i| tb_default(&format!("LR{i}"), 315.0, 560.0 - i as f64 * 15.0))
+            .collect();
+        let combined: Vec<TextBox> = upper_left
+            .into_iter()
+            .chain(upper_right)
+            .chain([heading])
+            .chain(lower_left)
+            .chain(lower_right)
+            .collect();
+        let result = detect_columns(&combined);
+        assert_eq!(result.bands, [false, false, true, false, false]);
+        let firsts: Vec<&str> = result.columns.iter().map(|g| g[0].text.as_str()).collect();
+        assert_eq!(
+            firsts,
+            [
+                "UL0",
+                "UR0",
+                "A Section Heading Spanning Both Columns",
+                "LL0",
+                "LR0"
+            ]
+        );
     }
 }

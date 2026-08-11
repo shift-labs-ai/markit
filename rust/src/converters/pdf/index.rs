@@ -182,7 +182,12 @@ impl Converter for PdfConverter {
                 let page_width = page_x_max - page_x_min;
                 let min_col_fraction = 0.3;
 
-                let too_narrow = layout.columns.iter().any(|col| {
+                // Bands (full-width titles/headings) are legitimately
+                // narrow or wide; only column groups vote.
+                let too_narrow = layout.columns.iter().zip(&layout.bands).any(|(col, band)| {
+                    if *band {
+                        return false;
+                    }
                     if col.is_empty() {
                         return true;
                     }
@@ -200,6 +205,7 @@ impl Converter for PdfConverter {
                 if too_narrow {
                     layout.column_count = 1;
                     layout.columns = vec![page.text_boxes.clone()];
+                    layout.bands = vec![false];
                     layout.boundaries = Vec::new();
                 }
             }
