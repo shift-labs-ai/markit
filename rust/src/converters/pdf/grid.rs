@@ -500,6 +500,31 @@ pub fn resolve_table_grids(
             &filtered_segments,
             text_boxes,
         );
+
+        // A one-column ruled grid is usually a framed box whose interior
+        // structure is drawn with whitespace, not rules (outer border
+        // only). Reconstruct the interior from text alignment; prefer it
+        // when it recovers real columns for most of the content.
+        if grid.cols <= 1 && !cids.is_empty() {
+            let cid_set: HashSet<&str> = cids.iter().map(|s| s.as_str()).collect();
+            let consumed_boxes: Vec<TextBox> = text_boxes
+                .iter()
+                .filter(|tb| cid_set.contains(tb.id.as_str()))
+                .cloned()
+                .collect();
+            let (bgrids, bconsumed) =
+                super::borderless::detect_borderless_tables(&consumed_boxes, page_number);
+            if bgrids.iter().any(|g| g.cols >= 2) && bconsumed.len() * 10 >= cids.len() * 6 {
+                for bgrid in bgrids {
+                    grids.push(bgrid);
+                    grid_consumed_ids.push(bconsumed.clone());
+                }
+                all_consumed_set.extend(bconsumed.iter().cloned());
+                all_consumed_ids.extend(bconsumed.iter().cloned());
+                continue;
+            }
+        }
+
         grids.push(grid);
         all_consumed_set.extend(cids.iter().cloned());
         all_consumed_ids.extend(cids.iter().cloned());
@@ -511,7 +536,9 @@ pub fn resolve_table_grids(
     let mut filtered_consumed_ids: Vec<String> = Vec::new();
 
     for i in 0..grids.len() {
-        if is_diagram(&grids[i]) {
+        // Borderless reconstructions are already density-validated, and
+        // real data tables legitimately repeat cell values.
+        if !grids[i].is_borderless && is_diagram(&grids[i]) {
             continue;
         }
         filtered_grids.push(grids[i].clone());
@@ -917,6 +944,38 @@ mod tests {
                 .collect();
             assert!(!all_text.is_empty());
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Framed-box interior reconstruction
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn framed_box_with_aligned_interior_recovers_columns() {
+        reset_ids();
+        // Outer border only: two verticals + top/bottom rules. Interior
+        // is whitespace-aligned name/value rows.
+        let segs = vec![
+            h_seg(400.0, 100.0, 500.0),
+            h_seg(315.0, 100.0, 500.0),
+            v_seg(100.0, 315.0, 400.0),
+            v_seg(500.0, 315.0, 400.0),
+        ];
+        let boxes = vec![
+            wide_box("Jagger", 120.0, 180.0, 380.0),
+            wide_box("23.0", 300.0, 340.0, 380.0),
+            wide_box("TAM 107", 120.0, 190.0, 355.0),
+            wide_box("13.5", 300.0, 340.0, 355.0),
+            wide_box("2137", 120.0, 160.0, 330.0),
+            wide_box("12.9", 300.0, 340.0, 330.0),
+        ];
+        let result = resolve_table_grids(1, &boxes, &segs);
+        assert_eq!(result.grids.len(), 1);
+        let g = &result.grids[0];
+        assert!(g.is_borderless);
+        assert_eq!(g.cols, 2, "interior columns must be recovered");
+        assert_eq!(cell_text(g, 0, 0), "Jagger");
+        assert_eq!(cell_text(g, 2, 1), "12.9");
     }
 
     // -----------------------------------------------------------------------
