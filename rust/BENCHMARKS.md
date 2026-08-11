@@ -1,36 +1,36 @@
 # Benchmark targets
 
-## Current standing (2026-08-11, end of sprint 3) — markit leads both axes
+## Current standing (2026-08-11, end of sprint 4) — markit leads both axes
 
 olmOCR-bench, 1,403 single-page PDFs, 8,413 checks. Same-machine
 liteparse 2.11.1 (no OCR, markdown mode, one warm batch process).
 
 |  | markit | liteparse |
 |---|---:|---:|
-| **Quality (macro)** | **39.0% ± 0.9** | 38.8% ± 0.9 |
+| **Quality (macro)** | **40.8% ± 0.9** | 38.8% ± 0.9 |
 | **Speed (1,403 PDFs, 1 core)** | **1.08 s · 1,300 docs/s** | 5.9 s · 237 docs/s |
 | **Speed (8 threads)** | **0.26 s · 5,470 docs/s** | n/a (single-threaded CLI) |
 | Conversion failures | 0 | 0 |
 
-Quality is a statistical tie at the top (CI overlap) with markit
-nominally ahead; markit is **5.5× faster per core** (both tools
-measured single-threaded: liteparse `batch-parse` runs 5.42s user /
-5.93s real, ~1 core). Conversion is stateless per document, so
-markit additionally scales with threads (`CORPUS_BENCH_THREADS=8`
-→ 0.26s, 23× liteparse's wall time). markit was 27.1% and
-155 docs/s at 03a0d7f.
+markit leads quality by **+2.0 points, outside the confidence
+interval**, and is **5.5× faster per core** (both tools measured
+single-threaded: liteparse `batch-parse` runs 5.42s user / 5.93s
+real, ~1 core). Conversion is stateless per document, so markit
+additionally scales with threads (`CORPUS_BENCH_THREADS=8` → 0.26s,
+23× liteparse's wall time). markit was 27.1% and 155 docs/s at
+03a0d7f.
 
 Head-to-head by category:
 
 | Category | markit | liteparse |
 |---|---:|---:|
-| headers_footers | **70.9** | 56.3 |
-| long_tiny_text | **31.0** | 23.8 |
+| headers_footers | **73.6** | 56.3 |
+| long_tiny_text | **36.9** | 23.8 |
 | arxiv_math | **0.6** | 0.0 |
 | old_scans | 13.3 | 13.3 |
 | old_scans_math | 0.0 | 0.0 |
-| multi_column | 52.8 | **65.3** |
-| table_tests | 43.2 | **51.5** |
+| multi_column | 58.1 | **65.3** |
+| table_tests | 43.8 | **51.5** |
 
 Measurement notes: markit timed in-process over the corpus
 (examples/corpus_bench, one warm process, sequential); liteparse via
@@ -62,7 +62,8 @@ Caveats carried forward:
 direct competitor: open-source, model-free, PDF→markdown, OCR disabled when
 benchmarked. Published scores (v2.1):
 
-- olmOCR-bench: **0.391** ← the number to beat (we're at 0.271)
+- olmOCR-bench: **0.391** ← beaten: markit 0.408 (their same-machine
+  measurement is 0.388)
 - opendataloader-bench: 0.875
 - ParseBench: 0.3279
 
