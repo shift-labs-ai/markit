@@ -14,11 +14,14 @@ use std::collections::{HashMap, HashSet};
 
 use crate::converters::pdf::types::*;
 
+mod cells;
 mod lines;
+mod prune;
 mod raycast;
 
-use lines::{expand_sub_rows_by_y_clusters, split_y_lines_into_groups, unique_sorted};
-use raycast::cast as cast_rays_for_text_box;
+use cells::build_table_grid;
+use lines::{split_y_lines_into_groups, unique_sorted};
+use prune::prune_empty_rows_and_cols;
 
 // ---------------------------------------------------------------------------
 // Utility
@@ -26,346 +29,6 @@ use raycast::cast as cast_rays_for_text_box;
 
 const AXIS_EPSILON: f64 = 0.8;
 const PAGE_MARGIN: f64 = 20.0;
-
-/// Find which column a horizontal position falls into.
-/// Returns None if outside the grid.
-fn find_col(x: f64, x_lines: &[f64]) -> Option<usize> {
-    (0..x_lines.len().saturating_sub(1)).find(|&i| x >= x_lines[i] && x <= x_lines[i + 1])
-}
-
-/// When a text box spans across one or more vertical column boundaries,
-/// split it into multiple virtual text boxes — one per column — with the
-/// text divided proportionally by width.
-///
-/// We split at word boundaries closest to the proportional split point
-/// so we don't chop words in half.
-fn split_cross_column_boxes(text_boxes: &[TextBox], x_lines: &[f64]) -> Vec<TextBox> {
-    let mut result: Vec<TextBox> = Vec::new();
-    let margin = 5.0; // allow small overlap before considering it cross-column
-
-    for tb in text_boxes {
-        let left_col = find_col(tb.bounds.left + margin, x_lines);
-        let right_col = find_col(tb.bounds.right - margin, x_lines);
-
-        // Not spanning columns, or outside grid — keep as-is
-        match (left_col, right_col) {
-            (Some(lc), Some(rc)) if lc != rc => {
-                // Text box spans from lc to rc — split it
-                let total_width = tb.bounds.right - tb.bounds.left;
-                if total_width <= 0.0 {
-                    result.push(tb.clone());
-                    continue;
-                }
-
-                let words: Vec<&str> = tb.text.split_whitespace().collect();
-                if words.len() <= 1 {
-                    // Single word spanning columns — just assign to whichever col has more overlap
-                    result.push(tb.clone());
-                    continue;
-                }
-
-                let mut remaining_words = words.clone();
-                let mut current_left = tb.bounds.left;
-
-                for col in lc..=rc {
-                    if remaining_words.is_empty() {
-                        break;
-                    }
-                    let col_right = if col < x_lines.len() - 1 {
-                        x_lines[col + 1]
-                    } else {
-                        tb.bounds.right
-                    };
-                    let segment_right = col_right.min(tb.bounds.right);
-
-                    if col == rc {
-                        // Last column — take all remaining words
-                        result.push(TextBox {
-                            id: format!("{}-split{}", tb.id, col),
-                            text: remaining_words.join(" "),
-                            bounds: Bounds {
-                                left: current_left,
-                                right: tb.bounds.right,
-                                ..tb.bounds
-                            },
-                            ..tb.clone()
-                        });
-                        remaining_words.clear();
-                    } else {
-                        // Find how many words fit in this column segment proportionally
-                        let segment_width = segment_right - current_left;
-                        let fraction_of_total = segment_width / total_width;
-                        // TS .length is UTF-16 code units, not bytes.
-                        let approx_chars = (fraction_of_total
-                            * tb.text.encode_utf16().count() as f64)
-                            .round() as usize;
-
-                        // Walk words to find the split closest to the proportional point
-                        let mut char_count: usize = 0;
-                        let mut split_idx: usize = 0;
-                        for w in 0..remaining_words.len() {
-                            let next_count = char_count
-                                + remaining_words[w].encode_utf16().count()
-                                + if w > 0 { 1 } else { 0 };
-                            if next_count > approx_chars && split_idx > 0 {
-                                break;
-                            }
-                            char_count = next_count;
-                            split_idx = w + 1;
-                        }
-
-                        if split_idx == 0 {
-                            split_idx = 1; // take at least one word
-                        }
-                        if split_idx >= remaining_words.len() {
-                            // All remaining words fit here
-                            result.push(TextBox {
-                                id: format!("{}-split{}", tb.id, col),
-                                text: remaining_words.join(" "),
-                                bounds: Bounds {
-                                    left: current_left,
-                                    right: segment_right,
-                                    ..tb.bounds
-                                },
-                                ..tb.clone()
-                            });
-                            remaining_words.clear();
-                        } else {
-                            let part_words: Vec<&str> = remaining_words[..split_idx].to_vec();
-                            result.push(TextBox {
-                                id: format!("{}-split{}", tb.id, col),
-                                text: part_words.join(" "),
-                                bounds: Bounds {
-                                    left: current_left,
-                                    right: segment_right,
-                                    ..tb.bounds
-                                },
-                                ..tb.clone()
-                            });
-                            remaining_words = remaining_words[split_idx..].to_vec();
-                            current_left = segment_right;
-                        }
-                    }
-                }
-            }
-            _ => {
-                result.push(tb.clone());
-            }
-        }
-    }
-
-    result
-}
-
-// ---------------------------------------------------------------------------
-// Full grid table (H + V lines)
-// ---------------------------------------------------------------------------
-
-fn build_cells(rows: usize, cols: usize) -> Vec<TableCell> {
-    let mut cells = Vec::new();
-    for row in 0..rows {
-        for col in 0..cols {
-            cells.push(TableCell {
-                row,
-                col,
-                text: String::new(),
-                row_span: 1,
-                col_span: 1,
-            });
-        }
-    }
-    cells
-}
-
-fn build_table_grid(
-    page_number: u32,
-    y_lines: &[f64],
-    x_lines: &[f64],
-    filtered_segments: &[Segment],
-    text_boxes: &[TextBox],
-) -> (TableGrid, Vec<String>) {
-    let mut rows = y_lines.len() - 1;
-    let cols = x_lines.len() - 1;
-    let mut cells = build_cells(rows, cols);
-    let mut consumed_ids: Vec<String> = Vec::new();
-
-    let y_min = y_lines[y_lines.len() - 1];
-    let y_max = y_lines[0];
-    let x_min = x_lines[0];
-    let x_max = x_lines[x_lines.len() - 1];
-
-    // Split text boxes that span multiple columns before placement
-    let split_boxes = split_cross_column_boxes(text_boxes, x_lines);
-
-    // Track which split piece IDs get placed in cells
-    let mut placed_split_ids: HashSet<String> = HashSet::new();
-
-    // Look for header text boxes just above the grid.
-    // Use the ORIGINAL (unsplit) text boxes for header detection so that
-    // wide paragraph text isn't falsely split into column-sized header chunks.
-    // Reject boxes wider than 1.5 columns — those are paragraph text, not headers.
-    let avg_col_width = (x_max - x_min) / cols as f64;
-    let max_header_box_width = avg_col_width * 1.5;
-    let header_boxes: Vec<&TextBox> = text_boxes
-        .iter()
-        .filter(|tb| {
-            let cy = (tb.bounds.top + tb.bounds.bottom) / 2.0;
-            let cx = (tb.bounds.left + tb.bounds.right) / 2.0;
-            let box_width = tb.bounds.right - tb.bounds.left;
-            cy > y_max
-                && cy <= y_max + 20.0
-                && cx >= x_min
-                && cx <= x_max
-                && box_width <= max_header_box_width
-        })
-        .collect();
-
-    if !header_boxes.is_empty() {
-        rows += 1;
-        for cell in cells.iter_mut() {
-            cell.row += 1;
-        }
-        for col in 0..cols {
-            cells.push(TableCell {
-                row: 0,
-                col,
-                text: String::new(),
-                row_span: 1,
-                col_span: 1,
-            });
-        }
-        for tb in &header_boxes {
-            let cx = (tb.bounds.left + tb.bounds.right) / 2.0;
-            let col = x_lines.windows(2).position(|w| cx >= w[0] && cx <= w[1]);
-            if let Some(col) = col {
-                if col < cols {
-                    if let Some(cell) = cells.iter_mut().find(|c| c.row == 0 && c.col == col) {
-                        if cell.text.is_empty() {
-                            cell.text = tb.text.clone();
-                        } else {
-                            cell.text = format!("{} {}", cell.text, tb.text);
-                        }
-                        consumed_ids.push(tb.id.clone());
-                    }
-                }
-            }
-        }
-    }
-
-    // cell_boxes: cell_index -> indices into split_boxes
-    let mut cell_boxes: HashMap<usize, Vec<usize>> = HashMap::new();
-
-    for (box_idx, tb) in split_boxes.iter().enumerate() {
-        let cx = (tb.bounds.left + tb.bounds.right) / 2.0;
-        let cy = (tb.bounds.top + tb.bounds.bottom) / 2.0;
-
-        if cy < y_min || cy > y_max || cx < x_min || cx > x_max {
-            continue;
-        }
-
-        let ray_confidence = cast_rays_for_text_box(tb, filtered_segments).count();
-
-        let row_opt = y_lines.windows(2).position(|w| cy <= w[0] && cy >= w[1]);
-        let mut row = match row_opt {
-            Some(r) => r,
-            None => continue,
-        };
-
-        let max_row = if !header_boxes.is_empty() {
-            rows - 1
-        } else {
-            rows
-        };
-        if row >= max_row {
-            continue;
-        }
-        if !header_boxes.is_empty() {
-            row += 1;
-        }
-
-        let col = match x_lines.windows(2).position(|w| cx >= w[0] && cx <= w[1]) {
-            Some(c) => c,
-            None => continue,
-        };
-        if col >= cols {
-            continue;
-        }
-        if ray_confidence == 0 {
-            continue;
-        }
-
-        let cell_idx = match cells.iter().position(|c| c.row == row && c.col == col) {
-            Some(i) => i,
-            None => continue,
-        };
-
-        cell_boxes.entry(cell_idx).or_default().push(box_idx);
-        consumed_ids.push(tb.id.clone());
-        if tb.id.contains("-split") {
-            placed_split_ids.insert(tb.id.clone());
-        }
-    }
-
-    rows = expand_sub_rows_by_y_clusters(rows, cols, &mut cells, &mut cell_boxes, &split_boxes);
-
-    // Merge text boxes within each cell into cell text
-    for (&cell_idx, box_indices) in &cell_boxes {
-        let mut boxes: Vec<&TextBox> = box_indices.iter().map(|&bi| &split_boxes[bi]).collect();
-        boxes.sort_by(|a, b| {
-            b.bounds
-                .top
-                .partial_cmp(&a.bounds.top)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        let mut lines: Vec<String> = Vec::new();
-        let mut current_line: Vec<String> = Vec::new();
-        let mut current_y = boxes[0].bounds.top;
-
-        for bx in &boxes {
-            if (bx.bounds.top - current_y).abs() > 5.0 {
-                lines.push(current_line.join(" "));
-                current_line = vec![bx.text.clone()];
-                current_y = bx.bounds.top;
-            } else {
-                current_line.push(bx.text.clone());
-            }
-        }
-        if !current_line.is_empty() {
-            lines.push(current_line.join(" "));
-        }
-        cells[cell_idx].text = lines.join("<br>");
-    }
-
-    let grid = prune_empty_rows_and_cols(TableGrid {
-        page_number,
-        rows,
-        cols,
-        cells,
-        warnings: vec![],
-        top_y: y_lines[0],
-        is_borderless: false,
-    });
-
-    // Also consume the original (unsplit) text box IDs when any of their
-    // split pieces were placed in a cell.
-    for split_id in &placed_split_ids {
-        let orig_id = split_id
-            .split("-split")
-            .next()
-            .unwrap_or(split_id)
-            .to_string();
-        if !consumed_ids.contains(&orig_id) {
-            consumed_ids.push(orig_id);
-        }
-    }
-
-    (grid, consumed_ids)
-}
-
-// ---------------------------------------------------------------------------
-// H-line-only table (inferred columns)
-// ---------------------------------------------------------------------------
 
 const COL_GAP_THRESHOLD: f64 = 20.0;
 const HONLY_ROW_GAP: f64 = 30.0;
@@ -576,63 +239,6 @@ fn build_h_line_only_table(
 // Pruning
 // ---------------------------------------------------------------------------
 
-fn prune_empty_rows_and_cols(table: TableGrid) -> TableGrid {
-    let occupied_rows: HashSet<usize> = table
-        .cells
-        .iter()
-        .filter(|c| !c.text.trim().is_empty())
-        .map(|c| c.row)
-        .collect();
-    let occupied_cols: HashSet<usize> = table
-        .cells
-        .iter()
-        .filter(|c| !c.text.trim().is_empty())
-        .map(|c| c.col)
-        .collect();
-    if occupied_rows.is_empty() {
-        return table;
-    }
-
-    let mut row_map: HashMap<usize, usize> = HashMap::new();
-    let mut new_row: usize = 0;
-    for r in 0..table.rows {
-        if occupied_rows.contains(&r) {
-            row_map.insert(r, new_row);
-            new_row += 1;
-        }
-    }
-    let mut col_map: HashMap<usize, usize> = HashMap::new();
-    let mut new_col: usize = 0;
-    for c in 0..table.cols {
-        if occupied_cols.contains(&c) {
-            col_map.insert(c, new_col);
-            new_col += 1;
-        }
-    }
-
-    let pruned_cells: Vec<TableCell> = table
-        .cells
-        .iter()
-        .filter(|c| occupied_rows.contains(&c.row) && occupied_cols.contains(&c.col))
-        .map(|c| TableCell {
-            row: *row_map.get(&c.row).unwrap_or(&c.row),
-            col: *col_map.get(&c.col).unwrap_or(&c.col),
-            ..c.clone()
-        })
-        .collect();
-
-    TableGrid {
-        rows: new_row,
-        cols: new_col,
-        cells: pruned_cells,
-        ..table
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Diagram vs table discrimination
-// ---------------------------------------------------------------------------
-
 /// Maximum column count for a plausible data table.
 const MAX_TABLE_COLS: usize = 25;
 
@@ -729,7 +335,7 @@ pub fn resolve_table_grids(
     // Filter segments to the text's visible area
     let text_y_values: Vec<f64> = text_boxes
         .iter()
-        .flat_map(|t| vec![t.bounds.bottom, t.bounds.top])
+        .flat_map(|t| [t.bounds.bottom, t.bounds.top])
         .collect();
     let text_y_min = if !text_y_values.is_empty() {
         text_y_values.iter().cloned().fold(f64::INFINITY, f64::min) - PAGE_MARGIN
@@ -747,7 +353,7 @@ pub fn resolve_table_grids(
     };
     let text_x_values: Vec<f64> = text_boxes
         .iter()
-        .flat_map(|t| vec![t.bounds.left, t.bounds.right])
+        .flat_map(|t| [t.bounds.left, t.bounds.right])
         .collect();
     let text_x_min = if !text_x_values.is_empty() {
         text_x_values.iter().cloned().fold(f64::INFINITY, f64::min) - 100.0
@@ -815,6 +421,7 @@ pub fn resolve_table_grids(
     let mut grids: Vec<TableGrid> = Vec::new();
     let mut grid_consumed_ids: Vec<Vec<String>> = Vec::new();
     let mut all_consumed_ids: Vec<String> = Vec::new();
+    let mut all_consumed_set: HashSet<String> = HashSet::new();
 
     for y_lines in &y_groups {
         if y_lines.len() < 2 {
@@ -863,16 +470,16 @@ pub fn resolve_table_grids(
                 .map(|s| s.x2)
                 .fold(f64::NEG_INFINITY, f64::max);
 
-            let consumed_set: HashSet<String> = all_consumed_ids.iter().cloned().collect();
             if let Some((grid, cids)) = build_h_line_only_table(
                 page_number,
                 y_lines,
                 hx_min,
                 hx_max,
                 text_boxes,
-                &consumed_set,
+                &all_consumed_set,
             ) {
                 grids.push(grid);
+                all_consumed_set.extend(cids.iter().cloned());
                 all_consumed_ids.extend(cids.iter().cloned());
                 grid_consumed_ids.push(cids);
             }
@@ -891,6 +498,7 @@ pub fn resolve_table_grids(
             text_boxes,
         );
         grids.push(grid);
+        all_consumed_set.extend(cids.iter().cloned());
         all_consumed_ids.extend(cids.iter().cloned());
         grid_consumed_ids.push(cids);
     }
