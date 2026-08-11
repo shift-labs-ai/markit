@@ -67,6 +67,34 @@ describe("detectBorderlessTables", () => {
     expect(cell(1, 1)).toBe("13.5");
   });
 
+  it("drops a straddling group header from the run and absorbs it", () => {
+    const boxes: TextBox[] = [
+      tb("g0", "Species", 72, 706),
+      // Spans across both value columns.
+      tb("g1", "Mean \u00b1 SD", 210, 706, 140),
+    ];
+    const body = [
+      ["Bifidobacterium", "4.79", "4.81"],
+      ["Bacteroides", "0.00", "3.03"],
+      ["Clostridium", "6.73", "6.59"],
+    ];
+    body.forEach((row, r) => {
+      row.forEach((cell, c) => {
+        boxes.push(tb(`r${r}c${c}`, cell, 72 + c * 120, 690 - r * 15));
+      });
+    });
+    const { grids, consumedIds } = detectBorderlessTables(boxes, 1);
+    expect(grids).toHaveLength(1);
+    const grid = grids[0];
+    expect([grid.rows, grid.cols]).toEqual([4, 3]);
+    const cell = (r: number, c: number) =>
+      grid.cells.find((cell) => cell.row === r && cell.col === c)?.text;
+    expect(cell(0, 0)).toBe("Species");
+    expect(cell(0, 1)).toContain("Mean");
+    expect(cell(1, 1)).toBe("4.79");
+    expect(consumedIds).toContain("g1");
+  });
+
   it("does not turn prose lines into a table", () => {
     const boxes = Array.from({ length: 5 }, (_, i) =>
       tb(`p${i}`, "A full sentence of body prose text.", 72, 700 - i * 15, 400),

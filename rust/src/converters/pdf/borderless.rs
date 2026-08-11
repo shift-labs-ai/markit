@@ -161,6 +161,85 @@ fn column_of(columns: &[(f64, f64)], left: f64, right: f64) -> Option<usize> {
         .position(|(l, r)| center >= *l && center <= *r)
 }
 
+/// Maximum header rows absorbed above a detected table body.
+const MAX_HEADER_ROWS: usize = 2;
+
+/// Maximum vertical distance (in row heights) between a header row and
+/// the table body.
+const MAX_HEADER_GAP_ROWS: f64 = 3.0;
+
+/// One header-row cell: (column, text, source boxes).
+type HeaderCell<'a> = (usize, String, Vec<&'a TextBox>);
+
+/// A built table body: column extents plus its cells.
+type BuiltBody = (Vec<(f64, f64)>, Vec<TableCell>);
+
+/// Absorb up to MAX_HEADER_ROWS rows immediately above the run as
+/// header rows. A header row's fragments must map to ≥2 distinct
+/// columns — a single wide fragment is a caption, not a header.
+fn absorb_header_rows<'a>(
+    rows: &[Row<'a>],
+    run_start: usize,
+    columns: &[(f64, f64)],
+    consumed_so_far: &[String],
+) -> Vec<Vec<HeaderCell<'a>>> {
+    let consumed: std::collections::HashSet<&str> =
+        consumed_so_far.iter().map(|s| s.as_str()).collect();
+    let mut headers = Vec::new();
+    let mut below = run_start;
+    for _ in 0..MAX_HEADER_ROWS {
+        if below == 0 {
+            break;
+        }
+        let candidate = &rows[below - 1];
+        if candidate
+            .boxes
+            .iter()
+            .any(|tb| consumed.contains(tb.id.as_str()))
+        {
+            break;
+        }
+        let below_row = &rows[below];
+        let gap = candidate.bottom - below_row.top;
+        let row_height = (candidate.top - candidate.bottom).max(1.0);
+        if gap < 0.0 || gap > MAX_HEADER_GAP_ROWS * row_height {
+            break;
+        }
+        // Assign fragments to columns by center; require ≥2 distinct.
+        let mut cells: Vec<HeaderCell> = Vec::new();
+        let mut cols_hit: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        for fragment in row_fragments(candidate) {
+            let center = (fragment.left + fragment.right) / 2.0;
+            let column = columns
+                .iter()
+                .position(|(l, r)| center >= *l && center <= *r)
+                .unwrap_or_else(|| {
+                    // Nearest column by center distance.
+                    let mut best = 0usize;
+                    let mut best_d = f64::INFINITY;
+                    for (ci, (l, r)) in columns.iter().enumerate() {
+                        let c = (l + r) / 2.0;
+                        let d = (c - center).abs();
+                        if d < best_d {
+                            best_d = d;
+                            best = ci;
+                        }
+                    }
+                    best
+                });
+            cols_hit.insert(column);
+            cells.push((column, fragment.text(), fragment.boxes.clone()));
+        }
+        if cols_hit.len() < 2 {
+            break;
+        }
+        headers.push(cells);
+        below -= 1;
+    }
+    headers.reverse();
+    headers
+}
+
 /// Detect borderless tables among free text boxes. Returns the grids
 /// plus the ids of every consumed text box.
 pub fn detect_borderless_tables(
@@ -189,54 +268,111 @@ pub fn detect_borderless_tables(
             }
             j += 1;
         }
-        let run: Vec<&Row> = rows[i..j].iter().collect();
-        if run.len() < MIN_ROWS {
+        if j - i < MIN_ROWS {
             i += 1;
             continue;
         }
 
-        let Some(columns) = cluster_columns(&run) else {
-            i = j;
-            continue;
-        };
-
-        // Assign cell fragments to columns; abort on any straddler.
-        let mut cells: Vec<TableCell> = Vec::new();
-        let mut filled = 0usize;
-        let mut ok = true;
-        'rows: for (row_index, row) in run.iter().enumerate() {
-            let mut row_cells: Vec<Option<String>> = vec![None; columns.len()];
-            for fragment in row_fragments(row) {
-                let Some(column) = column_of(&columns, fragment.left, fragment.right) else {
-                    ok = false;
-                    break 'rows;
-                };
-                let text = fragment.text();
-                match &mut row_cells[column] {
-                    Some(existing) => {
-                        existing.push(' ');
-                        existing.push_str(&text);
-                    }
-                    slot @ None => {
-                        *slot = Some(text);
-                        filled += 1;
+        // Grouped header rows (multi-column spans, sub-labels) straddle
+        // the body's columns and would abort the whole candidate. Retry
+        // with leading rows dropped; the dropped rows come back through
+        // header absorption below.
+        let mut start = i;
+        let mut built: Option<BuiltBody> = None;
+        while j - start >= MIN_ROWS {
+            let run: Vec<&Row> = rows[start..j].iter().collect();
+            let Some(columns) = cluster_columns(&run) else {
+                start += 1;
+                continue;
+            };
+            // A grouped header (a span across several body columns) fuses
+            // columns during clustering. If dropping the leading row
+            // yields a finer column structure, the leading row is a
+            // header — drop it here, absorb it below.
+            if j - (start + 1) >= MIN_ROWS {
+                let without_first: Vec<&Row> = rows[start + 1..j].iter().collect();
+                if let Some(finer) = cluster_columns(&without_first) {
+                    if finer.len() > columns.len() {
+                        start += 1;
+                        continue;
                     }
                 }
             }
-            for (column, text) in row_cells.into_iter().enumerate() {
-                cells.push(TableCell {
-                    row: row_index,
-                    col: column,
-                    text: text.unwrap_or_default(),
-                    row_span: 1,
-                    col_span: 1,
-                });
+            let mut cells: Vec<TableCell> = Vec::new();
+            let mut filled = 0usize;
+            let mut ok = true;
+            'rows: for (row_index, row) in run.iter().enumerate() {
+                let mut row_cells: Vec<Option<String>> = vec![None; columns.len()];
+                for fragment in row_fragments(row) {
+                    let Some(column) = column_of(&columns, fragment.left, fragment.right) else {
+                        ok = false;
+                        break 'rows;
+                    };
+                    let text = fragment.text();
+                    match &mut row_cells[column] {
+                        Some(existing) => {
+                            existing.push(' ');
+                            existing.push_str(&text);
+                        }
+                        slot @ None => {
+                            *slot = Some(text);
+                            filled += 1;
+                        }
+                    }
+                }
+                for (column, text) in row_cells.into_iter().enumerate() {
+                    cells.push(TableCell {
+                        row: row_index,
+                        col: column,
+                        text: text.unwrap_or_default(),
+                        row_span: 1,
+                        col_span: 1,
+                    });
+                }
             }
+            let total = (j - start) * columns.len();
+            if ok && (filled as f64) >= MIN_FILL_RATIO * total as f64 {
+                built = Some((columns, cells));
+                break;
+            }
+            start += 1;
         }
-        let total = run.len() * columns.len();
-        if !ok || (filled as f64) < MIN_FILL_RATIO * total as f64 {
+        let Some((columns, mut cells)) = built else {
             i = j.max(i + 1);
             continue;
+        };
+        let run: Vec<&Row> = rows[start..j].iter().collect();
+
+        // Header rows above the body join the grid so column-heading
+        // relations survive.
+        let headers = absorb_header_rows(&rows, start, &columns, &consumed);
+        let header_count = headers.len();
+        if header_count > 0 {
+            for cell in cells.iter_mut() {
+                cell.row += header_count;
+            }
+            for (row_index, header_cells) in headers.iter().enumerate() {
+                let mut texts: Vec<String> = vec![String::new(); columns.len()];
+                for (column, text, boxes) in header_cells {
+                    if texts[*column].is_empty() {
+                        texts[*column] = text.clone();
+                    } else {
+                        texts[*column] = format!("{} {}", texts[*column], text);
+                    }
+                    for tb in boxes {
+                        consumed.push(tb.id.clone());
+                    }
+                }
+                for (column, text) in texts.into_iter().enumerate() {
+                    cells.push(TableCell {
+                        row: row_index,
+                        col: column,
+                        text,
+                        row_span: 1,
+                        col_span: 1,
+                    });
+                }
+            }
         }
 
         let top_y = run
@@ -246,7 +382,7 @@ pub fn detect_borderless_tables(
             .fold(f64::NEG_INFINITY, f64::max);
         grids.push(TableGrid {
             page_number,
-            rows: run.len(),
+            rows: run.len() + header_count,
             cols: columns.len(),
             cells,
             warnings: Vec::new(),
@@ -363,6 +499,102 @@ mod tests {
         };
         assert_eq!(cell(0, 0), "TAM 107");
         assert_eq!(cell(1, 1), "13.5");
+    }
+
+    #[test]
+    fn grouped_header_row_is_absorbed_into_the_grid() {
+        // A header row whose fragments straddle column groups sits just
+        // above the body; it must become row 0 of the table. The wide
+        // caption above it must NOT be absorbed.
+        let mut boxes = vec![
+            tb(
+                "cap",
+                "Table 4. Results of the control group.",
+                72.0,
+                725.0,
+                300.0,
+            ),
+            tb("h0", "Microbiota", 72.0, 706.0, 70.0),
+            tb("h1", "Pre-Test", 192.0, 706.0, 60.0),
+            tb("h2", "Post-Test", 312.0, 706.0, 60.0),
+        ];
+        let body = [
+            ["Bifidobacterium", "4.79", "4.81"],
+            ["Bacteroides", "0.00", "3.03"],
+            ["Clostridium", "6.73", "6.59"],
+        ];
+        for (r, row) in body.iter().enumerate() {
+            for (c, cell) in row.iter().enumerate() {
+                boxes.push(tb(
+                    &format!("r{r}c{c}"),
+                    cell,
+                    72.0 + c as f64 * 120.0,
+                    690.0 - r as f64 * 15.0,
+                    60.0,
+                ));
+            }
+        }
+        let (grids, consumed) = detect_borderless_tables(&boxes, 1);
+        assert_eq!(grids.len(), 1);
+        let grid = &grids[0];
+        assert_eq!((grid.rows, grid.cols), (4, 3));
+        let cell = |r: usize, c: usize| -> &str {
+            &grid
+                .cells
+                .iter()
+                .find(|cell| cell.row == r && cell.col == c)
+                .unwrap()
+                .text
+        };
+        assert_eq!(cell(0, 0), "Microbiota");
+        assert_eq!(cell(0, 1), "Pre-Test");
+        assert_eq!(cell(1, 0), "Bifidobacterium");
+        assert!(consumed.contains(&"h1".to_string()));
+        assert!(!consumed.contains(&"cap".to_string()), "caption absorbed");
+    }
+
+    #[test]
+    fn straddling_group_header_is_dropped_from_run_and_absorbed() {
+        // A grouped header ("Mean ± SD" spanning value columns) straddles
+        // the body columns: it must not abort the candidate; it joins as
+        // a header row mapped by center.
+        let mut boxes = vec![
+            tb("g0", "Species", 72.0, 706.0, 60.0),
+            // Spans across both value columns (192..372).
+            tb("g1", "Mean \u{b1} SD", 210.0, 706.0, 140.0),
+        ];
+        let body = [
+            ["Bifidobacterium", "4.79", "4.81"],
+            ["Bacteroides", "0.00", "3.03"],
+            ["Clostridium", "6.73", "6.59"],
+        ];
+        for (r, row) in body.iter().enumerate() {
+            for (c, cell) in row.iter().enumerate() {
+                boxes.push(tb(
+                    &format!("r{r}c{c}"),
+                    cell,
+                    72.0 + c as f64 * 120.0,
+                    690.0 - r as f64 * 15.0,
+                    60.0,
+                ));
+            }
+        }
+        let (grids, consumed) = detect_borderless_tables(&boxes, 1);
+        assert_eq!(grids.len(), 1);
+        let grid = &grids[0];
+        assert_eq!((grid.rows, grid.cols), (4, 3));
+        let cell = |r: usize, c: usize| -> &str {
+            &grid
+                .cells
+                .iter()
+                .find(|cell| cell.row == r && cell.col == c)
+                .unwrap()
+                .text
+        };
+        assert_eq!(cell(0, 0), "Species");
+        assert!(cell(0, 1).contains("Mean"), "got {:?}", cell(0, 1));
+        assert_eq!(cell(1, 1), "4.79");
+        assert!(consumed.contains(&"g1".to_string()));
     }
 
     #[test]

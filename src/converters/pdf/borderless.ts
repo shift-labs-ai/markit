@@ -151,6 +151,73 @@ function columnOf(
   return idx < 0 ? null : idx;
 }
 
+/** Maximum header rows absorbed above a detected table body. */
+const MAX_HEADER_ROWS = 2;
+
+/**
+ * Maximum vertical distance (in row heights) between a header row and
+ * the table body.
+ */
+const MAX_HEADER_GAP_ROWS = 3.0;
+
+/**
+ * Absorb up to MAX_HEADER_ROWS rows immediately above the run as
+ * header rows. A header row's fragments must map to >=2 distinct
+ * columns - a single wide fragment is a caption, not a header.
+ */
+function absorbHeaderRows(
+  rows: Row[],
+  runStart: number,
+  columns: Array<[number, number]>,
+  consumedSoFar: string[],
+): Array<Array<{ column: number; text: string; boxes: TextBox[] }>> {
+  const consumed = new Set(consumedSoFar);
+  const headers: Array<
+    Array<{ column: number; text: string; boxes: TextBox[] }>
+  > = [];
+  let below = runStart;
+  for (let n = 0; n < MAX_HEADER_ROWS; n++) {
+    if (below === 0) break;
+    const candidate = rows[below - 1];
+    if (candidate.boxes.some((tb) => consumed.has(tb.id))) break;
+    const belowRow = rows[below];
+    const gap = candidate.bottom - belowRow.top;
+    const rowHeight = Math.max(candidate.top - candidate.bottom, 1);
+    if (gap < 0 || gap > MAX_HEADER_GAP_ROWS * rowHeight) break;
+    // Assign fragments to columns by center; require >=2 distinct.
+    const cells: Array<{ column: number; text: string; boxes: TextBox[] }> = [];
+    const colsHit = new Set<number>();
+    for (const fragment of rowFragments(candidate)) {
+      const center = (fragment.left + fragment.right) / 2;
+      let column = columns.findIndex(([l, r]) => center >= l && center <= r);
+      if (column < 0) {
+        // Nearest column by center distance.
+        let bestD = Number.POSITIVE_INFINITY;
+        column = 0;
+        for (let ci = 0; ci < columns.length; ci++) {
+          const c = (columns[ci][0] + columns[ci][1]) / 2;
+          const d = Math.abs(c - center);
+          if (d < bestD) {
+            bestD = d;
+            column = ci;
+          }
+        }
+      }
+      colsHit.add(column);
+      cells.push({
+        column,
+        text: fragmentText(fragment),
+        boxes: fragment.boxes,
+      });
+    }
+    if (colsHit.size < 2) break;
+    headers.push(cells);
+    below--;
+  }
+  headers.reverse();
+  return headers;
+}
+
 /**
  * Detect borderless tables among free text boxes. Returns the grids
  * plus the ids of every consumed text box.
@@ -183,52 +250,106 @@ export function detectBorderlessTables(
       if (gap < 0 || gap > MAX_ROW_GAP_RATIO * rowHeight) break;
       j++;
     }
-    const run = rows.slice(i, j);
-    if (run.length < MIN_ROWS) {
+    if (j - i < MIN_ROWS) {
       i++;
       continue;
     }
 
-    const columns = clusterColumns(run);
-    if (!columns) {
-      i = j;
-      continue;
-    }
-
-    // Assign fragments to columns; abort on any straddler.
-    const cells: TableCell[] = [];
-    let filled = 0;
-    let ok = true;
-    outer: for (let rowIndex = 0; rowIndex < run.length; rowIndex++) {
-      const rowCells: Array<string | null> = columns.map(() => null);
-      for (const fragment of rowFragments(run[rowIndex])) {
-        const column = columnOf(columns, fragment.left, fragment.right);
-        if (column === null) {
-          ok = false;
-          break outer;
-        }
-        const text = fragmentText(fragment);
-        if (rowCells[column] !== null) {
-          rowCells[column] = `${rowCells[column]} ${text}`;
-        } else {
-          rowCells[column] = text;
-          filled++;
+    // Grouped header rows (multi-column spans, sub-labels) fuse or
+    // straddle the body's columns and would spoil the candidate. Retry
+    // with leading rows dropped; the dropped rows come back through
+    // header absorption below.
+    let start = i;
+    let built: {
+      columns: Array<[number, number]>;
+      cells: TableCell[];
+    } | null = null;
+    while (j - start >= MIN_ROWS) {
+      const candidateRun = rows.slice(start, j);
+      const columns = clusterColumns(candidateRun);
+      if (!columns) {
+        start++;
+        continue;
+      }
+      // If dropping the leading row yields a finer column structure,
+      // the leading row is a header - drop it here, absorb it below.
+      if (j - (start + 1) >= MIN_ROWS) {
+        const finer = clusterColumns(rows.slice(start + 1, j));
+        if (finer && finer.length > columns.length) {
+          start++;
+          continue;
         }
       }
-      for (let column = 0; column < rowCells.length; column++) {
-        cells.push({
-          row: rowIndex,
-          col: column,
-          text: rowCells[column] ?? "",
-          rowSpan: 1,
-          colSpan: 1,
-        });
+      const cells: TableCell[] = [];
+      let filled = 0;
+      let ok = true;
+      outer: for (
+        let rowIndex = 0;
+        rowIndex < candidateRun.length;
+        rowIndex++
+      ) {
+        const rowCells: Array<string | null> = columns.map(() => null);
+        for (const fragment of rowFragments(candidateRun[rowIndex])) {
+          const column = columnOf(columns, fragment.left, fragment.right);
+          if (column === null) {
+            ok = false;
+            break outer;
+          }
+          const text = fragmentText(fragment);
+          if (rowCells[column] !== null) {
+            rowCells[column] = `${rowCells[column]} ${text}`;
+          } else {
+            rowCells[column] = text;
+            filled++;
+          }
+        }
+        for (let column = 0; column < rowCells.length; column++) {
+          cells.push({
+            row: rowIndex,
+            col: column,
+            text: rowCells[column] ?? "",
+            rowSpan: 1,
+            colSpan: 1,
+          });
+        }
       }
+      const total = (j - start) * columns.length;
+      if (ok && filled >= MIN_FILL_RATIO * total) {
+        built = { columns, cells };
+        break;
+      }
+      start++;
     }
-    const total = run.length * columns.length;
-    if (!ok || filled < MIN_FILL_RATIO * total) {
+    if (!built) {
       i = Math.max(j, i + 1);
       continue;
+    }
+    const { columns, cells } = built;
+    const run = rows.slice(start, j);
+
+    // Header rows above the body join the grid so column-heading
+    // relations survive.
+    const headers = absorbHeaderRows(rows, start, columns, consumedIds);
+    const headerCount = headers.length;
+    if (headerCount > 0) {
+      for (const cell of cells) cell.row += headerCount;
+      for (let rowIndex = 0; rowIndex < headers.length; rowIndex++) {
+        const texts: string[] = columns.map(() => "");
+        for (const { column, text, boxes } of headers[rowIndex]) {
+          texts[column] =
+            texts[column] === "" ? text : `${texts[column]} ${text}`;
+          for (const tb of boxes) consumedIds.push(tb.id);
+        }
+        for (let column = 0; column < texts.length; column++) {
+          cells.push({
+            row: rowIndex,
+            col: column,
+            text: texts[column],
+            rowSpan: 1,
+            colSpan: 1,
+          });
+        }
+      }
     }
 
     const topY = Math.max(
@@ -236,7 +357,7 @@ export function detectBorderlessTables(
     );
     grids.push({
       pageNumber,
-      rows: run.length,
+      rows: run.length + headerCount,
       cols: columns.length,
       cells,
       warnings: [],
