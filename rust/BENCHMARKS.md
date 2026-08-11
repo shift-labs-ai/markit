@@ -7,12 +7,13 @@ liteparse 2.11.1 (no OCR, markdown mode, one warm batch process).
 
 |  | markit | liteparse |
 |---|---:|---:|
-| **Quality (macro)** | **38.9% ± 1.0** | 38.8% ± 0.9 |
-| **Speed (1,403 PDFs)** | **1.73 s · 810 docs/s** | 6.1 s · 231 docs/s |
+| **Quality (macro)** | **39.0% ± 0.9** | 38.8% ± 0.9 |
+| **Speed (1,403 PDFs)** | **1.73 s · 815 docs/s** | 6.1 s · 231 docs/s |
 | Conversion failures | 0 | 0 |
 
-Quality is a statistical tie at the top (CI overlap); markit is
-**3.5× faster**. markit was 27.1% and 155 docs/s at 03a0d7f.
+Quality is a statistical tie at the top (CI overlap) with markit
+nominally ahead; markit is **3.5× faster**. markit was 27.1% and
+155 docs/s at 03a0d7f.
 
 Head-to-head by category:
 
@@ -23,8 +24,8 @@ Head-to-head by category:
 | arxiv_math | **0.6** | 0.0 |
 | old_scans | 13.3 | 13.3 |
 | old_scans_math | 0.0 | 0.0 |
-| multi_column | 52.9 | **65.3** |
-| table_tests | 42.1 | **51.5** |
+| multi_column | 52.8 | **65.3** |
+| table_tests | 43.2 | **51.5** |
 
 Measurement notes: markit timed in-process over the corpus
 (examples/corpus_bench, one warm process, sequential); liteparse via
