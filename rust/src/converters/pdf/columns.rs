@@ -189,9 +189,12 @@ fn find_gutters(text_boxes: &[TextBox]) -> Vec<f64> {
         return vec![];
     }
 
-    if centers.len() == MAX_GUTTERS {
-        // The four-column case carries a stricter burden of proof:
-        // every interior interval must hold a real column of text.
+    if centers.len() >= 2 {
+        // Multiple gutters carry a stricter burden of proof: every
+        // interior interval must hold a real column of text — wide
+        // line boxes filling the interval. Table cells sit narrow
+        // inside table whitespace and fail it. Reject outright on
+        // failure; splitting by a subset would carve up the table.
         let mut xs: Vec<f64> = centers.iter().map(|(c, _)| *c).collect();
         xs.sort_by(|a, b| a.total_cmp(b));
         let interval_ok = xs.windows(2).all(|pair| {
@@ -203,14 +206,9 @@ fn find_gutters(text_boxes: &[TextBox]) -> Vec<f64> {
             if widths.len() < MIN_BOXES_PER_COLUMN {
                 return false;
             }
-            // Prose columns are filled by wide line boxes; table cells
-            // sit narrow inside their interval.
             widths.sort_by(|a, b| a.total_cmp(b));
             widths[widths.len() / 2] >= 0.5 * (pair[1] - pair[0])
         });
-        // Proof failed: this is table whitespace. Reject outright, as
-        // three-plus gutters always were before — splitting by a
-        // subset would carve up the table.
         return if interval_ok { xs } else { vec![] };
     }
 
