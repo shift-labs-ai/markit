@@ -29,8 +29,14 @@ const ROW_Y_TOLERANCE = 3.0;
  */
 const MIN_CELL_GAP = 15.0;
 
-/** Minimum number of consecutive tabular rows. */
-const MIN_ROWS = 3;
+/**
+ * Minimum number of consecutive tabular rows. Two-row runs are
+ * accepted only when they resolve to >= MIN_COLS_FOR_SHORT_RUN columns
+ * - a 2x2 candidate is as likely a form line as a table.
+ */
+const MIN_ROWS = 2;
+const MIN_ROWS_NARROW = 3;
+const MIN_COLS_FOR_SHORT_RUN = 3;
 
 /**
  * Maximum vertical gap between consecutive rows, in multiples of the
@@ -313,8 +319,12 @@ export function detectBorderlessTables(
           });
         }
       }
-      const total = (j - start) * columns.length;
-      if (ok && filled >= MIN_FILL_RATIO * total) {
+      const rowsInRun = j - start;
+      const enoughRows =
+        rowsInRun >= MIN_ROWS_NARROW ||
+        columns.length >= MIN_COLS_FOR_SHORT_RUN;
+      const total = rowsInRun * columns.length;
+      if (ok && enoughRows && filled >= MIN_FILL_RATIO * total) {
         built = { columns, cells };
         break;
       }

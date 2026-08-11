@@ -25,8 +25,12 @@ const ROW_Y_TOLERANCE: f64 = 3.0;
 /// read as cells rather than words of a sentence.
 const MIN_CELL_GAP: f64 = 15.0;
 
-/// Minimum number of consecutive tabular rows.
-const MIN_ROWS: usize = 3;
+/// Minimum number of consecutive tabular rows. Two-row runs are
+/// accepted only when they resolve to ≥ MIN_COLS_FOR_SHORT_RUN columns
+/// — a 2×2 candidate is as likely a form line as a table.
+const MIN_ROWS: usize = 2;
+const MIN_ROWS_NARROW: usize = 3;
+const MIN_COLS_FOR_SHORT_RUN: usize = 3;
 
 /// Maximum vertical gap between consecutive rows, in multiples of the
 /// taller row's height.
@@ -330,8 +334,11 @@ pub fn detect_borderless_tables(
                     });
                 }
             }
-            let total = (j - start) * columns.len();
-            if ok && (filled as f64) >= MIN_FILL_RATIO * total as f64 {
+            let rows_in_run = j - start;
+            let enough_rows =
+                rows_in_run >= MIN_ROWS_NARROW || columns.len() >= MIN_COLS_FOR_SHORT_RUN;
+            let total = rows_in_run * columns.len();
+            if ok && enough_rows && (filled as f64) >= MIN_FILL_RATIO * total as f64 {
                 built = Some((columns, cells));
                 break;
             }
