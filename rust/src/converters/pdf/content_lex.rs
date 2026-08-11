@@ -39,6 +39,163 @@ pub struct Lexer<'a> {
 
 use super::own_pdf::{is_delim, is_ws};
 
+fn is_known_content_operator(op: &[u8]) -> bool {
+    matches!(
+        op,
+        b"q" | b"Q"
+            | b"cm"
+            | b"w"
+            | b"J"
+            | b"j"
+            | b"M"
+            | b"d"
+            | b"ri"
+            | b"i"
+            | b"gs"
+            | b"m"
+            | b"l"
+            | b"c"
+            | b"v"
+            | b"y"
+            | b"h"
+            | b"re"
+            | b"S"
+            | b"s"
+            | b"f"
+            | b"F"
+            | b"f*"
+            | b"B"
+            | b"B*"
+            | b"b"
+            | b"b*"
+            | b"n"
+            | b"W"
+            | b"W*"
+            | b"BT"
+            | b"ET"
+            | b"Tc"
+            | b"Tw"
+            | b"Tz"
+            | b"TL"
+            | b"Tf"
+            | b"Tr"
+            | b"Ts"
+            | b"Td"
+            | b"TD"
+            | b"Tm"
+            | b"T*"
+            | b"Tj"
+            | b"TJ"
+            | b"'"
+            | b"\""
+            | b"d0"
+            | b"d1"
+            | b"CS"
+            | b"cs"
+            | b"SC"
+            | b"SCN"
+            | b"sc"
+            | b"scn"
+            | b"G"
+            | b"g"
+            | b"RG"
+            | b"rg"
+            | b"K"
+            | b"k"
+            | b"sh"
+            | b"BI"
+            | b"ID"
+            | b"EI"
+            | b"Do"
+            | b"MP"
+            | b"DP"
+            | b"BMC"
+            | b"BDC"
+            | b"EMC"
+            | b"BX"
+            | b"EX"
+    )
+}
+
+fn plausible_post_inline_syntax(mut data: &[u8]) -> bool {
+    if data.iter().all(|byte| is_ws(*byte)) {
+        return true;
+    }
+    // Validate the first post-EI operator. This rejects EI-looking bytes in
+    // compressed payloads without decoding or allocating. Limit lookahead so
+    // malformed streams remain strictly linear-time.
+    if data.len() > 256 {
+        data = &data[..256];
+    }
+    let mut pos = 0usize;
+    while pos < data.len() {
+        while pos < data.len() && is_ws(data[pos]) {
+            pos += 1;
+        }
+        if pos == data.len() {
+            return true;
+        }
+        match data[pos] {
+            b'%' => {
+                while pos < data.len() && !matches!(data[pos], b'\r' | b'\n') {
+                    pos += 1;
+                }
+            }
+            b'/' => {
+                pos += 1;
+                while pos < data.len() && !is_ws(data[pos]) && !is_delim(data[pos]) {
+                    pos += 1;
+                }
+            }
+            b'(' => {
+                pos += 1;
+                let mut depth = 1usize;
+                while pos < data.len() && depth > 0 {
+                    match data[pos] {
+                        b'\\' => pos = (pos + 2).min(data.len()),
+                        b'(' => {
+                            depth += 1;
+                            pos += 1;
+                        }
+                        b')' => {
+                            depth -= 1;
+                            pos += 1;
+                        }
+                        _ => pos += 1,
+                    }
+                }
+            }
+            b'<' => {
+                pos += 1;
+                while pos < data.len() && data[pos] != b'>' {
+                    pos += 1;
+                }
+                pos += usize::from(pos < data.len());
+            }
+            b'[' | b']' => pos += 1,
+            b'\'' | b'"' => return true,
+            _ if is_delim(data[pos]) => pos += 1,
+            _ => {
+                let start = pos;
+                while pos < data.len() && !is_ws(data[pos]) && !is_delim(data[pos]) {
+                    pos += 1;
+                }
+                let token = &data[start..pos];
+                if token.first().is_some_and(u8::is_ascii_alphabetic) {
+                    return is_known_content_operator(token);
+                }
+                if !token
+                    .iter()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'+' | b'-' | b'.'))
+                {
+                    return false;
+                }
+            }
+        }
+    }
+    false
+}
+
 impl<'a> Lexer<'a> {
     pub fn new(data: &'a [u8]) -> Self {
         Lexer {
@@ -315,14 +472,41 @@ impl<'a> Lexer<'a> {
         // BI <dict entries> ID <binary…> EI
         // Find "ID", skip one whitespace, then scan for whitespace-delimited EI.
         while self.pos + 1 < self.data.len() {
-            if self.data[self.pos] == b'I' && self.data[self.pos + 1] == b'D' {
-                self.pos += 2;
-                if self.pos < self.data.len() && is_ws(self.data[self.pos]) {
+            match self.data[self.pos] {
+                b'(' => {
                     self.pos += 1;
+                    let mut depth = 1usize;
+                    while self.pos < self.data.len() && depth > 0 {
+                        match self.data[self.pos] {
+                            b'\\' => self.pos = (self.pos + 2).min(self.data.len()),
+                            b'(' => {
+                                depth += 1;
+                                self.pos += 1;
+                            }
+                            b')' => {
+                                depth -= 1;
+                                self.pos += 1;
+                            }
+                            _ => self.pos += 1,
+                        }
+                    }
                 }
-                break;
+                b'%' => {
+                    while self.pos < self.data.len()
+                        && !matches!(self.data[self.pos], b'\r' | b'\n')
+                    {
+                        self.pos += 1;
+                    }
+                }
+                b'I' if self.data[self.pos + 1] == b'D'
+                    && (self.pos == 0 || is_ws(self.data[self.pos - 1]))
+                    && self.data.get(self.pos + 2).is_some_and(|byte| is_ws(*byte)) =>
+                {
+                    self.pos += 3;
+                    break;
+                }
+                _ => self.pos += 1,
             }
-            self.pos += 1;
         }
         while self.pos + 1 < self.data.len() {
             if self.data[self.pos] == b'E'
@@ -332,6 +516,7 @@ impl<'a> Lexer<'a> {
                     .data
                     .get(self.pos + 2)
                     .is_none_or(|b| is_ws(*b) || is_delim(*b))
+                && plausible_post_inline_syntax(&self.data[self.pos + 2..])
             {
                 self.pos += 2;
                 return;
@@ -454,5 +639,54 @@ mod tests {
             })
             .collect();
         assert_eq!(v, vec![1.02, -779.0, 3.0, 0.5]);
+    }
+
+    #[test]
+    fn inline_image_binary_ei_sequence_does_not_desynchronize_operators() {
+        let mut lex = Lexer::new(b"BI /W 1 /H 1 ID abc EI\0spoof EI 1 0 0 1 2 3 cm Q");
+        assert_eq!(lex.next_op(), Some(b"BI".as_slice()));
+        lex.clear();
+        assert_eq!(lex.next_op(), Some(b"cm".as_slice()));
+        lex.clear();
+        assert_eq!(lex.next_op(), Some(b"Q".as_slice()));
+        lex.clear();
+        assert_eq!(lex.next_op(), None);
+    }
+
+    #[test]
+    fn post_inline_operator_probe_accepts_normal_suffix() {
+        assert!(plausible_post_inline_syntax(b" Q (x) Tj"));
+    }
+
+    #[test]
+    fn inline_image_rejects_ei_followed_by_binary_garbage() {
+        let mut lex = Lexer::new(b"BI /W 1 /H 1 ID abc EI \xFF\xD8\xFF EI Q");
+        assert_eq!(lex.next_op(), Some(b"BI".as_slice()));
+        lex.clear();
+        assert_eq!(lex.next_op(), Some(b"Q".as_slice()));
+    }
+
+    #[test]
+    fn inline_image_id_inside_dictionary_string_is_not_data_start() {
+        let mut lex = Lexer::new(b"BI /Metadata (fake ID bytes EI Q) /W 1 /H 1 ID abc EI Q");
+        assert_eq!(lex.next_op(), Some(b"BI".as_slice()));
+        lex.clear();
+        assert_eq!(lex.next_op(), Some(b"Q".as_slice()));
+        lex.clear();
+        assert_eq!(lex.next_op(), None);
+    }
+
+    #[test]
+    fn inline_image_ei_at_end_and_truncated_data_terminate_cleanly() {
+        for content in [
+            b"BI /W 1 /H 1 ID abc EI".as_slice(),
+            b"BI /W 1 /H 1 ID abc".as_slice(),
+            b"BI /W 1 /H 1".as_slice(),
+        ] {
+            let mut lex = Lexer::new(content);
+            assert_eq!(lex.next_op(), Some(b"BI".as_slice()));
+            lex.clear();
+            assert_eq!(lex.next_op(), None);
+        }
     }
 }

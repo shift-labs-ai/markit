@@ -443,4 +443,53 @@ trailer << /Root 1 0 R >>";
         let pages = extract_pages_fast(pdf).unwrap();
         assert_eq!(pages[0].segments.len(), 1);
     }
+
+    #[test]
+    fn inline_oc_membership_dictionary_suppresses_hidden_image() {
+        let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R /OCProperties << /D << /OFF [7 0 R] >> >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R >> endobj
+4 0 obj << /Length 180 >> stream
+/OC << /OCGs [7 0 R] >> BDC
+q 100 0 0 100 0 0 cm BI /W 1 /H 1 /BPC 1 /CS /G ID 0 EI Q
+EMC
+q 100 0 0 100 120 0 cm BI /W 1 /H 1 /BPC 1 /CS /G ID 0 EI Q
+endstream endobj
+7 0 obj << /Type /OCG >> endobj
+trailer << /Root 1 0 R >>";
+        let pages = extract_pages_fast(pdf).unwrap();
+        assert_eq!(pages[0].images.len(), 1);
+        assert_eq!(pages[0].images[0].bbox.x, 120.0);
+    }
+
+    #[test]
+    fn actual_text_geometry_unions_all_suppressed_runs() {
+        let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj
+4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+5 0 obj << /Length 130 >> stream
+BT /F1 12 Tf /Span << /ActualText (replacement) >> BDC 72 720 Td (wrong1) Tj 0 -100 Td (wrong2) Tj EMC ET
+endstream endobj
+trailer << /Root 1 0 R >>";
+        let pages = extract_pages_fast(pdf).unwrap();
+        let item = pages[0]
+            .text_boxes
+            .iter()
+            .find(|item| item.text.contains("replacement"))
+            .unwrap();
+        assert!(
+            item.bounds.bottom < 650.0,
+            "bottom must include second run: {}",
+            item.bounds.bottom
+        );
+        assert!(
+            item.bounds.top - item.bounds.bottom > 100.0,
+            "bounds must span both runs: {}..{}",
+            item.bounds.bottom,
+            item.bounds.top
+        );
+    }
 }

@@ -9,6 +9,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::font::{build_font, FontInfo};
 use super::geom::{Mat, IDENTITY};
+use super::marked_content::{inline_ocg_is_hidden, parse_actual_text};
 use super::own_pdf::{decode_stream, dget, Dict, Pdf, Val};
 use super::types::Segment;
 
@@ -311,14 +312,23 @@ impl<'a> Interp<'a> {
                     // default configuration are invisible: suppress
                     // their content like a viewer would.
                     if self.hidden_until.is_none() && !self.hidden_ocgs.is_empty() {
-                        if let [o1 @ Operand::Name { .. }, o2 @ Operand::Name { .. }] =
-                            lex.operands.as_slice()
-                        {
-                            if lex.name_bytes(*o1) == b"OC"
-                                && self.ocg_hidden(lex.name_bytes(*o2), resources)
+                        match lex.operands.as_slice() {
+                            [tag @ Operand::Name { .. }, property @ Operand::Name { .. }]
+                                if lex.name_bytes(*tag) == b"OC"
+                                    && self.ocg_hidden(lex.name_bytes(*property), resources) =>
                             {
                                 self.hidden_until = Some(self.mc_depth);
                             }
+                            [tag @ Operand::Name { .. }, property @ Operand::Dict { .. }]
+                                if lex.name_bytes(*tag) == b"OC"
+                                    && inline_ocg_is_hidden(
+                                        lex.dict_bytes(*property),
+                                        &self.hidden_ocgs,
+                                    ) =>
+                            {
+                                self.hidden_until = Some(self.mc_depth);
+                            }
+                            _ => {}
                         }
                     }
                     // /ActualText in the property dict replaces whatever
@@ -353,6 +363,10 @@ impl<'a> Interp<'a> {
                 // bbox/xobject pairing aligned; extraction of these
                 // regions falls back to rasterization.
                 b"BI" => {
+                    if self.hidden_until.is_some() {
+                        lex.clear();
+                        continue;
+                    }
                     let (ax, ay) = self.ctm.apply(0.0, 0.0);
                     let (bx, by) = self.ctm.apply(1.0, 1.0);
                     self.image_placements.push(ImagePlacement {
@@ -403,15 +417,15 @@ impl<'a> Interp<'a> {
         if span.text.trim().is_empty() {
             return;
         }
-        let Some((x0, y0, x1, size_dev, bold)) = span.geom else {
+        let Some((x0, y0, x1, y1, size_dev, bold)) = span.geom else {
             return;
         };
         self.items.push(RawItem {
             text: span.text,
             x: x0,
-            y: y0 - 0.20 * size_dev,
+            y: y0,
             width: (x1 - x0).abs().max(0.01),
-            height: 1.2 * size_dev,
+            height: (y1 - y0).max(0.01),
             font_size: (size_dev as i32) as f64,
             is_bold: bold,
         });
@@ -603,12 +617,24 @@ impl<'a> Interp<'a> {
             // Geometry only: the replacement text supersedes the glyphs.
             let bold = self.ts.font.as_ref().is_some_and(|f| f.is_bold);
             match &mut span.geom {
-                Some((gx0, _gy0, gx1, gsize, _)) => {
+                Some((gx0, gy0, gx1, gy1, gsize, gbold)) => {
                     *gx0 = gx0.min(x0.min(x1));
+                    *gy0 = gy0.min(y0 - 0.20 * size_dev);
                     *gx1 = gx1.max(x0.max(x1));
+                    *gy1 = gy1.max(y0 + size_dev);
                     *gsize = gsize.max(size_dev);
+                    *gbold |= bold;
                 }
-                geom @ None => *geom = Some((x0.min(x1), y0, x0.max(x1), size_dev, bold)),
+                geom @ None => {
+                    *geom = Some((
+                        x0.min(x1),
+                        y0 - 0.20 * size_dev,
+                        x0.max(x1),
+                        y0 + size_dev,
+                        size_dev,
+                        bold,
+                    ));
+                }
             }
             return;
         }
@@ -747,101 +773,11 @@ impl<'a> Interp<'a> {
 /// Pull /ActualText out of a raw BDC property dict. Handles literal
 /// strings (with escapes) and hex strings; UTF-16BE by BOM, else
 /// PDFDocEncoding treated as latin1.
-fn parse_actual_text(dict: &[u8]) -> Option<String> {
-    let at = memchr::memmem::find(dict, b"/ActualText")?;
-    let mut p = at + b"/ActualText".len();
-    while p < dict.len() && dict[p].is_ascii_whitespace() {
-        p += 1;
-    }
-    let bytes: Vec<u8> = match dict.get(p)? {
-        b'(' => {
-            let mut out = Vec::new();
-            let mut depth = 1usize;
-            p += 1;
-            while p < dict.len() && depth > 0 {
-                match dict[p] {
-                    b'\\' => {
-                        p += 1;
-                        match dict.get(p)? {
-                            b'n' => out.push(b'\n'),
-                            b'r' => out.push(b'\r'),
-                            b't' => out.push(b'\t'),
-                            b'b' => out.push(8),
-                            b'f' => out.push(12),
-                            d @ b'0'..=b'7' => {
-                                let mut v = (d - b'0') as u32;
-                                for _ in 0..2 {
-                                    match dict.get(p + 1) {
-                                        Some(d2 @ b'0'..=b'7') => {
-                                            v = v * 8 + (d2 - b'0') as u32;
-                                            p += 1;
-                                        }
-                                        _ => break,
-                                    }
-                                }
-                                out.push(v as u8);
-                            }
-                            &c => out.push(c),
-                        }
-                        p += 1;
-                    }
-                    b'(' => {
-                        depth += 1;
-                        out.push(b'(');
-                        p += 1;
-                    }
-                    b')' => {
-                        depth -= 1;
-                        if depth > 0 {
-                            out.push(b')');
-                        }
-                        p += 1;
-                    }
-                    c => {
-                        out.push(c);
-                        p += 1;
-                    }
-                }
-            }
-            out
-        }
-        b'<' => {
-            let end = dict[p..].iter().position(|&b| b == b'>')? + p;
-            let mut out = Vec::new();
-            let mut hi: Option<u8> = None;
-            for &b in &dict[p + 1..end] {
-                let v = match b {
-                    b'0'..=b'9' => b - b'0',
-                    b'a'..=b'f' => b - b'a' + 10,
-                    b'A'..=b'F' => b - b'A' + 10,
-                    _ => continue,
-                };
-                match hi.take() {
-                    Some(h) => out.push((h << 4) | v),
-                    None => hi = Some(v),
-                }
-            }
-            out
-        }
-        _ => return None,
-    };
-
-    if bytes.starts_with(&[0xFE, 0xFF]) {
-        let units: Vec<u16> = bytes[2..]
-            .chunks_exact(2)
-            .map(|c| u16::from_be_bytes([c[0], c[1]]))
-            .collect();
-        Some(String::from_utf16_lossy(&units))
-    } else {
-        Some(bytes.iter().map(|&b| b as char).collect())
-    }
-}
-
 /// An open /ActualText marked-content span: replacement text plus the
 /// geometry accumulated from the suppressed show-text operators.
 struct ActualTextSpan {
     text: String,
     depth: u32,
-    /// (x0, y0, x1, size_dev, is_bold) built up across runs.
-    geom: Option<(f64, f64, f64, f64, bool)>,
+    /// (x0, y0, x1, y1, max_size, any_bold) union across runs.
+    geom: Option<(f64, f64, f64, f64, f64, bool)>,
 }
