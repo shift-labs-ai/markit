@@ -130,14 +130,23 @@ function rowIsTabular(row: Row): boolean {
  * is implausible.
  */
 function clusterColumns(rows: Row[]): Array<[number, number]> | null {
-  const intervals: Array<[number, number]> = rows
-    .flatMap((row) => rowFragments(row))
-    .map((fragment) => [fragment.left, fragment.right]);
+  // Projection profile: an x-strip that no word box of the run crosses,
+  // across every row, is a column separator. Splits right-aligned value
+  // columns from their labels even when the per-row gap is small.
+  // Single-fragment rows (section labels, wrapped cells) don't vote.
+  const boxes = rows
+    .filter((row) => rowFragments(row).length >= 2)
+    .flatMap((row) => row.boxes);
+  if (boxes.length === 0) return null;
+  const intervals: Array<[number, number]> = boxes.map((tb) => [
+    tb.bounds.left,
+    tb.bounds.right,
+  ]);
   intervals.sort((a, b) => a[0] - b[0]);
   const columns: Array<[number, number]> = [];
   for (const [left, right] of intervals) {
     const last = columns[columns.length - 1];
-    if (last && left <= last[1] + MIN_CELL_GAP / 2) {
+    if (last && left <= last[1] + MIN_SEPARATOR_PTS) {
       last[1] = Math.max(last[1], right);
     } else {
       columns.push([left, right]);
@@ -145,6 +154,36 @@ function clusterColumns(rows: Row[]): Array<[number, number]> | null {
   }
   if (columns.length < MIN_COLS || columns.length > MAX_COLS) return null;
   return columns;
+}
+
+/**
+ * Minimum width of a projection-profile column separator. Word gaps
+ * within a cell never align across every row of a run; a strip this
+ * wide with zero crossings is structure.
+ */
+const MIN_SEPARATOR_PTS = 5.0;
+
+/**
+ * Nearest column by center distance (for spanning fragments that fit
+ * no single column).
+ */
+function nearestColumn(
+  columns: Array<[number, number]>,
+  left: number,
+  right: number,
+): number {
+  const center = (left + right) / 2;
+  let best = 0;
+  let bestD = Number.POSITIVE_INFINITY;
+  for (let ci = 0; ci < columns.length; ci++) {
+    const c = (columns[ci][0] + columns[ci][1]) / 2;
+    const d = Math.abs(c - center);
+    if (d < bestD) {
+      bestD = d;
+      best = ci;
+    }
+  }
+  return best;
 }
 
 function columnOf(
@@ -286,26 +325,21 @@ export function detectBorderlessTables(
           continue;
         }
       }
+      // Assign word boxes to columns by center. Voting boxes always
+      // land inside a column (they defined the profile); label-row
+      // boxes may straddle and take the nearest column.
       const cells: TableCell[] = [];
       let filled = 0;
-      let ok = true;
-      outer: for (
-        let rowIndex = 0;
-        rowIndex < candidateRun.length;
-        rowIndex++
-      ) {
+      for (let rowIndex = 0; rowIndex < candidateRun.length; rowIndex++) {
         const rowCells: Array<string | null> = columns.map(() => null);
-        for (const fragment of rowFragments(candidateRun[rowIndex])) {
-          const column = columnOf(columns, fragment.left, fragment.right);
-          if (column === null) {
-            ok = false;
-            break outer;
-          }
-          const text = fragmentText(fragment);
+        for (const tb of candidateRun[rowIndex].boxes) {
+          const column =
+            columnOf(columns, tb.bounds.left, tb.bounds.right) ??
+            nearestColumn(columns, tb.bounds.left, tb.bounds.right);
           if (rowCells[column] !== null) {
-            rowCells[column] = `${rowCells[column]} ${text}`;
+            rowCells[column] = `${rowCells[column]} ${tb.text}`;
           } else {
-            rowCells[column] = text;
+            rowCells[column] = tb.text;
             filled++;
           }
         }
@@ -324,7 +358,7 @@ export function detectBorderlessTables(
         rowsInRun >= MIN_ROWS_NARROW ||
         columns.length >= MIN_COLS_FOR_SHORT_RUN;
       const total = rowsInRun * columns.length;
-      if (ok && enoughRows && filled >= MIN_FILL_RATIO * total) {
+      if (enoughRows && filled >= MIN_FILL_RATIO * total) {
         built = { columns, cells };
         break;
       }

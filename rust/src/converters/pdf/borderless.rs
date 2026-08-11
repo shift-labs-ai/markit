@@ -130,28 +130,59 @@ fn row_is_tabular(row: &Row) -> bool {
     row.boxes.len() >= 2 && row_fragments(row).len() >= 2
 }
 
-/// Cluster the x-intervals of a run's cell fragments into columns.
+/// Minimum width of a projection-profile column separator. Word gaps
+/// within a cell never align across every row of a run; a strip this
+/// wide with zero crossings is structure.
+const MIN_SEPARATOR_PTS: f64 = 5.0;
+
+/// Find columns by projection profile: an x-strip that no word box of
+/// the run crosses, across every row, is a column separator. This
+/// splits right-aligned value columns from their labels even when the
+/// per-row gap is small ('Sydney Morning Herald 811,222'), because the
+/// separator only needs to be clear across the WHOLE run.
 /// Returns the (left, right) extents per column, or None when the
 /// column count is implausible.
 fn cluster_columns(rows: &[&Row]) -> Option<Vec<(f64, f64)>> {
-    let mut intervals: Vec<(f64, f64)> = rows
+    // Single-fragment rows (section labels, wrapped cells) don't vote:
+    // a label bridging two columns would fuse them.
+    let boxes: Vec<&TextBox> = rows
         .iter()
-        .flat_map(|row| {
-            row_fragments(row)
-                .into_iter()
-                .map(|fragment| (fragment.left, fragment.right))
-        })
+        .filter(|row| row_fragments(row).len() >= 2)
+        .flat_map(|row| row.boxes.iter().copied())
+        .collect();
+    if boxes.is_empty() {
+        return None;
+    }
+    let x_min = boxes
+        .iter()
+        .map(|tb| tb.bounds.left)
+        .fold(f64::INFINITY, f64::min);
+    let x_max = boxes
+        .iter()
+        .map(|tb| tb.bounds.right)
+        .fold(f64::NEG_INFINITY, f64::max);
+    if x_max <= x_min {
+        return None;
+    }
+
+    // Collect and merge the projection intervals of all boxes; the
+    // complement strips wider than MIN_SEPARATOR_PTS are separators.
+    let mut intervals: Vec<(f64, f64)> = boxes
+        .iter()
+        .map(|tb| (tb.bounds.left, tb.bounds.right))
         .collect();
     intervals.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let mut columns: Vec<(f64, f64)> = Vec::new();
+    let mut covered: Vec<(f64, f64)> = Vec::new();
     for (left, right) in intervals {
-        match columns.last_mut() {
-            Some(column) if left <= column.1 + MIN_CELL_GAP / 2.0 => {
-                column.1 = column.1.max(right);
+        match covered.last_mut() {
+            Some(span) if left <= span.1 + MIN_SEPARATOR_PTS => {
+                span.1 = span.1.max(right);
             }
-            _ => columns.push((left, right)),
+            _ => covered.push((left, right)),
         }
     }
+
+    let columns: Vec<(f64, f64)> = covered;
     if columns.len() < MIN_COLS || columns.len() > MAX_COLS {
         return None;
     }
@@ -163,6 +194,23 @@ fn column_of(columns: &[(f64, f64)], left: f64, right: f64) -> Option<usize> {
     columns
         .iter()
         .position(|(l, r)| center >= *l && center <= *r)
+}
+
+/// Nearest column by center distance (for spanning fragments that fit
+/// no single column).
+fn nearest_column(columns: &[(f64, f64)], left: f64, right: f64) -> usize {
+    let center = (left + right) / 2.0;
+    let mut best = 0usize;
+    let mut best_d = f64::INFINITY;
+    for (ci, (l, r)) in columns.iter().enumerate() {
+        let c = (l + r) / 2.0;
+        let d = (c - center).abs();
+        if d < best_d {
+            best_d = d;
+            best = ci;
+        }
+    }
+    best
 }
 
 /// Maximum header rows absorbed above a detected table body.
@@ -302,24 +350,25 @@ pub fn detect_borderless_tables(
                     }
                 }
             }
+            // Assign word boxes to columns by center. Voting boxes
+            // always land inside a column (they defined the profile);
+            // label-row boxes may straddle and take the nearest column.
             let mut cells: Vec<TableCell> = Vec::new();
             let mut filled = 0usize;
-            let mut ok = true;
-            'rows: for (row_index, row) in run.iter().enumerate() {
+            for (row_index, row) in run.iter().enumerate() {
                 let mut row_cells: Vec<Option<String>> = vec![None; columns.len()];
-                for fragment in row_fragments(row) {
-                    let Some(column) = column_of(&columns, fragment.left, fragment.right) else {
-                        ok = false;
-                        break 'rows;
-                    };
-                    let text = fragment.text();
+                for tb in &row.boxes {
+                    let column = column_of(&columns, tb.bounds.left, tb.bounds.right)
+                        .unwrap_or_else(|| {
+                            nearest_column(&columns, tb.bounds.left, tb.bounds.right)
+                        });
                     match &mut row_cells[column] {
                         Some(existing) => {
                             existing.push(' ');
-                            existing.push_str(&text);
+                            existing.push_str(&tb.text);
                         }
                         slot @ None => {
-                            *slot = Some(text);
+                            *slot = Some(tb.text.clone());
                             filled += 1;
                         }
                     }
@@ -338,7 +387,7 @@ pub fn detect_borderless_tables(
             let enough_rows =
                 rows_in_run >= MIN_ROWS_NARROW || columns.len() >= MIN_COLS_FOR_SHORT_RUN;
             let total = rows_in_run * columns.len();
-            if ok && enough_rows && (filled as f64) >= MIN_FILL_RATIO * total as f64 {
+            if enough_rows && (filled as f64) >= MIN_FILL_RATIO * total as f64 {
                 built = Some((columns, cells));
                 break;
             }
