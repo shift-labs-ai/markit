@@ -5,7 +5,10 @@
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use markit::converters::pdf::{fast_extract::extract_pages_fast, own_pdf::Pdf};
+use markit::{
+    converters::pdf::{fast_extract::extract_pages_fast, index::PdfConverter, own_pdf::Pdf},
+    types::{Converter, StreamInfo},
+};
 
 fn no_panic(data: &[u8]) {
     let parse = catch_unwind(AssertUnwindSafe(|| Pdf::parse(data)));
@@ -56,6 +59,32 @@ trailer << /Root 1 0 R >>",
     for data in cases {
         no_panic(data);
     }
+}
+
+#[test]
+fn full_conversion_rejects_malformed_image_dimensions_without_panicking() {
+    let bytes = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >> endobj
+4 0 obj << /Length 27 >> stream
+q 10 0 0 10 0 0 cm /Im0 Do Q
+endstream endobj
+5 0 obj << /Type /XObject /Subtype /Image /Width 9223372036854775807 /Height 9223372036854775807 /BitsPerComponent 8 /ColorSpace /DeviceRGB /Length 1 >> stream
+x
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let image_dir =
+        std::env::temp_dir().join(format!("markit-malformed-image-{}", std::process::id()));
+    let info = StreamInfo {
+        extension: Some(".pdf".into()),
+        image_dir: Some(image_dir.to_string_lossy().into_owned()),
+        ..StreamInfo::default()
+    };
+    let conversion = catch_unwind(AssertUnwindSafe(|| PdfConverter.convert(bytes, &info)));
+    let _ = std::fs::remove_dir_all(image_dir);
+    assert!(conversion.is_ok(), "full PDF conversion panicked");
 }
 
 #[test]

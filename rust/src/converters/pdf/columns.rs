@@ -86,23 +86,16 @@ pub fn detect_columns(text_boxes: &[TextBox]) -> ColumnLayout {
         };
     }
 
-    // Find the largest gap between consecutive left-edge positions
-    let mut max_gap: i64 = 0;
-    let mut gap_left: i64 = 0;
-    let mut gap_right: i64 = 0;
+    let boundaries: Vec<f64> = lefts
+        .windows(2)
+        .filter_map(|pair| {
+            let gap = pair[1] - pair[0];
+            ((gap as f64) >= MIN_GAP_PTS && gap as f64 / text_width >= MIN_GAP_RATIO)
+                .then(|| (pair[0] as f64 + pair[1] as f64) / 2.0)
+        })
+        .collect();
 
-    for i in 1..lefts.len() {
-        let gap = lefts[i] - lefts[i - 1];
-        if gap > max_gap {
-            max_gap = gap;
-            gap_left = lefts[i - 1];
-            gap_right = lefts[i];
-        }
-    }
-
-    let gap_ratio = max_gap as f64 / text_width;
-
-    if gap_ratio < MIN_GAP_RATIO || (max_gap as f64) < MIN_GAP_PTS {
+    if boundaries.is_empty() {
         return ColumnLayout {
             column_count: 1,
             columns: vec![text_boxes.to_vec()],
@@ -110,24 +103,20 @@ pub fn detect_columns(text_boxes: &[TextBox]) -> ColumnLayout {
         };
     }
 
-    // Split point is the midpoint of the gap
-    let split_x = (gap_left as f64 + gap_right as f64) / 2.0;
-
-    // Assign boxes to columns based on center X
-    let mut left_col: Vec<TextBox> = Vec::new();
-    let mut right_col: Vec<TextBox> = Vec::new();
-
-    for tb in text_boxes {
-        let cx = (tb.bounds.left + tb.bounds.right) / 2.0;
-        if cx < split_x {
-            left_col.push(tb.clone());
-        } else {
-            right_col.push(tb.clone());
-        }
+    let mut columns = vec![Vec::new(); boundaries.len() + 1];
+    for text_box in text_boxes {
+        let center_x = (text_box.bounds.left + text_box.bounds.right) / 2.0;
+        let column = boundaries
+            .iter()
+            .position(|boundary| center_x < *boundary)
+            .unwrap_or(boundaries.len());
+        columns[column].push(text_box.clone());
     }
 
-    // Validate both columns have enough content
-    if left_col.len() < MIN_BOXES_PER_COLUMN || right_col.len() < MIN_BOXES_PER_COLUMN {
+    if columns
+        .iter()
+        .any(|column| column.len() < MIN_BOXES_PER_COLUMN)
+    {
         return ColumnLayout {
             column_count: 1,
             columns: vec![text_boxes.to_vec()],
@@ -136,9 +125,9 @@ pub fn detect_columns(text_boxes: &[TextBox]) -> ColumnLayout {
     }
 
     ColumnLayout {
-        column_count: 2,
-        columns: vec![left_col, right_col],
-        boundaries: vec![split_x],
+        column_count: columns.len(),
+        columns,
+        boundaries,
     }
 }
 
@@ -202,6 +191,22 @@ mod tests {
         assert_eq!(result.column_count, 2);
         assert_eq!(result.columns.len(), 2);
         assert_eq!(result.boundaries.len(), 1);
+    }
+
+    #[test]
+    fn detects_three_column_layout() {
+        let boxes: Vec<TextBox> = [0.0, 200.0, 400.0]
+            .into_iter()
+            .enumerate()
+            .flat_map(|(column, x)| {
+                (0..6)
+                    .map(move |i| tb(&format!("C{column}-{i}"), x, 700.0 - i as f64 * 15.0, 100.0))
+            })
+            .collect();
+        let result = detect_columns(&boxes);
+        assert_eq!(result.column_count, 3);
+        assert_eq!(result.columns.len(), 3);
+        assert_eq!(result.boundaries.len(), 2);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! PDF to Markdown converter.
 //!
 //! Pipeline:
-//!   1. Extract text boxes + vector segments + image regions per page (mupdf)
+//!   1. Extract text boxes + vector segments + image regions with the own engine
 //!   2. Strip running headers/footers
 //!   3. Detect column layout (single vs multi-column)
 //!   4. Per column: detect table grids from segments
@@ -17,7 +17,7 @@ use anyhow::Result;
 use crate::types::{ConversionResult, Converter, StreamInfo};
 
 use super::columns::detect_columns;
-use super::extract::{extract_pages, render_image_region};
+use super::fast_extract::extract_pages_fast;
 use super::grid::resolve_table_grids;
 use super::headers::strip_headers_footers;
 use super::render::{render_page_content, ImageBlock};
@@ -51,6 +51,18 @@ fn process_column(
     )
 }
 
+fn image_blocks_in_x_range(
+    blocks: &[(f64, ImageBlock)],
+    min_x: f64,
+    max_x: f64,
+) -> Vec<ImageBlock> {
+    blocks
+        .iter()
+        .filter(|(center_x, _)| *center_x >= min_x && *center_x <= max_x)
+        .map(|(_, block)| block.clone())
+        .collect()
+}
+
 pub struct PdfConverter;
 
 impl Converter for PdfConverter {
@@ -73,7 +85,7 @@ impl Converter for PdfConverter {
     }
 
     fn convert(&self, input: &[u8], info: &StreamInfo) -> Result<ConversionResult> {
-        let mut pages = extract_pages(input)?;
+        let mut pages = extract_pages_fast(input)?;
 
         // Remove running headers/footers before processing
         strip_headers_footers(&mut pages);
@@ -87,14 +99,13 @@ impl Converter for PdfConverter {
 
         for page in &pages {
             // Build image blocks for this page
-            let mut image_blocks: Vec<ImageBlock> = Vec::new();
+            let mut positioned_image_blocks: Vec<(f64, ImageBlock)> = Vec::new();
 
             if let Some(dir) = image_dir {
                 if !page.images.is_empty() {
                     for img in &page.images {
-                        // Prefer direct embedded-image extraction (native
-                        // resolution, real format); rasterize via MuPDF only
-                        // when the encoding is unsupported.
+                        // Preserve the embedded image at native resolution
+                        // when its encoding is supported by the own engine.
                         let written =
                             match super::image_extract::extract_image_region_fast(input, img) {
                                 Ok(x) => {
@@ -115,50 +126,35 @@ impl Converter for PdfConverter {
                                 Err(_) => None,
                             };
                         if let Some(filepath) = written {
-                            image_blocks.push(ImageBlock {
-                                top_y: img.top_y,
-                                markdown: format!("![{}]({})", img.id, filepath.display()),
-                            });
-                            continue;
-                        }
-
-                        let filename = format!("{}.png", img.id);
-                        let filepath = Path::new(dir).join(&filename);
-                        match render_image_region(input, img) {
-                            Ok(png) => {
-                                if let Err(e) = fs::write(&filepath, &png) {
-                                    eprintln!(
-                                        "Failed to write image {}: {}",
-                                        filepath.display(),
-                                        e
-                                    );
-                                    continue;
-                                }
-
-                                let markdown = format!("![{}]({})", img.id, filepath.display());
-
-                                image_blocks.push(ImageBlock {
+                            positioned_image_blocks.push((
+                                img.bbox.x + img.bbox.w / 2.0,
+                                ImageBlock {
                                     top_y: img.top_y,
-                                    markdown,
-                                });
-                            }
-                            Err(_) => {
-                                // Image rendering failed — skip
-                            }
+                                    markdown: format!("![{}]({})", img.id, filepath.display()),
+                                },
+                            ));
+                            continue;
                         }
                     }
                 }
             } else if !page.images.is_empty() {
                 for img in &page.images {
-                    image_blocks.push(ImageBlock {
-                        top_y: img.top_y,
-                        markdown: format!(
-                            "<!-- image: {} (page {}, {}x{}pt) -->",
-                            img.id, img.page_number, img.bbox.w as i32, img.bbox.h as i32
-                        ),
-                    });
+                    positioned_image_blocks.push((
+                        img.bbox.x + img.bbox.w / 2.0,
+                        ImageBlock {
+                            top_y: img.top_y,
+                            markdown: format!(
+                                "<!-- image: {} (page {}, {}x{}pt) -->",
+                                img.id, img.page_number, img.bbox.w as i32, img.bbox.h as i32
+                            ),
+                        },
+                    ));
                 }
             }
+            let image_blocks: Vec<ImageBlock> = positioned_image_blocks
+                .iter()
+                .map(|(_, block)| block.clone())
+                .collect();
 
             // Detect column layout
             let mut layout = detect_columns(&page.text_boxes);
@@ -216,7 +212,7 @@ impl Converter for PdfConverter {
                 }
             } else {
                 let mut column_markdowns: Vec<String> = Vec::new();
-                for (col_idx, col_boxes) in layout.columns.iter().enumerate() {
+                for col_boxes in &layout.columns {
                     // Filter segments to those within this column's X range
                     let col_x_min = col_boxes
                         .iter()
@@ -239,10 +235,18 @@ impl Converter for PdfConverter {
                         .cloned()
                         .collect();
 
-                    // Images go with the first column only
-                    let blocks = if col_idx == 0 { &image_blocks[..] } else { &[] };
+                    let column_image_blocks = image_blocks_in_x_range(
+                        &positioned_image_blocks,
+                        col_x_min - margin,
+                        col_x_max + margin,
+                    );
 
-                    let md = process_column(page.page_number, col_boxes, &col_segments, blocks);
+                    let md = process_column(
+                        page.page_number,
+                        col_boxes,
+                        &col_segments,
+                        &column_image_blocks,
+                    );
                     if !md.is_empty() {
                         column_markdowns.push(md);
                     }
@@ -263,6 +267,29 @@ impl Converter for PdfConverter {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn images_are_assigned_to_their_own_text_column() {
+        let blocks = vec![
+            (
+                100.0,
+                ImageBlock {
+                    top_y: 500.0,
+                    markdown: "left".into(),
+                },
+            ),
+            (
+                400.0,
+                ImageBlock {
+                    top_y: 500.0,
+                    markdown: "right".into(),
+                },
+            ),
+        ];
+        let right = image_blocks_in_x_range(&blocks, 300.0, 500.0);
+        assert_eq!(right.len(), 1);
+        assert_eq!(right[0].markdown, "right");
+    }
 
     #[test]
     fn accepts_pdf_extension() {
@@ -293,43 +320,26 @@ mod tests {
 
     #[test]
     fn converts_generated_pdf() {
-        use mupdf::pdf::PdfDocument;
+        let input = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >> endobj
+4 0 obj << /Length 0 >> stream
 
-        let mut doc = PdfDocument::new();
-        match doc.new_page(mupdf::Size {
-            width: 612.0,
-            height: 792.0,
-        }) {
-            Ok(_) => {
-                let mut buf = Vec::new();
-                match doc.write_to(&mut buf) {
-                    Ok(_) => {
-                        let c = PdfConverter;
-                        let info = StreamInfo {
-                            extension: Some(".pdf".into()),
-                            ..Default::default()
-                        };
-                        let result = c.convert(&buf, &info);
-                        assert!(result.is_ok());
-                    }
-                    Err(e) => {
-                        eprintln!("Could not write PDF: {}", e);
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("Could not create page: {}", e);
-            }
-        }
+endstream endobj
+trailer << /Root 1 0 R >>";
+        let c = PdfConverter;
+        let info = StreamInfo {
+            extension: Some(".pdf".into()),
+            ..Default::default()
+        };
+        assert!(c.convert(input, &info).is_ok());
     }
 
     #[test]
     fn full_pipeline_with_fixture() {
         let fixture = "../test/fixtures/pdfs/intel-743621-007.pdf";
-        if !Path::new(fixture).exists() {
-            eprintln!("Skipping: fixture not found");
-            return;
-        }
+        assert!(Path::new(fixture).exists(), "committed fixture missing");
 
         let buf = std::fs::read(fixture).unwrap();
         let c = PdfConverter;

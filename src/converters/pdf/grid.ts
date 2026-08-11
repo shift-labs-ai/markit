@@ -903,12 +903,14 @@ export function resolveTableGrids(
     (s) =>
       s.y1 >= textYMin &&
       s.y1 <= textYMax &&
-      s.x1 <= textXMax &&
-      s.x2 >= textXMin,
+      Math.min(s.x1, s.x2) <= textXMax &&
+      Math.max(s.x1, s.x2) >= textXMin,
   );
 
   const hMaxX2 =
-    filteredH.length > 0 ? Math.max(...filteredH.map((s) => s.x2)) : textXMax;
+    filteredH.length > 0
+      ? Math.max(...filteredH.map((s) => Math.max(s.x1, s.x2)))
+      : textXMax;
   const vSegXMax = Math.max(textXMax, hMaxX2 + PAGE_MARGIN);
 
   const filteredV = vertical.filter((s) => {
@@ -962,8 +964,8 @@ export function resolveTableGrids(
       );
       if (groupHoriz.length === 0) continue;
 
-      const hxMin = Math.min(...groupHoriz.map((s) => s.x1));
-      const hxMax = Math.max(...groupHoriz.map((s) => s.x2));
+      const hxMin = Math.min(...groupHoriz.map((s) => Math.min(s.x1, s.x2)));
+      const hxMax = Math.max(...groupHoriz.map((s) => Math.max(s.x1, s.x2)));
 
       const result = buildHLineOnlyTable(
         pageNumber,

@@ -239,12 +239,18 @@ export class Markit {
     streamInfo: StreamInfo,
   ): Promise<ConversionResult> {
     const errors: Array<{ converter: string; error: Error }> = [];
+    const detectedInfo =
+      !streamInfo.extension &&
+      !streamInfo.mimetype &&
+      input.subarray(0, 5).toString("ascii") === "%PDF-"
+        ? { ...streamInfo, mimetype: "application/pdf" }
+        : streamInfo;
 
     for (const converter of this.converters) {
-      if (!converter.accepts(streamInfo)) continue;
+      if (!converter.accepts(detectedInfo)) continue;
 
       try {
-        return await converter.convert(input, streamInfo);
+        return await converter.convert(input, detectedInfo);
       } catch (err) {
         errors.push({
           converter: converter.name,

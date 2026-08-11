@@ -56,17 +56,37 @@ fn interpret_page<'a>(
     page_number: u32,
     hidden_ocgs: Rc<FxHashSet<u32>>,
     content: &mut Vec<u8>,
-) -> Result<(Interp<'a>, f64)> {
+) -> Result<(Interp<'a>, f64, f64)> {
     let media = inherited
         .media
         .as_ref()
         .ok_or_else(|| anyhow!("no MediaBox"))?;
-    let (mx0, my0) = (media[0].min(media[2]), media[1].min(media[3]));
-    let (base, page_height) = rotation_base(inherited.rotate, media, mx0, my0);
+    let media_bounds = [
+        media[0].min(media[2]),
+        media[1].min(media[3]),
+        media[0].max(media[2]),
+        media[1].max(media[3]),
+    ];
+    let page_box = if let Some(crop) = &inherited.crop {
+        vec![
+            crop[0].min(crop[2]).max(media_bounds[0]),
+            crop[1].min(crop[3]).max(media_bounds[1]),
+            crop[0].max(crop[2]).min(media_bounds[2]),
+            crop[1].max(crop[3]).min(media_bounds[3]),
+        ]
+    } else {
+        media_bounds.to_vec()
+    };
+    if page_box[2] <= page_box[0] || page_box[3] <= page_box[1] {
+        bail!("empty page box");
+    }
+    let (base, page_width, page_height) =
+        rotation_base(inherited.rotate, &page_box, page_box[0], page_box[1]);
     decode_page_content(pdf, page, content)?;
     let mut interp = Interp::new(pdf, page_number, base, hidden_ocgs);
     interp.run(content, inherited.resources.as_ref())?;
-    Ok((interp, page_height))
+    interp.clip_to_page(page_width, page_height);
+    Ok((interp, page_width, page_height))
 }
 
 fn device_bbox((x0, y0, x1, y1): (f64, f64, f64, f64), page_height: f64) -> (f32, f32, f32, f32) {
@@ -88,7 +108,7 @@ pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
 
     for (index, (page, inherited)) in pages.iter().enumerate() {
         let page_number = (index + 1) as u32;
-        let (interp, page_height) = interpret_page(
+        let (interp, page_width, page_height) = interpret_page(
             &pdf,
             page,
             inherited,
@@ -105,7 +125,7 @@ pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
         let raws = interp
             .items
             .into_iter()
-            .map(|item| super::extract::RawTextItemPub {
+            .map(|item| super::shared::RawTextItemPub {
                 text: item.text,
                 x: item.x,
                 y: item.y,
@@ -115,16 +135,18 @@ pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
                 is_bold: item.is_bold,
             })
             .collect();
-        let text_boxes = super::extract::finish_text_boxes_pub(raws, page_number)?;
+        let text_boxes = super::shared::finish_text_boxes_pub(raws, page_number)?;
         let bboxes: Vec<_> = interp
             .image_placements
             .iter()
             .map(|placement| device_bbox(placement.bbox, page_height))
             .collect();
         let images =
-            super::extract::image_regions_from_bboxes_pub(&bboxes, page_number, page_height);
+            super::shared::image_regions_from_bboxes_pub(&bboxes, page_number, page_height);
         out.push(PageContent {
             page_number,
+            page_width,
+            page_height,
             text_boxes,
             segments: interp.segments,
             images,
@@ -146,14 +168,14 @@ pub(crate) fn page_image_placements<'a>(
         bail!("page out of range");
     };
     let mut content = Vec::new();
-    let (interp, page_height) =
+    let (interp, _page_width, page_height) =
         interpret_page(pdf, page, inherited, page_number, hidden_ocgs, &mut content)?;
     Ok(interp
         .image_placements
         .into_iter()
         .filter_map(|placement| {
             let bbox = device_bbox(placement.bbox, page_height);
-            super::extract::image_bbox_is_large_pub(bbox).then_some(placement.source)
+            super::shared::image_bbox_is_large_pub(bbox).then_some(placement.source)
         })
         .collect())
 }
@@ -269,7 +291,7 @@ trailer << /Root 1 0 R >>";
     }
 
     /// /ActualText in a marked-content span replaces the drawn glyphs
-    /// (tagged-PDF semantics, same as MuPDF).
+    /// according to tagged-PDF replacement semantics.
     #[test]
     fn actual_text_replaces_glyphs() {
         let pdf = b"%PDF-1.4
@@ -327,6 +349,25 @@ trailer << /Root 1 0 R >>";
 
     /// A rotated page must still extract its text (geometry transformed,
     /// not rejected).
+    #[test]
+    fn crop_box_controls_page_geometry_and_clips_content() {
+        let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /CropBox [0 0 300 400] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj
+4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+5 0 obj << >> stream
+BT /F1 12 Tf 20 200 Td (inside) Tj 0 400 Td (outside) Tj ET
+endstream endobj
+trailer << /Root 1 0 R >>";
+        let pages = extract_pages_fast(pdf).unwrap();
+        assert_eq!(pages[0].page_width, 300.0);
+        assert_eq!(pages[0].page_height, 400.0);
+        let text = text_of(&pages);
+        assert!(text.contains("inside"), "{text}");
+        assert!(!text.contains("outside"), "{text}");
+    }
+
     #[test]
     fn rotated_page_extracts() {
         // Minimal uncompressed PDF, /Rotate 90.
@@ -417,6 +458,92 @@ trailer << /Root 1 0 R >>";
     }
 
     #[test]
+    fn q_restores_font_text_state() {
+        let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 4 0 R /F2 6 0 R >> >> /Contents 5 0 R >> endobj
+4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+5 0 obj << /Length 62 >> stream
+BT /F1 12 Tf 20 100 Td q /F2 12 Tf (A) Tj Q (A) Tj ET
+endstream endobj
+6 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Custom /Encoding << /Differences [65 /B] >> >> endobj
+trailer << /Root 1 0 R >>";
+        assert_eq!(text_of(&extract_pages_fast(pdf).unwrap()), "BA");
+    }
+
+    #[test]
+    fn thick_strokes_are_not_table_segments() {
+        let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >> endobj
+4 0 obj << /Length 24 >> stream
+20 w 0 0 m 100 0 l S
+endstream endobj
+trailer << /Root 1 0 R >>";
+        assert!(extract_pages_fast(pdf).unwrap()[0].segments.is_empty());
+    }
+
+    #[test]
+    fn sheared_image_uses_all_four_transformed_corners() {
+        let pdf = br"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Resources << /XObject << /Im0 6 0 R >> >> /Contents 5 0 R >> endobj
+5 0 obj << /Length 45 >> stream
+q 100 100 -100 100 200 0 cm /Im0 Do Q
+endstream endobj
+6 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 1 /ColorSpace /DeviceGray /Length 1 >> stream
+0
+endstream endobj
+trailer << /Root 1 0 R >>";
+        let images = &extract_pages_fast(pdf).unwrap()[0].images;
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].bbox.w, 200.0);
+        assert_eq!(images[0].bbox.h, 200.0);
+    }
+
+    #[test]
+    fn form_bbox_clips_text_outside_its_bounds() {
+        let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /Font << /F1 4 0 R >> /XObject << /Fm 6 0 R >> >> /Contents 5 0 R >> endobj
+4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+5 0 obj << >> stream
+q /Fm Do Q BT /F1 12 Tf 20 20 Td (visible) Tj ET
+endstream endobj
+6 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 50 50] /Resources << /Font << /F1 4 0 R >> >> >> stream
+BT /F1 12 Tf 100 100 Td (outside) Tj ET
+endstream endobj
+trailer << /Root 1 0 R >>";
+        let text = text_of(&extract_pages_fast(pdf).unwrap());
+        assert!(text.contains("visible"));
+        assert!(!text.contains("outside"), "{text}");
+    }
+
+    #[test]
+    fn form_level_hidden_ocg_is_suppressed() {
+        let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R /OCProperties << /D << /OFF [7 0 R] >> >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /Font << /F1 4 0 R >> /XObject << /Fm 6 0 R >> >> /Contents 5 0 R >> endobj
+4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+5 0 obj << >> stream
+q /Fm Do Q BT /F1 12 Tf 20 20 Td (visible) Tj ET
+endstream endobj
+6 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 200 200] /OC 7 0 R /Resources << /Font << /F1 4 0 R >> >> >> stream
+BT /F1 12 Tf 20 100 Td (hidden) Tj ET
+endstream endobj
+7 0 obj << /Type /OCG >> endobj
+trailer << /Root 1 0 R >>";
+        let text = text_of(&extract_pages_fast(pdf).unwrap());
+        assert!(text.contains("visible"));
+        assert!(!text.contains("hidden"), "{text}");
+    }
+
+    #[test]
     fn own_interpreter_close_paint_adds_implicit_edge() {
         let pdf = b"%PDF-1.4
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -442,6 +569,26 @@ endstream endobj
 trailer << /Root 1 0 R >>";
         let pages = extract_pages_fast(pdf).unwrap();
         assert_eq!(pages[0].segments.len(), 1);
+    }
+
+    #[test]
+    fn form_inside_hidden_marked_content_is_suppressed() {
+        let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R /OCProperties << /D << /OFF [7 0 R] >> >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /Font << /F1 4 0 R >> /XObject << /Fm 6 0 R >> /Properties << /MC0 7 0 R >> >> /Contents 5 0 R >> endobj
+4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+5 0 obj << >> stream
+/OC /MC0 BDC /Fm Do EMC BT /F1 12 Tf 20 20 Td (visible) Tj ET
+endstream endobj
+6 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 200 200] /Resources << /Font << /F1 4 0 R >> >> >> stream
+BT /F1 12 Tf 20 100 Td (hidden) Tj ET
+endstream endobj
+7 0 obj << /Type /OCG >> endobj
+trailer << /Root 1 0 R >>";
+        let text = text_of(&extract_pages_fast(pdf).unwrap());
+        assert!(text.contains("visible"));
+        assert!(!text.contains("hidden"), "{text}");
     }
 
     #[test]

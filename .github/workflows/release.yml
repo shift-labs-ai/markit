@@ -80,9 +80,7 @@ jobs:
 
   # ── Build: macOS (native macos-14 runners) ──────────────────────────────
   # Both targets run on the M2 ARM runner (macos-14).
-  # x86_64-apple-darwin is cross-compiled from arm64: the Apple SDK supports
-  # -arch x86_64 and mupdf-sys build.rs respects CARGO_CFG_TARGET_ARCH.
-  # # NOTE: verify MuPDF C cross-compile (arm64 → x64) on first release run.
+  # x86_64-apple-darwin is cross-compiled from arm64 with the Apple SDK.
   build-native-mac:
     name: build ${{ matrix.target }}
     needs: check-version
@@ -104,7 +102,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
 
-      # Per-target cache so arm64 and x86_64 do not share a stale MuPDF build.
+      # Per-target cache keeps cross-compiled artefacts isolated.
       # Cargo.lock is part of the cache key automatically.
       - uses: Swatinem/rust-cache@v2
         with:
@@ -133,18 +131,14 @@ jobs:
 
   # ── Build: Linux (napi-rs Docker images on same-arch runners) ───────────
   # Uses napi-rs prebuilt Docker images instead of zig cross-compilation
-  # (ferrosearch's musl approach). MuPDF compiles a large C codebase; C cross-
-  # compilation via zig is fragile compared to a native container build.
+  # (ferrosearch's musl approach).
   #
   # Arch pairing — each target runs on a same-architecture GitHub runner:
   #   x64  targets → ubuntu-latest      (x86_64)
   #   arm64 targets → ubuntu-24.04-arm  (aarch64)
   # This means gcc always compiles natively; no cross-toolchain required.
   #
-  # napi-rs images include: Node.js, npm, Rust stable, cargo, napi-cli.
-  # lts-debian also includes build-essential (gcc, make, pkg-config).
-  # lts-alpine needs make + pkgconfig added (see install step).
-  # # NOTE: verify image contents / Alpine package names on first release run.
+  # napi-rs images include Node.js, npm, Rust stable, cargo, and napi-cli.
   build-native-linux:
     name: build ${{ matrix.target }}
     needs: check-version
@@ -163,20 +157,12 @@ jobs:
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             container: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-alpine
-            alpine: true
           - target: aarch64-unknown-linux-musl
             os: ubuntu-24.04-arm
             container: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-alpine
-            alpine: true
     steps:
       - uses: actions/checkout@v4
 
-      # Alpine image may lack make + pkg-config needed by mupdf-sys build.rs.
-      # Debian image ships build-essential which already includes both.
-      # # NOTE: verify package names on first release run.
-      - name: Install C build deps (alpine only)
-        if: matrix.alpine
-        run: apk add --no-cache make pkgconfig
 
       # napi-rs images have Rust/cargo pre-installed — no dtolnay action needed.
       # rust-cache reads/writes through the bind-mounted workspace; works in Docker.

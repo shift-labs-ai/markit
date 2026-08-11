@@ -28,23 +28,96 @@ fn normalize_full_width_ascii(text: &str) -> String {
         .collect()
 }
 
+fn escape_free_text(text: &str) -> String {
+    let mut escaped = text
+        .replace('\\', "\\\\")
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('`', "\\`")
+        .replace('*', "\\*")
+        .replace('_', "\\_")
+        .replace('[', "\\[")
+        .replace(']', "\\]");
+
+    let marker_at = escaped
+        .char_indices()
+        .take_while(|(_, ch)| ch.is_ascii_whitespace())
+        .take(4)
+        .last()
+        .map_or(0, |(index, ch)| index + ch.len_utf8());
+    if marker_at <= 3 {
+        let tail = &escaped[marker_at..];
+        let block_marker = ["# ", "> ", "+ ", "- "]
+            .iter()
+            .any(|marker| tail.starts_with(marker));
+        let ordered_marker = tail
+            .find(". ")
+            .is_some_and(|dot| dot > 0 && tail[..dot].bytes().all(|byte| byte.is_ascii_digit()));
+        if block_marker {
+            escaped.insert(marker_at, '\\');
+        } else if ordered_marker {
+            let dot = tail.find(". ").unwrap();
+            escaped.insert(marker_at + dot, '\\');
+        }
+    }
+    escaped
+}
+
 fn escape_pipes(text: &str) -> String {
     normalize_full_width_ascii(text)
         .replace('|', "\\|")
         .replace('\n', "<br>")
 }
 
-/// Parse a markdown pipe-delimited row into cell strings.
-fn parse_pipe_row(line: &str) -> Vec<String> {
-    let trimmed = line.trim();
-    if !trimmed.starts_with('|') || !trimmed.ends_with('|') {
-        return vec![];
+fn escape_table_html(text: &str) -> String {
+    normalize_full_width_ascii(text)
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\n', "<br>")
+}
+
+fn render_spanning_table(table: &TableGrid) -> String {
+    let mut covered = std::collections::HashSet::new();
+    let mut rows = Vec::new();
+    for row in 0..table.rows {
+        let mut cells: Vec<_> = table.cells.iter().filter(|cell| cell.row == row).collect();
+        cells.sort_by_key(|cell| cell.col);
+        let mut rendered = Vec::new();
+        for cell in cells {
+            if covered.contains(&(cell.row, cell.col)) {
+                continue;
+            }
+            let row_span = cell.row_span.max(1);
+            let col_span = cell.col_span.max(1);
+            for r in cell.row..table.rows.min(cell.row.saturating_add(row_span)) {
+                for c in cell.col..table.cols.min(cell.col.saturating_add(col_span)) {
+                    if r != cell.row || c != cell.col {
+                        covered.insert((r, c));
+                    }
+                }
+            }
+            let tag = if row == 0 { "th" } else { "td" };
+            let row_attr = if row_span > 1 {
+                format!(" rowspan=\"{row_span}\"")
+            } else {
+                String::new()
+            };
+            let col_attr = if col_span > 1 {
+                format!(" colspan=\"{col_span}\"")
+            } else {
+                String::new()
+            };
+            rendered.push(format!(
+                "<{tag}{row_attr}{col_attr}>{}</{tag}>",
+                escape_table_html(cell.text.trim())
+            ));
+        }
+        rows.push(format!("<tr>{}</tr>", rendered.join("")));
     }
-    let inner = &trimmed[1..trimmed.len() - 1];
-    inner
-        .split('|')
-        .map(|cell| cell.trim().to_string())
-        .collect()
+    format!("<table>\n{}\n</table>", rows.join("\n"))
 }
 
 // ---------------------------------------------------------------------------
@@ -55,6 +128,13 @@ fn parse_pipe_row(line: &str) -> Vec<String> {
 pub fn render_table_to_markdown(table: &TableGrid) -> String {
     if table.rows == 0 || table.cols == 0 {
         return String::new();
+    }
+    if table
+        .cells
+        .iter()
+        .any(|cell| cell.row_span > 1 || cell.col_span > 1)
+    {
+        return render_spanning_table(table);
     }
 
     let mut matrix: Vec<Vec<String>> = (0..table.rows)
@@ -67,8 +147,7 @@ pub fn render_table_to_markdown(table: &TableGrid) -> String {
         }
     }
 
-    let normalized = normalize_shifted_sparse_columns(matrix);
-    let promoted = promote_sub_header_prefixes(normalized);
+    let promoted = matrix;
 
     let header = format!("| {} |", promoted[0].join(" | "));
     let divider = format!("| {} |", vec!["---"; promoted[0].len()].join(" | "));
@@ -84,171 +163,6 @@ pub fn render_table_to_markdown(table: &TableGrid) -> String {
         .cloned()
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-/// Fix tables with ≥5 columns where sparse single-value columns are
-/// misaligned. Shifts those values to the adjacent dense column and
-/// removes the now-empty sparse columns.
-fn normalize_shifted_sparse_columns(matrix: Vec<Vec<String>>) -> Vec<Vec<String>> {
-    if matrix.is_empty() || matrix[0].len() < 5 {
-        return matrix;
-    }
-
-    let _rows = matrix.len();
-    let cols = matrix[0].len();
-
-    let counts: Vec<usize> = (0..cols)
-        .map(|c| {
-            matrix
-                .iter()
-                .filter(|row| !row[c].trim().is_empty())
-                .count()
-        })
-        .collect();
-
-    let dense_cols: std::collections::HashSet<usize> = counts
-        .iter()
-        .enumerate()
-        .filter(|&(col, &count)| col == 0 || count >= 2)
-        .map(|(col, _)| col)
-        .collect();
-
-    let sparse_cols: Vec<usize> = counts
-        .iter()
-        .enumerate()
-        .filter(|&(col, &count)| col > 0 && col < cols - 1 && count == 1)
-        .map(|(col, _)| col)
-        .collect();
-
-    if sparse_cols.len() < 2 || dense_cols.len() < 4 {
-        return matrix;
-    }
-
-    let mut moves: Vec<(usize, usize, usize)> = Vec::new(); // (from, to, row)
-    for &from in &sparse_cols {
-        let row = matrix.iter().position(|r| !r[from].trim().is_empty());
-        let to = from + 1;
-        let row = match row {
-            Some(r) => r,
-            None => return matrix,
-        };
-        if !dense_cols.contains(&to) {
-            return matrix;
-        }
-        if !matrix[row][to].trim().is_empty() {
-            return matrix;
-        }
-        moves.push((from, to, row));
-    }
-
-    let mut copy: Vec<Vec<String>> = matrix.to_vec();
-    for &(from, to, row) in &moves {
-        if !copy[row][to].trim().is_empty() {
-            copy[row][to] = format!("{} {}", copy[row][to], copy[row][from]);
-        } else {
-            copy[row][to] = copy[row][from].clone();
-        }
-        copy[row][from] = String::new();
-    }
-
-    let keep_cols: Vec<usize> = (0..cols)
-        .filter(|&c| copy.iter().any(|row| !row[c].trim().is_empty()))
-        .collect();
-
-    if keep_cols.len() == cols {
-        return copy;
-    }
-
-    copy.iter()
-        .map(|row| keep_cols.iter().map(|&c| row[c].clone()).collect())
-        .collect()
-}
-
-/// When a data row has ≥2 parenthesized qualifiers in non-first columns
-/// (and the first column is empty), promote them into the header row.
-fn promote_sub_header_prefixes(matrix: Vec<Vec<String>>) -> Vec<Vec<String>> {
-    if matrix.len() < 2 {
-        return matrix;
-    }
-
-    static PAREN_RE: std::sync::LazyLock<regex::Regex> =
-        std::sync::LazyLock::new(|| regex::Regex::new(r"^\([^)]{1,40}\)$").unwrap());
-    let paren_re = &*PAREN_RE;
-    let mut result: Vec<Vec<String>> = matrix.to_vec();
-    let cols = matrix[0].len();
-    let mut rows_to_remove: std::collections::HashSet<usize> = std::collections::HashSet::new();
-
-    for r in 1..result.len() {
-        if rows_to_remove.contains(&r) {
-            continue;
-        }
-
-        struct Promotable {
-            col: usize,
-            prefix: String,
-            is_full_cell: bool,
-        }
-
-        let mut promotable: Vec<Promotable> = Vec::new();
-
-        for col in 1..cols {
-            let cell = result[r]
-                .get(col)
-                .map(|s| s.trim().to_string())
-                .unwrap_or_default();
-            if cell.is_empty() {
-                continue;
-            }
-
-            let parts: Vec<&str> = cell.split("<br>").collect();
-            if parts.len() == 1 && paren_re.is_match(&cell) {
-                promotable.push(Promotable {
-                    col,
-                    prefix: cell.clone(),
-                    is_full_cell: true,
-                });
-            } else if parts.len() >= 2 && paren_re.is_match(parts[0].trim()) {
-                promotable.push(Promotable {
-                    col,
-                    prefix: parts[0].trim().to_string(),
-                    is_full_cell: false,
-                });
-            }
-        }
-
-        if promotable.len() < 2 {
-            continue;
-        }
-        if promotable.iter().any(|p| p.is_full_cell) && !result[r][0].trim().is_empty() {
-            continue;
-        }
-
-        for p in &promotable {
-            let header = result[0][p.col].trim().to_string();
-            result[0][p.col] = if !header.is_empty() {
-                format!("{} {}", header, p.prefix)
-            } else {
-                p.prefix.clone()
-            };
-            if p.is_full_cell {
-                result[r][p.col] = String::new();
-            } else {
-                let parts: Vec<&str> = result[r][p.col].split("<br>").collect();
-                result[r][p.col] = parts[1..].join("<br>");
-            }
-        }
-
-        if result[r].iter().all(|cell| cell.trim().is_empty()) {
-            rows_to_remove.insert(r);
-        }
-    }
-
-    result
-        .into_iter()
-        .enumerate()
-        .filter(|(r, _)| !rows_to_remove.contains(r))
-        .map(|(_, row)| row)
-        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -543,7 +457,7 @@ fn merge_paragraph_wraps(blocks: Vec<ContentBlock>, body_fs: f64) -> Vec<Content
 }
 
 /// Remove page number blocks near the bottom of the page.
-fn remove_page_numbers(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> {
+fn remove_page_numbers(blocks: Vec<ContentBlock>, page_number: Option<u32>) -> Vec<ContentBlock> {
     static PAGE_NUM_RE: std::sync::LazyLock<regex::Regex> =
         std::sync::LazyLock::new(|| regex::Regex::new(r"^(?:#{1,6}\s*)?\d+\s*$").unwrap());
     let page_num_re = &*PAGE_NUM_RE;
@@ -556,191 +470,15 @@ fn remove_page_numbers(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> {
         .filter(|(idx, block)| {
             let is_bottom = *idx >= len.saturating_sub(3);
             let is_low_y = block.top_y <= bottom_y;
-            let is_page_num = page_num_re.is_match(block.content.trim());
-            !(is_bottom && is_low_y && is_page_num)
+            let text = block.content.trim();
+            let is_current_page = page_num_re.is_match(text)
+                && page_number.is_some_and(|page| {
+                    text.trim_start_matches('#').trim().parse::<u32>().ok() == Some(page)
+                });
+            !(is_bottom && is_low_y && is_current_page)
         })
         .map(|(_, block)| block)
         .collect()
-}
-
-// ---------------------------------------------------------------------------
-// Detached first-column table reconstruction
-// ---------------------------------------------------------------------------
-
-/// Fix tables where the first column was emitted as free text blocks
-/// around a markdown table containing only the right-side columns.
-///
-/// Detects: a plain-text header line with (N+1) tokens above an N-column
-/// markdown table, plus short label lines whose count matches the table's
-/// logical row count. Reconstructs into a proper (N+1)-column table.
-fn normalize_detached_first_column_tables(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> {
-    static HEADING_RE: std::sync::LazyLock<regex::Regex> =
-        std::sync::LazyLock::new(|| regex::Regex::new(r"^#{1,6}\s").unwrap());
-    let heading_re = &*HEADING_RE;
-    static SEPARATOR_RE: std::sync::LazyLock<regex::Regex> =
-        std::sync::LazyLock::new(|| regex::Regex::new(r"^\|\s*[-: ]+\|").unwrap());
-    let separator_re = &*SEPARATOR_RE;
-
-    let is_table_block = |text: &str| text.trim_start().starts_with('|');
-    let is_plain_block = |text: &str| !heading_re.is_match(text) && !is_table_block(text);
-    let is_short_label = |text: &str| {
-        let t = text.trim();
-        !t.is_empty() && t.len() <= 40
-    };
-    let split_tokens = |text: &str| -> Vec<String> {
-        text.split_whitespace()
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
-            .collect()
-    };
-
-    let mut replacements: std::collections::HashMap<usize, String> =
-        std::collections::HashMap::new();
-    let mut remove: std::collections::HashSet<usize> = std::collections::HashSet::new();
-
-    for table_idx in 0..blocks.len() {
-        if remove.contains(&table_idx) {
-            continue;
-        }
-        let table_block = &blocks[table_idx];
-        if !is_table_block(&table_block.content) {
-            continue;
-        }
-
-        let table_lines: Vec<String> = table_block
-            .content
-            .split('\n')
-            .map(|line| line.trim().to_string())
-            .filter(|line| line.starts_with('|'))
-            .collect();
-
-        let data_rows: Vec<Vec<String>> = table_lines
-            .iter()
-            .filter(|line| !separator_re.is_match(line))
-            .map(|line| parse_pipe_row(line))
-            .filter(|row| !row.is_empty())
-            .collect();
-
-        if data_rows.is_empty() {
-            continue;
-        }
-        let cols = data_rows[0].len();
-        if cols < 2 || data_rows.iter().any(|row| row.len() != cols) {
-            continue;
-        }
-
-        // Expand by <br> count to get logical row count
-        let mut logical_rows: Vec<Vec<String>> = Vec::new();
-        for row in &data_rows {
-            let split_cells: Vec<Vec<String>> = row
-                .iter()
-                .map(|cell| cell.split("<br>").map(|p| p.trim().to_string()).collect())
-                .collect();
-            let row_span = split_cells
-                .iter()
-                .map(|parts| parts.len())
-                .max()
-                .unwrap_or(1);
-            for k in 0..row_span {
-                logical_rows.push(
-                    split_cells
-                        .iter()
-                        .map(|parts| parts.get(k).cloned().unwrap_or_default())
-                        .collect(),
-                );
-            }
-        }
-        if logical_rows.len() < 2 {
-            continue;
-        }
-
-        // Find header with (cols + 1) non-numeric tokens
-        let mut header_idx: Option<usize> = None;
-        let mut header_tokens: Vec<String> = Vec::new();
-        let start = table_idx.saturating_sub(4);
-        for i in start..table_idx {
-            let text = normalize_full_width_ascii(blocks[i].content.trim());
-            if !is_plain_block(&text) {
-                continue;
-            }
-            let tokens = split_tokens(&text);
-            if tokens.len() == cols + 1
-                && tokens
-                    .iter()
-                    .all(|tok| !tok.chars().any(|c| c.is_ascii_digit()))
-            {
-                header_idx = Some(i);
-                header_tokens = tokens;
-            }
-        }
-        let header_idx = match header_idx {
-            Some(idx) => idx,
-            None => continue,
-        };
-
-        // Collect short label lines above/below table
-        let mut above_labels: Vec<(usize, String)> = Vec::new();
-        for i in (header_idx + 1..table_idx).rev() {
-            let text = normalize_full_width_ascii(blocks[i].content.trim());
-            if !is_plain_block(&text) || !is_short_label(&text) {
-                break;
-            }
-            above_labels.push((i, text));
-        }
-        above_labels.reverse();
-
-        let mut below_labels: Vec<(usize, String)> = Vec::new();
-        for i in (table_idx + 1)..blocks.len() {
-            let text = normalize_full_width_ascii(blocks[i].content.trim());
-            if !is_plain_block(&text) || !is_short_label(&text) {
-                break;
-            }
-            below_labels.push((i, text));
-        }
-
-        let mut labels: Vec<(usize, String)> = Vec::new();
-        labels.extend(above_labels);
-        labels.extend(below_labels);
-
-        if labels.len() != logical_rows.len() {
-            continue;
-        }
-
-        // Reconstruct the full table
-        let mut normalized_lines: Vec<String> = Vec::new();
-        normalized_lines.push(format!("| {} |", header_tokens.join(" | ")));
-        normalized_lines.push(format!("| {} |", vec!["---"; cols + 1].join(" | ")));
-        for (r, logical_row) in logical_rows.iter().enumerate() {
-            normalized_lines.push(format!("| {} | {} |", labels[r].1, logical_row.join(" | ")));
-        }
-
-        replacements.insert(table_idx, normalized_lines.join("\n"));
-        remove.insert(header_idx);
-        for (idx, _) in &labels {
-            remove.insert(*idx);
-        }
-    }
-
-    if replacements.is_empty() && remove.is_empty() {
-        return blocks;
-    }
-
-    let mut out: Vec<ContentBlock> = Vec::new();
-    for (i, block) in blocks.into_iter().enumerate() {
-        if remove.contains(&i) {
-            continue;
-        }
-        if let Some(replaced) = replacements.get(&i) {
-            out.push(ContentBlock {
-                top_y: block.top_y,
-                content: replaced.clone(),
-                is_tabular: false,
-            });
-        } else {
-            out.push(block);
-        }
-    }
-    out
 }
 
 // ---------------------------------------------------------------------------
@@ -748,6 +486,7 @@ fn normalize_detached_first_column_tables(blocks: Vec<ContentBlock>) -> Vec<Cont
 // ---------------------------------------------------------------------------
 
 /// An image block with position and pre-rendered markdown.
+#[derive(Clone)]
 pub struct ImageBlock {
     pub top_y: f64,
     pub markdown: String,
@@ -770,7 +509,7 @@ pub fn render_page_content(
         let prefix = heading_prefix(line.font_size, body_fs, line.is_bold);
         blocks.push(ContentBlock {
             top_y: line.top_y,
-            content: format!("{}{}", prefix, line.text),
+            content: format!("{}{}", prefix, escape_free_text(&line.text)),
             is_tabular: prefix.is_empty() && line.is_tabular,
         });
     }
@@ -803,12 +542,14 @@ pub fn render_page_content(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    let cleaned = remove_page_numbers(blocks);
+    let page_number = free_text_boxes
+        .first()
+        .map(|text| text.page_number)
+        .or_else(|| tables.first().map(|table| table.page_number));
+    let cleaned = remove_page_numbers(blocks, page_number);
     let headings_merged = merge_consecutive_headings(cleaned, body_fs);
     let merged = merge_paragraph_wraps(headings_merged, body_fs);
-    let normalized = normalize_detached_first_column_tables(merged);
-
-    normalized
+    merged
         .iter()
         .map(|b| b.content.as_str())
         .collect::<Vec<_>>()
@@ -1019,6 +760,76 @@ mod tests {
     }
 
     #[test]
+    fn does_not_move_or_delete_legitimate_sparse_columns() {
+        let rows = [
+            ["H0", "", "H2", "", "H4", "H5"],
+            ["A", "keep-1", "", "keep-3", "", "E"],
+            ["B", "", "C", "", "F", "G"],
+        ];
+        let cells = rows
+            .iter()
+            .enumerate()
+            .flat_map(|(row, values)| {
+                values.iter().enumerate().map(move |(col, text)| TableCell {
+                    row,
+                    col,
+                    text: (*text).into(),
+                    row_span: 1,
+                    col_span: 1,
+                })
+            })
+            .collect();
+        let table = TableGrid {
+            page_number: 1,
+            rows: 3,
+            cols: 6,
+            cells,
+            warnings: vec![],
+            top_y: 300.0,
+            is_borderless: false,
+        };
+        let md = render_table_to_markdown(&table);
+        assert!(md.contains("| H0 |  | H2 |  | H4 | H5 |"), "{md}");
+        assert!(md.contains("| A | keep-1 |  | keep-3 |  | E |"), "{md}");
+    }
+
+    #[test]
+    fn renders_merged_cells_with_html_span_attributes() {
+        let grid = TableGrid {
+            page_number: 1,
+            top_y: 100.0,
+            rows: 2,
+            cols: 2,
+            cells: vec![
+                TableCell {
+                    row: 0,
+                    col: 0,
+                    text: "A&B".into(),
+                    row_span: 2,
+                    col_span: 1,
+                },
+                TableCell {
+                    row: 0,
+                    col: 1,
+                    text: "Header".into(),
+                    row_span: 1,
+                    col_span: 1,
+                },
+                TableCell {
+                    row: 1,
+                    col: 1,
+                    text: "Value".into(),
+                    row_span: 1,
+                    col_span: 1,
+                },
+            ],
+            warnings: Vec::new(),
+            is_borderless: false,
+        };
+        assert!(render_table_to_markdown(&grid).contains("<th rowspan=\"2\">A&amp;B</th>"));
+    }
+
+    #[test]
     fn renders_a_single_row_table_header_only() {
         reset_id();
         let g = make_grid(Some(TableGridOverrides {
@@ -1056,6 +867,20 @@ mod tests {
         reset_id();
         let result = render_page_content(&[bx("Hello world")], &[], &[], None);
         assert!(result.contains("Hello world"));
+    }
+
+    #[test]
+    fn escapes_literal_markdown_and_html_in_extracted_text() {
+        let boxes = vec![
+            bx_font("# literal", 600.0, 9.0),
+            bx_font("*not emphasis* <tag>", 500.0, 9.0),
+        ];
+        let result = render_page_content(&boxes, &[], &[], None);
+        assert!(result.contains("\\# literal"), "{result}");
+        assert!(
+            result.contains("\\*not emphasis\\* &lt;tag&gt;"),
+            "{result}"
+        );
     }
 
     #[test]
@@ -1238,12 +1063,20 @@ mod tests {
         reset_id();
         let boxes = vec![
             bx_y("Real content", 500.0),
-            bx_y("42", 50.0), // bottom of page, looks like page number
+            bx_y("1", 50.0), // matches the current page number
         ];
         let result = render_page_content(&boxes, &[], &[], None);
         assert!(result.contains("Real content"));
-        let has_42 = regex::Regex::new(r"\b42\b").unwrap();
-        assert!(!has_42.is_match(&result));
+        let has_1 = regex::Regex::new(r"\b1\b").unwrap();
+        assert!(!has_1.is_match(&result));
+    }
+
+    #[test]
+    fn keeps_a_different_standalone_number_near_the_bottom() {
+        reset_id();
+        let boxes = vec![bx_y("Real content", 500.0), bx_y("42", 50.0)];
+        let result = render_page_content(&boxes, &[], &[], None);
+        assert!(result.contains("42"));
     }
 
     #[test]

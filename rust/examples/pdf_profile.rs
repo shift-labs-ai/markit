@@ -1,20 +1,7 @@
 //! Profiling harness: times extract vs process phases.
 //!
-//! Findings (Apple M5, intel-743835-004.pdf, 224 pages): extraction is ~99%
-//! of conversion time; header-stripping and rendering are ~1ms combined.
-//! Parallel extraction across threads was tried and reverted: MuPDF
-//! serializes allocation through a shared-context lock, so 2 threads gained
-//! only 9% and >=3 threads were slower than sequential (10 threads: 2x
-//! slower). Real PDF parallelism needs a lock-free parser (cf. anydoc's
-//! lopdf+rayon), not more threads on MuPDF.
-//!
-//! Also tried and reverted: fully independent per-thread base contexts via
-//! mupdf-sys (mupdf_new_base_context per worker). MuPDF's process-global
-//! state (harfbuzz/freetype locks) assumes a single shared lock set;
-//! independent lock sets deadlock inside glyph handling (observed: all
-//! workers parked in pthread_mutex_lock under stext, forever). Both
-//! parallelism strategies are structurally closed with MuPDF in-process.
-use markit::converters::pdf::extract::extract_pages;
+//! Measures the own PDF engine's extraction and downstream rendering phases.
+use markit::converters::pdf::fast_extract::extract_pages_fast;
 use markit::converters::pdf::headers::strip_headers_footers;
 use markit::types::{Converter, StreamInfo};
 
@@ -23,7 +10,7 @@ fn main() {
     let input = std::fs::read(&path).unwrap();
 
     let t0 = std::time::Instant::now();
-    let mut pages = extract_pages(&input).unwrap();
+    let mut pages = extract_pages_fast(&input).unwrap();
     let t_extract = t0.elapsed();
 
     let t1 = std::time::Instant::now();

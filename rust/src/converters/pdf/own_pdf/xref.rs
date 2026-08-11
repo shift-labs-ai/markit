@@ -10,7 +10,7 @@ use super::values::{dget, Dict, Val};
 
 #[derive(Clone, Copy, Debug)]
 pub(super) enum XrefEntry {
-    Offset(usize),
+    Offset { at: usize, generation: u16 },
     InStream { stream_obj: u32, index: usize },
 }
 
@@ -79,12 +79,16 @@ impl<'a> Pdf<'a> {
                     bail!("truncated xref");
                 }
                 let offset: usize = std::str::from_utf8(&entry[0..10])?.trim().parse()?;
+                let generation: u16 = std::str::from_utf8(&entry[11..16])?.trim().parse()?;
                 let kind = entry[17];
                 let num = first
                     .checked_add(i as u32)
                     .ok_or_else(|| anyhow!("xref object number overflow"))?;
                 if kind == b'n' {
-                    self.xref.entry(num).or_insert(XrefEntry::Offset(offset));
+                    self.xref.entry(num).or_insert(XrefEntry::Offset {
+                        at: offset,
+                        generation,
+                    });
                 }
                 lx.pos += 20;
                 // tolerate 19-byte lines (single-byte EOL)
@@ -157,9 +161,12 @@ impl<'a> Pdf<'a> {
                     .ok_or_else(|| anyhow!("xref object number overflow"))?;
                 match t {
                     1 => {
-                        self.xref
-                            .entry(num)
-                            .or_insert(XrefEntry::Offset(b2 as usize));
+                        let generation = u16::try_from(b3)
+                            .map_err(|_| anyhow!("xref generation exceeds u16"))?;
+                        self.xref.entry(num).or_insert(XrefEntry::Offset {
+                            at: b2 as usize,
+                            generation,
+                        });
                     }
                     2 => {
                         self.xref.entry(num).or_insert(XrefEntry::InStream {
@@ -188,6 +195,7 @@ pub(super) fn find_startxref(data: &[u8]) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use elsa::FrozenMap;
     use rustc_hash::FxHashMap;
     use std::cell::RefCell;
 
@@ -196,11 +204,11 @@ mod tests {
             data,
             xref: FxHashMap::default(),
             trailer: Vec::new(),
-            objstm_cache: RefCell::new(FxHashMap::default()),
+            objstm_cache: FrozenMap::new(),
             objstm_in_progress: RefCell::new(Default::default()),
-            decrypt: None,
-            legacy: None,
-            legacy_cache: RefCell::new(FxHashMap::default()),
+            decrypt: RefCell::new(None),
+            legacy: RefCell::new(None),
+            legacy_cache: FrozenMap::new(),
         }
     }
 
@@ -225,6 +233,19 @@ endobj";
             pdf.load_xref_stream(0).is_err(),
             "oversized W field accepted"
         );
+    }
+
+    #[test]
+    fn classic_xref_preserves_object_generation() {
+        let data = b"xref
+5 1
+0000000000 00007 n \ntrailer << /Size 6 >>";
+        let mut pdf = blank_pdf(data);
+        pdf.load_xref_table(0).unwrap();
+        assert!(matches!(
+            pdf.xref.get(&5),
+            Some(XrefEntry::Offset { generation: 7, .. })
+        ));
     }
 
     #[test]

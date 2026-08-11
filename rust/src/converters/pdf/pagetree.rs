@@ -29,6 +29,7 @@ pub(crate) fn collect_hidden_ocgs(pdf: &Pdf, root: &Dict) -> std::rc::Rc<FxHashS
 #[derive(Clone, Default)]
 pub(crate) struct Inherit<'a> {
     pub(crate) media: Option<Vec<f64>>,
+    pub(crate) crop: Option<Vec<f64>>,
     pub(crate) rotate: Option<f64>,
     pub(crate) resources: Option<Dict<'a>>,
 }
@@ -62,6 +63,15 @@ fn walk_pages_inner<'a>(
             .collect();
         if values.len() == 4 {
             inh.media = Some(values);
+        }
+    }
+    if let Some(Val::Array(a)) = pdf.dict_get(node, b"CropBox")? {
+        let values: Vec<f64> = a
+            .iter()
+            .filter_map(|value| pdf.resolve(value).ok().and_then(|v| v.as_num()))
+            .collect();
+        if values.len() == 4 {
+            inh.crop = Some(values);
         }
     }
     if let Some(value) = pdf.dict_get(node, b"Rotate")?.and_then(|v| v.as_num()) {

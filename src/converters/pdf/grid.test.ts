@@ -134,6 +134,19 @@ describe("resolveTableGrids: single table", () => {
     expect(consumedIds).toContain(inside.id);
     expect(consumedIds).not.toContain(outside.id);
   });
+
+  it("accepts horizontal borders drawn right-to-left", () => {
+    const reversed = tableSegs([0, 300, 1000], yLines).map((s) =>
+      s.y1 === s.y2 ? { ...s, x1: s.x2, x2: s.x1 } : s,
+    );
+    const boxes = [
+      tb("Name", 150, 375),
+      tb("Role", 650, 375),
+      tb("Alice", 150, 325),
+      tb("CEO", 650, 325),
+    ];
+    expect(resolveTableGrids(1, boxes, reversed).grids).toHaveLength(1);
+  });
 });
 
 // ---------------------------------------------------------------------------

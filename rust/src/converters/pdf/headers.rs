@@ -18,11 +18,13 @@ use super::types::PageContent;
 /// Minimum number of pages to enable header/footer detection.
 const MIN_PAGES: usize = 5;
 
-/// Minimum Y position for top zone (from bottom of page in PDF coords).
-const TOP_ZONE_MIN_Y: f64 = 700.0;
+/// Fraction of page height treated as each running-margin zone.
+const MARGIN_ZONE_RATIO: f64 = 0.12;
 
-/// Maximum Y position for bottom zone.
-const BOTTOM_ZONE_MAX_Y: f64 = 80.0;
+fn in_margin_zone(mid_y: f64, page_height: f64) -> bool {
+    let margin = page_height * MARGIN_ZONE_RATIO;
+    mid_y >= page_height - margin || mid_y <= margin
+}
 
 /// Minimum consecutive pages a text must appear on to be considered a
 /// running header/footer.
@@ -42,7 +44,7 @@ pub fn strip_headers_footers(pages: &mut [PageContent]) {
         let mut zone_texts: HashSet<String> = HashSet::new();
         for tb in &page.text_boxes {
             let mid_y = (tb.bounds.top + tb.bounds.bottom) / 2.0;
-            if mid_y >= TOP_ZONE_MIN_Y || mid_y <= BOTTOM_ZONE_MAX_Y {
+            if in_margin_zone(mid_y, page.page_height) {
                 let key = normalize_whitespace(tb.text.trim());
                 if !key.is_empty() {
                     zone_texts.insert(key);
@@ -111,7 +113,7 @@ pub fn strip_headers_footers(pages: &mut [PageContent]) {
     for page in pages.iter_mut() {
         page.text_boxes.retain(|tb| {
             let mid_y = (tb.bounds.top + tb.bounds.bottom) / 2.0;
-            if mid_y < TOP_ZONE_MIN_Y && mid_y > BOTTOM_ZONE_MAX_Y {
+            if !in_margin_zone(mid_y, page.page_height) {
                 return true;
             }
 
@@ -163,6 +165,8 @@ mod tests {
     fn make_page(page_number: u32, texts: Vec<TextBox>) -> PageContent {
         PageContent {
             page_number,
+            page_width: 612.0,
+            page_height: 792.0,
             text_boxes: texts,
             segments: Vec::new(),
             images: Vec::new(),
@@ -210,6 +214,28 @@ mod tests {
                 page.page_number
             );
         }
+    }
+
+    #[test]
+    fn strips_repeated_header_on_short_pages() {
+        let mut pages: Vec<PageContent> = (1..=10)
+            .map(|i| {
+                let mut page = make_page(
+                    i,
+                    vec![
+                        make_text_box("Short-page header", 370.0, 360.0, i),
+                        make_text_box("Body", 220.0, 210.0, i),
+                    ],
+                );
+                page.page_height = 400.0;
+                page
+            })
+            .collect();
+        strip_headers_footers(&mut pages);
+        assert!(pages.iter().all(|page| page
+            .text_boxes
+            .iter()
+            .all(|text| text.text != "Short-page header")));
     }
 
     #[test]

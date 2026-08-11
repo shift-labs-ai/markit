@@ -72,53 +72,31 @@ export function detectColumns(textBoxes: TextBox[]): ColumnLayout {
     return { columnCount: 1, columns: [textBoxes], boundaries: [] };
   }
 
-  // Find the largest gap between consecutive left-edge positions
-  let maxGap = 0;
-  let gapLeft = 0;
-  let gapRight = 0;
-
+  const boundaries: number[] = [];
   for (let i = 1; i < lefts.length; i++) {
     const gap = lefts[i] - lefts[i - 1];
-    if (gap > maxGap) {
-      maxGap = gap;
-      gapLeft = lefts[i - 1];
-      gapRight = lefts[i];
+    if (gap >= MIN_GAP_PTS && gap / textWidth >= MIN_GAP_RATIO) {
+      boundaries.push((lefts[i - 1] + lefts[i]) / 2);
     }
   }
 
-  const gapRatio = maxGap / textWidth;
-
-  if (gapRatio < MIN_GAP_RATIO || maxGap < MIN_GAP_PTS) {
+  if (boundaries.length === 0) {
     return { columnCount: 1, columns: [textBoxes], boundaries: [] };
   }
 
-  // Split point is the midpoint of the gap
-  const splitX = (gapLeft + gapRight) / 2;
-
-  // Assign boxes to columns based on center X
-  const leftCol: TextBox[] = [];
-  const rightCol: TextBox[] = [];
-
-  for (const tb of textBoxes) {
-    const cx = (tb.bounds.left + tb.bounds.right) / 2;
-    if (cx < splitX) {
-      leftCol.push(tb);
-    } else {
-      rightCol.push(tb);
-    }
+  const columns: TextBox[][] = Array.from(
+    { length: boundaries.length + 1 },
+    () => [],
+  );
+  for (const box of textBoxes) {
+    const centerX = (box.bounds.left + box.bounds.right) / 2;
+    const column = boundaries.findIndex((boundary) => centerX < boundary);
+    columns[column < 0 ? columns.length - 1 : column].push(box);
   }
 
-  // Validate both columns have enough content
-  if (
-    leftCol.length < MIN_BOXES_PER_COLUMN ||
-    rightCol.length < MIN_BOXES_PER_COLUMN
-  ) {
+  if (columns.some((column) => column.length < MIN_BOXES_PER_COLUMN)) {
     return { columnCount: 1, columns: [textBoxes], boundaries: [] };
   }
 
-  return {
-    columnCount: 2,
-    columns: [leftCol, rightCol],
-    boundaries: [splitX],
-  };
+  return { columnCount: columns.length, columns, boundaries };
 }

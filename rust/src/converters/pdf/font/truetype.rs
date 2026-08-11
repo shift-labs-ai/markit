@@ -5,7 +5,7 @@
 //! program still knows what its glyphs mean: the cmap table maps
 //! unicode->glyph (invertible), the symbol cmap maps code->glyph, and
 //! the post table names glyphs outright. This is the same recovery
-//! chain MuPDF walks.
+//! chain used by mature PDF engines.
 
 fn u16be(d: &[u8], at: usize) -> Option<u16> {
     Some(u16::from_be_bytes([*d.get(at)?, *d.get(at + 1)?]))

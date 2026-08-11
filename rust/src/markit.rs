@@ -365,6 +365,15 @@ impl Markit {
     /// Convert a buffer with stream info to markdown.
     pub fn convert(&self, input: &[u8], info: &StreamInfo) -> Result<ConversionResult> {
         let mut errors: Vec<(&'static str, anyhow::Error)> = Vec::new();
+        let mut detected_info;
+        let info =
+            if info.extension.is_none() && info.mimetype.is_none() && input.starts_with(b"%PDF-") {
+                detected_info = info.clone();
+                detected_info.mimetype = Some("application/pdf".into());
+                &detected_info
+            } else {
+                info
+            };
 
         for converter in &self.converters {
             if !converter.accepts(info) {
@@ -862,5 +871,23 @@ Handled by converter hook."
         assert_eq!(extract_path("https://example.com/foo/bar"), "/foo/bar");
         assert_eq!(extract_path("https://example.com/foo?q=1"), "/foo");
         assert_eq!(extract_path("https://example.com"), "/");
+    }
+
+    #[test]
+    fn converts_pdf_magic_without_stream_metadata() {
+        let input = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj
+4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+5 0 obj << /Length 42 >> stream
+BT /F1 12 Tf 20 100 Td (stdin pdf) Tj ET
+endstream endobj
+trailer << /Root 1 0 R >>";
+        let result = Markit::new()
+            .convert(input, &StreamInfo::default())
+            .unwrap();
+        assert!(result.markdown.contains("stdin pdf"), "{}", result.markdown);
+        assert!(!result.markdown.starts_with("%PDF-"));
     }
 }

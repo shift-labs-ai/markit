@@ -17,7 +17,7 @@ pub(crate) struct Decryptor {
 }
 
 impl<'a> Pdf<'a> {
-    pub(super) fn setup_decryption(&mut self) -> Result<()> {
+    pub(super) fn setup_decryption(&self) -> Result<()> {
         let Some(enc) = dget(&self.trailer, b"Encrypt") else {
             return Ok(());
         };
@@ -27,7 +27,7 @@ impl<'a> Pdf<'a> {
         let Val::Dict(enc) = self.resolve(enc)? else {
             bail!("bad Encrypt");
         };
-        let g = |key: &[u8]| -> Result<Option<Val<'a>>> { self.dict_get(&enc, key) };
+        let g = |key: &[u8]| self.dict_get(&enc, key);
 
         if !matches!(g(b"Filter")?, Some(Val::Name(b"Standard"))) {
             bail!("non-standard security handler");
@@ -73,7 +73,7 @@ impl<'a> Pdf<'a> {
         if hash_2b(pw, &u[32..40], b"", r) == u[0..32] {
             let ik = hash_2b(pw, &u[40..48], b"", r);
             let key = aes256_cbc_nopad_decrypt(&ik, &[0u8; 16], &ue[..32])?;
-            self.decrypt = Some(Decryptor {
+            *self.decrypt.borrow_mut() = Some(Decryptor {
                 key: key.try_into().map_err(|_| anyhow!("bad UE"))?,
             });
             return Ok(());
@@ -82,7 +82,7 @@ impl<'a> Pdf<'a> {
         if hash_2b(pw, &o[32..40], &u[..48], r) == o[0..32] {
             let ik = hash_2b(pw, &o[40..48], &u[..48], r);
             let key = aes256_cbc_nopad_decrypt(&ik, &[0u8; 16], &oe[..32])?;
-            self.decrypt = Some(Decryptor {
+            *self.decrypt.borrow_mut() = Some(Decryptor {
                 key: key.try_into().map_err(|_| anyhow!("bad OE"))?,
             });
             return Ok(());
@@ -96,7 +96,7 @@ impl<'a> Pdf<'a> {
     }
 
     /// Legacy (V<5) key schedule: Algorithm 2 with the empty user password.
-    pub(super) fn setup_legacy(&mut self, enc: &Dict<'a>, v: i64, r: i64) -> Result<()> {
+    pub(super) fn setup_legacy(&self, enc: &Dict<'_>, v: i64, r: i64) -> Result<()> {
         let get_str = |k: &[u8]| -> Result<Vec<u8>> {
             match self.dict_get(enc, k)? {
                 Some(Val::Str(s)) => Ok(s),
@@ -189,7 +189,7 @@ impl<'a> Pdf<'a> {
             u.len() >= 16 && x[..16] == u[..16]
         };
         if ok {
-            self.legacy = Some(LegacyCrypt { key, aes });
+            *self.legacy.borrow_mut() = Some(LegacyCrypt { key, aes });
             return Ok(());
         }
 
@@ -243,25 +243,29 @@ impl<'a> Pdf<'a> {
         if !ok2 {
             bail!("password required");
         }
-        self.legacy = Some(LegacyCrypt { key: key2, aes });
+        *self.legacy.borrow_mut() = Some(LegacyCrypt { key: key2, aes });
         Ok(())
     }
 
     /// Legacy per-object stream decryption with caching.
-    pub(crate) fn legacy_decrypt(&self, num: u32, raw: &[u8]) -> Result<&'a [u8]> {
-        let lc = self.legacy.as_ref().expect("legacy crypt");
-        if !self.legacy_cache.borrow().contains_key(&num) {
-            let plain = lc.decrypt_object(num, 0, raw)?;
-            self.legacy_cache.borrow_mut().insert(num, plain);
+    pub(crate) fn legacy_decrypt<'s>(
+        &'s self,
+        num: u32,
+        generation: u16,
+        raw: &[u8],
+    ) -> Result<&'s [u8]> {
+        if self.legacy_cache.get(&num).is_none() {
+            let legacy = self.legacy.borrow();
+            let lc = legacy.as_ref().expect("legacy crypt");
+            let plain = lc.decrypt_object(num, generation, raw)?;
+            self.legacy_cache.insert(num, plain.into_boxed_slice());
         }
-        let cache = self.legacy_cache.borrow();
-        let v = cache.get(&num).unwrap();
-        // Entries are never evicted; the Vec's heap allocation is stable.
-        Ok(unsafe { std::slice::from_raw_parts(v.as_ptr(), v.len()) })
+        Ok(self.legacy_cache.get(&num).unwrap())
     }
 
     pub(crate) fn decrypt_stream(&self, raw: &[u8]) -> Result<Vec<u8>> {
-        let Some(d) = &self.decrypt else {
+        let decrypt = self.decrypt.borrow();
+        let Some(d) = decrypt.as_ref() else {
             return Ok(raw.to_vec());
         };
         if raw.len() < 16 {

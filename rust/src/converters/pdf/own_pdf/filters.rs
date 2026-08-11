@@ -23,7 +23,7 @@ pub fn decode_stream<'a>(dict: &Dict<'a>, raw: &[u8], pdf: &Pdf<'a>) -> Result<V
     // Decryption applies to the raw bytes, before any filter. Streams
     // reached before setup (the xref stream itself) are never encrypted.
     let decrypted;
-    let raw: &[u8] = if pdf.decrypt.is_some() {
+    let raw: &[u8] = if pdf.decrypt.borrow().is_some() {
         decrypted = pdf.decrypt_stream(raw)?;
         &decrypted
     } else {
@@ -421,6 +421,7 @@ mod tests {
 
     #[test]
     fn excessive_filter_chain_is_rejected() {
+        use elsa::FrozenMap;
         use rustc_hash::FxHashMap;
         use std::cell::RefCell;
 
@@ -428,11 +429,11 @@ mod tests {
             data: b"",
             xref: FxHashMap::default(),
             trailer: Vec::new(),
-            objstm_cache: RefCell::new(FxHashMap::default()),
+            objstm_cache: FrozenMap::new(),
             objstm_in_progress: RefCell::new(Default::default()),
-            decrypt: None,
-            legacy: None,
-            legacy_cache: RefCell::new(FxHashMap::default()),
+            decrypt: RefCell::new(None),
+            legacy: RefCell::new(None),
+            legacy_cache: FrozenMap::new(),
         };
         let filters = (0..9)
             .map(|_| Val::Name(b"ASCIIHexDecode".as_slice()))

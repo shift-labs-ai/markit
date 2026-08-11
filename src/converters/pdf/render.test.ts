@@ -106,6 +106,44 @@ describe("renderTableToMarkdown", () => {
     expect(renderTableToMarkdown(g)).toContain("A+B");
   });
 
+  it("does not move or delete legitimate sparse columns", () => {
+    const cells = [
+      ["H0", "", "H2", "", "H4", "H5"],
+      ["A", "keep-1", "", "keep-3", "", "E"],
+      ["B", "", "C", "", "F", "G"],
+    ].flatMap((row, r) =>
+      row.map((text, c) => ({
+        row: r,
+        col: c,
+        text,
+        rowSpan: 1,
+        colSpan: 1,
+      })),
+    );
+    const md = renderTableToMarkdown(makeGrid({ rows: 3, cols: 6, cells }));
+    expect(md).toContain("| H0 |  | H2 |  | H4 | H5 |");
+    expect(md).toContain("| A | keep-1 |  | keep-3 |  | E |");
+  });
+
+  it("renders merged cells with HTML span attributes", () => {
+    const table: TableGrid = {
+      pageNumber: 1,
+      topY: 100,
+      rows: 2,
+      cols: 2,
+      cells: [
+        { row: 0, col: 0, text: "A&B", rowSpan: 2, colSpan: 1 },
+        { row: 0, col: 1, text: "Header", rowSpan: 1, colSpan: 1 },
+        { row: 1, col: 1, text: "Value", rowSpan: 1, colSpan: 1 },
+      ],
+      warnings: [],
+      isBorderless: false,
+    };
+    expect(renderTableToMarkdown(table)).toContain(
+      '<th rowspan="2">A&amp;B</th>',
+    );
+  });
+
   it("renders a single-row table (header only)", () => {
     const g = makeGrid({
       rows: 1,
@@ -129,6 +167,15 @@ describe("renderPageContent: free text", () => {
   it("outputs plain text", () => {
     const result = renderPageContent([box("Hello world")], []);
     expect(result).toContain("Hello world");
+  });
+
+  it("escapes literal markdown and HTML in extracted text", () => {
+    const result = renderPageContent(
+      [box("# literal", { y: 600 }), box("*not emphasis* <tag>", { y: 500 })],
+      [],
+    );
+    expect(result).toContain("\\# literal");
+    expect(result).toContain("\\*not emphasis\\* &lt;tag&gt;");
   });
 
   it("merges text boxes on the same Y line", () => {
@@ -293,11 +340,19 @@ describe("renderPageContent: page number removal", () => {
   it("removes standalone page numbers at the bottom", () => {
     const boxes = [
       box("Real content", { y: 500 }),
-      box("42", { y: 50 }), // bottom of page, looks like page number
+      box("1", { y: 50 }), // matches the current page number
     ];
     const result = renderPageContent(boxes, []);
     expect(result).toContain("Real content");
-    expect(result).not.toMatch(/\b42\b/);
+    expect(result).not.toMatch(/\b1\b/);
+  });
+
+  it("keeps a different standalone number near the bottom", () => {
+    const result = renderPageContent(
+      [box("Real content", { y: 500 }), box("42", { y: 50 })],
+      [],
+    );
+    expect(result).toContain("42");
   });
 
   it("does not remove numbers that are part of content", () => {

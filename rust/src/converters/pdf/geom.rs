@@ -41,9 +41,36 @@ impl Mat {
         )
     }
 
+    /// Magnitude of the x-axis scale.
+    pub(crate) fn x_scale(&self) -> f64 {
+        (self.a * self.a + self.b * self.b).sqrt()
+    }
+
     /// Magnitude of the y-axis scale (for font size in device space).
     pub(crate) fn y_scale(&self) -> f64 {
         (self.c * self.c + self.d * self.d).sqrt()
+    }
+
+    /// Axis-aligned bounds of a transformed rectangle. All four corners
+    /// matter under rotation and shear; a diagonal pair is insufficient.
+    pub(crate) fn rect_bbox(&self, x0: f64, y0: f64, x1: f64, y1: f64) -> (f64, f64, f64, f64) {
+        let points = [
+            self.apply(x0, y0),
+            self.apply(x1, y0),
+            self.apply(x0, y1),
+            self.apply(x1, y1),
+        ];
+        points.iter().fold(
+            (
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::NEG_INFINITY,
+            ),
+            |(min_x, min_y, max_x, max_y), &(x, y)| {
+                (min_x.min(x), min_y.min(y), max_x.max(x), max_y.max(y))
+            },
+        )
     }
 }
 
@@ -51,7 +78,12 @@ impl Mat {
 /// /Rotate transform, plus the resulting (visual) page height. Rotation
 /// maps content into an upright page of swapped dimensions, so the whole
 /// downstream pipeline sees a normal page.
-pub(crate) fn rotation_base(rotate: Option<f64>, mb: &[f64], mx0: f64, my0: f64) -> (Mat, f64) {
+pub(crate) fn rotation_base(
+    rotate: Option<f64>,
+    mb: &[f64],
+    mx0: f64,
+    my0: f64,
+) -> (Mat, f64, f64) {
     let w = (mb[2] - mb[0]).abs();
     let h = (mb[3] - mb[1]).abs();
     let t = Mat {
@@ -74,6 +106,7 @@ pub(crate) fn rotation_base(rotate: Option<f64>, mb: &[f64], mx0: f64, my0: f64)
                 e: 0.0,
                 f: w,
             }),
+            h,
             w,
         ),
         180 => (
@@ -85,6 +118,7 @@ pub(crate) fn rotation_base(rotate: Option<f64>, mb: &[f64], mx0: f64, my0: f64)
                 e: w,
                 f: h,
             }),
+            w,
             h,
         ),
         270 => (
@@ -96,8 +130,9 @@ pub(crate) fn rotation_base(rotate: Option<f64>, mb: &[f64], mx0: f64, my0: f64)
                 e: h,
                 f: 0.0,
             }),
+            h,
             w,
         ),
-        _ => (t, h),
+        _ => (t, w, h),
     }
 }

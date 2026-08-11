@@ -62,7 +62,7 @@ pub struct TableGrid {
 pub struct ImageRegion {
     pub id: String,
     pub page_number: u32,
-    /// Bounding box in mupdf coordinates (top-left origin).
+    /// Bounding box in page coordinates (top-left origin).
     pub bbox: Rect,
     /// Y position in PDF coordinates (bottom-left) for ordering.
     pub top_y: f64,
@@ -80,6 +80,8 @@ pub struct Rect {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PageContent {
     pub page_number: u32,
+    pub page_width: f64,
+    pub page_height: f64,
     pub text_boxes: Vec<TextBox>,
     pub segments: Vec<Segment>,
     pub images: Vec<ImageRegion>,

@@ -9,6 +9,7 @@ license = "MIT"
 aes = "0.8"
 anyhow = "1"
 cbc = "0.1"
+elsa = "1.11"
 clap = { version = "4", features = ["derive"] }
 ego-tree = "0.11"
 # Not used directly: pins zip's flate2 to the zlib-rs backend, the fastest
@@ -20,7 +21,6 @@ lofty = "0.25.0"
 memchr = "2"
 # PNG encoding for extracted PDF images (pure Rust, MIT/Apache).
 png = "0.18"
-mupdf = "0.8.0"
 napi = { version = "2", default-features = false, features = ["napi8", "async"], optional = true }
 napi-derive = { version = "2", optional = true }
 regex = "1.13.1"

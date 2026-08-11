@@ -373,7 +373,10 @@ pub fn resolve_table_grids(
     let filtered_h: Vec<Segment> = horizontal
         .iter()
         .filter(|s| {
-            s.y1 >= text_y_min && s.y1 <= text_y_max && s.x1 <= text_x_max && s.x2 >= text_x_min
+            s.y1 >= text_y_min
+                && s.y1 <= text_y_max
+                && s.x1.min(s.x2) <= text_x_max
+                && s.x1.max(s.x2) >= text_x_min
         })
         .map(|s| (*s).clone())
         .collect();
@@ -381,7 +384,7 @@ pub fn resolve_table_grids(
     let h_max_x2 = if !filtered_h.is_empty() {
         filtered_h
             .iter()
-            .map(|s| s.x2)
+            .map(|s| s.x1.max(s.x2))
             .fold(f64::NEG_INFINITY, f64::max)
     } else {
         text_x_max
@@ -463,11 +466,11 @@ pub fn resolve_table_grids(
 
             let hx_min = group_horiz
                 .iter()
-                .map(|s| s.x1)
+                .map(|s| s.x1.min(s.x2))
                 .fold(f64::INFINITY, f64::min);
             let hx_max = group_horiz
                 .iter()
-                .map(|s| s.x2)
+                .map(|s| s.x1.max(s.x2))
                 .fold(f64::NEG_INFINITY, f64::max);
 
             if let Some((grid, cids)) = build_h_line_only_table(
@@ -728,6 +731,24 @@ mod tests {
         let result = resolve_table_grids(1, &[inside, outside], &segs);
         assert!(result.consumed_ids.contains(&inside_id));
         assert!(!result.consumed_ids.contains(&outside_id));
+    }
+
+    #[test]
+    fn accepts_horizontal_borders_drawn_right_to_left() {
+        reset_ids();
+        let mut segs = table_segs(&[0.0, 300.0, 1000.0], &[400.0, 350.0, 300.0]);
+        for segment in &mut segs {
+            if segment.y1 == segment.y2 {
+                std::mem::swap(&mut segment.x1, &mut segment.x2);
+            }
+        }
+        let boxes = vec![
+            tb("Name", 150.0, 375.0),
+            tb("Role", 650.0, 375.0),
+            tb("Alice", 150.0, 325.0),
+            tb("CEO", 650.0, 325.0),
+        ];
+        assert_eq!(resolve_table_grids(1, &boxes, &segs).grids.len(), 1);
     }
 
     // -----------------------------------------------------------------------

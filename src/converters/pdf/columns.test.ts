@@ -44,6 +44,18 @@ describe("detectColumns", () => {
     expect(result.boundaries).toHaveLength(1);
   });
 
+  it("detects three-column layouts", () => {
+    const columns = [0, 200, 400].flatMap((x, col) =>
+      Array.from({ length: 6 }, (_, i) =>
+        tb(`C${col}-${i}`, x, 700 - i * 15, 100),
+      ),
+    );
+    const result = detectColumns(columns);
+    expect(result.columnCount).toBe(3);
+    expect(result.columns).toHaveLength(3);
+    expect(result.boundaries).toHaveLength(2);
+  });
+
   it("left column comes first in reading order", () => {
     const left = Array.from({ length: 10 }, (_, i) =>
       tb(`L${i}`, 72, 700 - i * 15),

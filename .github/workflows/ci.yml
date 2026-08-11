@@ -36,11 +36,8 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      # MuPDF builds from C source and takes several minutes.
-      # workspaces: tells rust-cache the crate root is rust/ (not the repo root).
-      # cache-on-failure: true so a partial mupdf-sys build is still cached
-      # between fix iterations. Cache key includes Cargo.lock automatically.
-      - name: Cache Rust / MuPDF build artefacts
+      # workspaces tells rust-cache the crate root is rust/ (not the repo root).
+      - name: Cache Rust build artefacts
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust -> rust/target

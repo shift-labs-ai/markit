@@ -24,20 +24,74 @@ function normalizeFullWidthAscii(text: string): string {
   );
 }
 
+function escapeFreeText(text: string): string {
+  let escaped = text
+    .replaceAll("\\", "\\\\")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("`", "\\`")
+    .replaceAll("*", "\\*")
+    .replaceAll("_", "\\_")
+    .replaceAll("[", "\\[")
+    .replaceAll("]", "\\]");
+  escaped = escaped.replace(/^(\s{0,3})([#>+-])(?=\s)/, "$1\\$2");
+  escaped = escaped.replace(/^(\s{0,3}\d+)\.(?=\s)/, "$1\\.");
+  return escaped;
+}
+
 function escapePipes(text: string): string {
   return normalizeFullWidthAscii(text)
     .replaceAll("|", "\\|")
     .replaceAll("\n", "<br>");
 }
 
-/** Parse a markdown pipe-delimited row into cell strings. */
-function parsePipeRow(line: string): string[] {
-  const trimmed = line.trim();
-  if (!trimmed.startsWith("|") || !trimmed.endsWith("|")) return [];
-  return trimmed
-    .slice(1, -1)
-    .split("|")
-    .map((cell) => cell.trim());
+function escapeTableHtml(text: string): string {
+  return normalizeFullWidthAscii(text)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("\n", "<br>");
+}
+
+function renderSpanningTable(table: TableGrid): string {
+  const covered = new Set<string>();
+  const rows: string[] = [];
+  for (let row = 0; row < table.rows; row++) {
+    const cells = table.cells
+      .filter((cell) => cell.row === row)
+      .sort((a, b) => a.col - b.col);
+    const rendered: string[] = [];
+    for (const cell of cells) {
+      if (covered.has(`${cell.row}:${cell.col}`)) continue;
+      const rowSpan = Math.max(1, cell.rowSpan);
+      const colSpan = Math.max(1, cell.colSpan);
+      for (
+        let r = cell.row;
+        r < Math.min(table.rows, cell.row + rowSpan);
+        r++
+      ) {
+        for (
+          let c = cell.col;
+          c < Math.min(table.cols, cell.col + colSpan);
+          c++
+        ) {
+          if (r !== cell.row || c !== cell.col) covered.add(`${r}:${c}`);
+        }
+      }
+      const tag = row === 0 ? "th" : "td";
+      const attrs = [
+        rowSpan > 1 ? ` rowspan="${rowSpan}"` : "",
+        colSpan > 1 ? ` colspan="${colSpan}"` : "",
+      ].join("");
+      rendered.push(
+        `<${tag}${attrs}>${escapeTableHtml(cell.text.trim())}</${tag}>`,
+      );
+    }
+    rows.push(`<tr>${rendered.join("")}</tr>`);
+  }
+  return `<table>\n${rows.join("\n")}\n</table>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -49,6 +103,9 @@ function parsePipeRow(line: string): string[] {
  */
 export function renderTableToMarkdown(table: TableGrid): string {
   if (table.rows === 0 || table.cols === 0) return "";
+  if (table.cells.some((cell) => cell.rowSpan > 1 || cell.colSpan > 1)) {
+    return renderSpanningTable(table);
+  }
 
   const matrix: string[][] = Array.from({ length: table.rows }, () =>
     Array.from({ length: table.cols }, () => ""),
@@ -60,8 +117,7 @@ export function renderTableToMarkdown(table: TableGrid): string {
     }
   }
 
-  const normalized = normalizeShiftedSparseColumns(matrix);
-  const promoted = promoteSubHeaderPrefixes(normalized);
+  const promoted = matrix;
 
   const header = `| ${promoted[0].join(" | ")} |`;
   const divider = `| ${Array.from({ length: promoted[0].length }, () => "---").join(" | ")} |`;
@@ -71,122 +127,6 @@ export function renderTableToMarkdown(table: TableGrid): string {
     .join("\n");
 
   return [header, divider, body].filter((l) => l.length > 0).join("\n");
-}
-
-/**
- * Fix tables with ≥5 columns where sparse single-value columns are
- * misaligned. Shifts those values to the adjacent dense column and
- * removes the now-empty sparse columns.
- */
-function normalizeShiftedSparseColumns(matrix: string[][]): string[][] {
-  if (matrix.length === 0 || matrix[0].length < 5) return matrix;
-
-  const _rows = matrix.length;
-  const cols = matrix[0].length;
-
-  const counts = Array.from({ length: cols }, (_, c) =>
-    matrix.reduce((n, row) => n + (row[c].trim().length > 0 ? 1 : 0), 0),
-  );
-
-  const denseCols = new Set(
-    counts
-      .map((count, col) => ({ count, col }))
-      .filter(({ col, count }) => col === 0 || count >= 2)
-      .map(({ col }) => col),
-  );
-
-  const sparseCols = counts
-    .map((count, col) => ({ count, col }))
-    .filter(({ col, count }) => col > 0 && col < cols - 1 && count === 1)
-    .map(({ col }) => col);
-
-  if (sparseCols.length < 2 || denseCols.size < 4) return matrix;
-
-  const moves: Array<{ from: number; to: number; row: number }> = [];
-  for (const from of sparseCols) {
-    const row = matrix.findIndex((r) => r[from].trim().length > 0);
-    const to = from + 1;
-    if (row < 0) return matrix;
-    if (!denseCols.has(to)) return matrix;
-    if (matrix[row][to].trim().length > 0) return matrix;
-    moves.push({ from, to, row });
-  }
-
-  const copy = matrix.map((row) => [...row]);
-  for (const { from, to, row } of moves) {
-    copy[row][to] =
-      copy[row][to].trim().length > 0
-        ? `${copy[row][to]} ${copy[row][from]}`
-        : copy[row][from];
-    copy[row][from] = "";
-  }
-
-  const keepCols = Array.from({ length: cols }, (_, c) => c).filter((c) =>
-    copy.some((row) => row[c].trim().length > 0),
-  );
-  if (keepCols.length === cols) return copy;
-  return copy.map((row) => keepCols.map((c) => row[c]));
-}
-
-/**
- * When a data row has ≥2 parenthesized qualifiers in non-first columns
- * (and the first column is empty), promote them into the header row.
- */
-function promoteSubHeaderPrefixes(matrix: string[][]): string[][] {
-  if (matrix.length < 2) return matrix;
-
-  const PAREN_RE = /^\([^)]{1,40}\)$/;
-  const result = matrix.map((row) => [...row]);
-  const cols = matrix[0].length;
-  const rowsToRemove = new Set<number>();
-
-  for (let r = 1; r < result.length; r++) {
-    if (rowsToRemove.has(r)) continue;
-
-    const promotable: Array<{
-      col: number;
-      prefix: string;
-      isFullCell: boolean;
-    }> = [];
-
-    for (let col = 1; col < cols; col++) {
-      const cell = (result[r][col] ?? "").trim();
-      if (!cell) continue;
-
-      const parts = cell.split("<br>");
-      if (parts.length === 1 && PAREN_RE.test(cell)) {
-        promotable.push({ col, prefix: cell, isFullCell: true });
-      } else if (parts.length >= 2 && PAREN_RE.test(parts[0].trim())) {
-        promotable.push({
-          col,
-          prefix: parts[0].trim(),
-          isFullCell: false,
-        });
-      }
-    }
-
-    if (promotable.length < 2) continue;
-    if (promotable.some((p) => p.isFullCell) && result[r][0].trim().length > 0)
-      continue;
-
-    for (const { col, prefix, isFullCell } of promotable) {
-      result[0][col] = result[0][col].trim()
-        ? `${result[0][col]} ${prefix}`
-        : prefix;
-      if (isFullCell) {
-        result[r][col] = "";
-      } else {
-        const parts = result[r][col].split("<br>");
-        result[r][col] = parts.slice(1).join("<br>");
-      }
-    }
-
-    if (result[r].every((cell) => cell.trim().length === 0)) {
-      rowsToRemove.add(r);
-    }
-  }
-
-  return result.filter((_, r) => !rowsToRemove.has(r));
 }
 
 // ---------------------------------------------------------------------------
@@ -412,148 +352,23 @@ function mergeParagraphWraps(
 }
 
 /** Remove page number blocks near the bottom of the page. */
-function removePageNumbers(blocks: ContentBlock[]): ContentBlock[] {
+function removePageNumbers(
+  blocks: ContentBlock[],
+  pageNumber: number | undefined,
+): ContentBlock[] {
   const PAGE_NUM_RE = /^(?:#{1,6}\s*)?\d+\s*$/;
   const BOTTOM_Y = 120;
 
   return blocks.filter((block, idx) => {
     const isBottom = idx >= blocks.length - 3;
     const isLowY = block.topY <= BOTTOM_Y;
-    const isPageNum = PAGE_NUM_RE.test(block.content.trim());
-    return !(isBottom && isLowY && isPageNum);
+    const match = block.content.trim().match(PAGE_NUM_RE);
+    const isCurrentPage =
+      pageNumber !== undefined &&
+      match !== null &&
+      Number(match[0].replace(/#/g, "").trim()) === pageNumber;
+    return !(isBottom && isLowY && isCurrentPage);
   });
-}
-
-// ---------------------------------------------------------------------------
-// Detached first-column table reconstruction
-// ---------------------------------------------------------------------------
-
-/**
- * Fix tables where the first column was emitted as free text blocks
- * around a markdown table containing only the right-side columns.
- *
- * Detects: a plain-text header line with (N+1) tokens above an N-column
- * markdown table, plus short label lines whose count matches the table's
- * logical row count. Reconstructs into a proper (N+1)-column table.
- */
-function normalizeDetachedFirstColumnTables(
-  blocks: ContentBlock[],
-): ContentBlock[] {
-  const HEADING_RE = /^#{1,6}\s/;
-  const isTableBlock = (text: string) => text.trimStart().startsWith("|");
-  const isPlainBlock = (text: string) =>
-    !HEADING_RE.test(text) && !isTableBlock(text);
-  const isShortLabel = (text: string) => {
-    const t = text.trim();
-    return t.length > 0 && t.length <= 40;
-  };
-  const splitTokens = (text: string) =>
-    text
-      .trim()
-      .split(/[ \t]+/)
-      .filter(Boolean);
-
-  const replacements = new Map<number, string>();
-  const remove = new Set<number>();
-
-  for (let tableIdx = 0; tableIdx < blocks.length; tableIdx++) {
-    if (remove.has(tableIdx)) continue;
-    const tableBlock = blocks[tableIdx];
-    if (!isTableBlock(tableBlock.content)) continue;
-
-    const tableLines = tableBlock.content
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line.startsWith("|"));
-
-    const dataRows = tableLines
-      .filter((line) => !/^\|\s*[-: ]+\|/.test(line))
-      .map(parsePipeRow)
-      .filter((row) => row.length > 0);
-
-    if (dataRows.length === 0) continue;
-    const cols = dataRows[0].length;
-    if (cols < 2 || dataRows.some((row) => row.length !== cols)) continue;
-
-    // Expand by <br> count to get logical row count
-    const logicalRows: string[][] = [];
-    for (const row of dataRows) {
-      const splitCells = row.map((cell) =>
-        cell.split("<br>").map((p) => p.trim()),
-      );
-      const rowSpan = Math.max(...splitCells.map((parts) => parts.length));
-      for (let k = 0; k < rowSpan; k++) {
-        logicalRows.push(splitCells.map((parts) => parts[k] ?? ""));
-      }
-    }
-    if (logicalRows.length < 2) continue;
-
-    // Find header with (cols + 1) non-numeric tokens
-    let headerIdx = -1;
-    let headerTokens: string[] = [];
-    for (let i = Math.max(0, tableIdx - 4); i <= tableIdx - 1; i++) {
-      const text = normalizeFullWidthAscii(blocks[i].content).trim();
-      if (!isPlainBlock(text)) continue;
-      const tokens = splitTokens(text);
-      if (
-        tokens.length === cols + 1 &&
-        tokens.every((tok) => !/[0-9]/.test(tok))
-      ) {
-        headerIdx = i;
-        headerTokens = tokens;
-      }
-    }
-    if (headerIdx < 0) continue;
-
-    // Collect short label lines above/below table
-    const aboveLabels: Array<{ idx: number; text: string }> = [];
-    for (let i = tableIdx - 1; i > headerIdx; i--) {
-      const text = normalizeFullWidthAscii(blocks[i].content).trim();
-      if (!isPlainBlock(text) || !isShortLabel(text)) break;
-      aboveLabels.push({ idx: i, text });
-    }
-    aboveLabels.reverse();
-
-    const belowLabels: Array<{ idx: number; text: string }> = [];
-    for (let i = tableIdx + 1; i < blocks.length; i++) {
-      const text = normalizeFullWidthAscii(blocks[i].content).trim();
-      if (!isPlainBlock(text) || !isShortLabel(text)) break;
-      belowLabels.push({ idx: i, text });
-    }
-
-    const labels = [...aboveLabels, ...belowLabels];
-    if (labels.length !== logicalRows.length) continue;
-
-    // Reconstruct the full table
-    const normalizedLines: string[] = [];
-    normalizedLines.push(`| ${headerTokens.join(" | ")} |`);
-    normalizedLines.push(
-      `| ${Array.from({ length: cols + 1 }, () => "---").join(" | ")} |`,
-    );
-    for (let r = 0; r < logicalRows.length; r++) {
-      normalizedLines.push(
-        `| ${labels[r].text} | ${logicalRows[r].join(" | ")} |`,
-      );
-    }
-
-    replacements.set(tableIdx, normalizedLines.join("\n"));
-    remove.add(headerIdx);
-    for (const label of labels) remove.add(label.idx);
-  }
-
-  if (replacements.size === 0 && remove.size === 0) return blocks;
-
-  const out: ContentBlock[] = [];
-  for (let i = 0; i < blocks.length; i++) {
-    if (remove.has(i)) continue;
-    const replaced = replacements.get(i);
-    if (replaced) {
-      out.push({ topY: blocks[i].topY, content: replaced });
-    } else {
-      out.push(blocks[i]);
-    }
-  }
-  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -579,7 +394,7 @@ export function renderPageContent(
     const prefix = headingPrefix(line.fontSize, bodyFS, line.isBold);
     blocks.push({
       topY: line.topY,
-      content: prefix + line.text,
+      content: prefix + escapeFreeText(line.text),
       isTabular: prefix === "" && line.isTabular,
     });
   }
@@ -600,12 +415,11 @@ export function renderPageContent(
   // Sort top-to-bottom (higher Y = higher on page = comes first)
   blocks.sort((a, b) => b.topY - a.topY);
 
-  const cleaned = removePageNumbers(blocks);
+  const pageNumber = freeTextBoxes[0]?.pageNumber ?? tables[0]?.pageNumber;
+  const cleaned = removePageNumbers(blocks, pageNumber);
   const headingsMerged = mergeConsecutiveHeadings(cleaned, bodyFS);
   const merged = mergeParagraphWraps(headingsMerged, bodyFS);
-  const normalized = normalizeDetachedFirstColumnTables(merged);
-
-  return normalized
+  return merged
     .map((b) => b.content)
     .join("\n\n")
     .trim();

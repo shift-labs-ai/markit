@@ -43,7 +43,7 @@ markit data.xlsx -q | napkin create "Imported Data"
 
 | Format | Extensions | How |
 |--------|-----------|-----|
-| PDF | `.pdf` | Text extraction via unpdf |
+| PDF | `.pdf` | Markit's built-in Rust PDF engine |
 | Word | `.docx` | mammoth → turndown, preserves headings/tables |
 | PowerPoint | `.pptx` | XML parsing, slides + notes + tables |
 | Excel | `.xlsx` | Each sheet → markdown table |
@@ -80,7 +80,7 @@ markit onboard                 # Add instructions to CLAUDE.md
 
 ## SDK
 
-markit is also a library:
+markit is also a library. PDF conversion uses the bundled native binary on supported macOS and Linux platforms; the dependency-free TypeScript fallback does not include a PDF engine:
 
 ```typescript
 import { Markit } from "markit-ai";

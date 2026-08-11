@@ -1,5 +1,5 @@
 //! Embedded-image extraction from PDF pages — the pure-Rust replacement
-//! for MuPDF region rasterization. Instead of rendering a page crop, the
+//! for page-region rasterization. Instead of rendering a page crop, the
 //! placed image XObject itself is extracted at native resolution:
 //! DCTDecode streams pass through as JPEG files, JPXDecode as JP2;
 //! CCITT decodes to grayscale PNG; FlateDecode (and raw) bitmaps
@@ -15,6 +15,38 @@ use super::types::ImageRegion;
 pub struct ExtractedImage {
     pub bytes: Vec<u8>,
     pub ext: &'static str,
+}
+
+const MAX_IMAGE_PIXELS: usize = 64_000_000;
+
+fn checked_dimension(value: f64, name: &str) -> Result<u32> {
+    if !value.is_finite() || value <= 0.0 || value.fract() != 0.0 || value > u32::MAX as f64 {
+        bail!("invalid image {name} {value}");
+    }
+    Ok(value as u32)
+}
+
+fn checked_layout(width: u32, height: u32, components: usize, bpc: u32) -> Result<(usize, usize)> {
+    let pixels = (width as usize)
+        .checked_mul(height as usize)
+        .ok_or_else(|| anyhow!("image dimensions overflow"))?;
+    if pixels > MAX_IMAGE_PIXELS {
+        bail!("image exceeds {MAX_IMAGE_PIXELS} pixels");
+    }
+    let samples_per_row = (width as usize)
+        .checked_mul(components)
+        .ok_or_else(|| anyhow!("image row samples overflow"))?;
+    let bits_per_row = samples_per_row
+        .checked_mul(bpc as usize)
+        .ok_or_else(|| anyhow!("image row bits overflow"))?;
+    let row_bytes = bits_per_row
+        .checked_add(7)
+        .ok_or_else(|| anyhow!("image row stride overflow"))?
+        / 8;
+    row_bytes
+        .checked_mul(height as usize)
+        .ok_or_else(|| anyhow!("image byte length overflow"))?;
+    Ok((row_bytes, pixels))
 }
 
 /// Extract the image behind an ImageRegion. The region id encodes the
@@ -66,7 +98,7 @@ fn extract_jbig2(data: &[u8], globals: Option<&[u8]>) -> Result<ExtractedImage> 
     let img =
         hayro_jbig2::Image::new_embedded(data, globals).map_err(|e| anyhow!("jbig2: {e:?}"))?;
     let (w, h) = (img.width() as usize, img.height() as usize);
-    if w == 0 || h == 0 || w.saturating_mul(h) > 100_000_000 {
+    if w == 0 || h == 0 || w.saturating_mul(h) > MAX_IMAGE_PIXELS {
         bail!("jbig2: bad dimensions");
     }
     let mut sink = Sink {
@@ -93,14 +125,18 @@ fn extract_jbig2(data: &[u8], globals: Option<&[u8]>) -> Result<ExtractedImage> 
 
 /// CCITTFaxDecode → grayscale PNG.
 fn extract_ccitt(pdf: &Pdf, dict: &Dict, data: &[u8]) -> Result<ExtractedImage> {
-    let width = pdf
-        .dict_get(dict, b"Width")?
-        .and_then(|v| v.as_num())
-        .ok_or_else(|| anyhow!("no Width"))? as usize;
-    let height = pdf
-        .dict_get(dict, b"Height")?
-        .and_then(|v| v.as_num())
-        .unwrap_or(0.0) as usize;
+    let width = checked_dimension(
+        pdf.dict_get(dict, b"Width")?
+            .and_then(|v| v.as_num())
+            .ok_or_else(|| anyhow!("no Width"))?,
+        "width",
+    )? as usize;
+    let height = checked_dimension(
+        pdf.dict_get(dict, b"Height")?
+            .and_then(|v| v.as_num())
+            .ok_or_else(|| anyhow!("no Height"))?,
+        "height",
+    )? as usize;
 
     let parms = match pdf.dict_get(dict, b"DecodeParms")? {
         Some(Val::Dict(d)) => Some(d),
@@ -140,6 +176,12 @@ fn extract_ccitt(pdf: &Pdf, dict: &Dict, data: &[u8]) -> Result<ExtractedImage> 
         Some(Val::Bool(true))
     );
 
+    let pixels = cols
+        .checked_mul(height)
+        .ok_or_else(|| anyhow!("CCITT dimensions overflow"))?;
+    if pixels > MAX_IMAGE_PIXELS {
+        bail!("CCITT image exceeds {MAX_IMAGE_PIXELS} pixels");
+    }
     let gray = super::ccitt::decode(data, k, cols, height, byte_align, black_is_1)?;
     let rows = gray.len() / cols;
     let mut png = Vec::new();
@@ -236,27 +278,41 @@ fn extract_xobject(pdf: &Pdf, dict: &Dict, raw: &[u8]) -> Result<ExtractedImage>
 
     // Bitmap path: fully decode, then PNG-encode.
     let data = decode_stream(dict, raw, pdf)?;
-    let width = pdf
-        .dict_get(dict, b"Width")?
-        .and_then(|v| v.as_num())
-        .ok_or_else(|| anyhow!("no Width"))? as u32;
-    let height = pdf
-        .dict_get(dict, b"Height")?
-        .and_then(|v| v.as_num())
-        .ok_or_else(|| anyhow!("no Height"))? as u32;
-    let bpc = pdf
+    let width = checked_dimension(
+        pdf.dict_get(dict, b"Width")?
+            .and_then(|v| v.as_num())
+            .ok_or_else(|| anyhow!("no Width"))?,
+        "width",
+    )?;
+    let height = checked_dimension(
+        pdf.dict_get(dict, b"Height")?
+            .and_then(|v| v.as_num())
+            .ok_or_else(|| anyhow!("no Height"))?,
+        "height",
+    )?;
+    let bpc_value = pdf
         .dict_get(dict, b"BitsPerComponent")?
         .and_then(|v| v.as_num())
-        .unwrap_or(8.0) as u32;
+        .unwrap_or(8.0);
+    let bpc = checked_dimension(bpc_value, "bits per component")?;
+    if !matches!(bpc, 1 | 2 | 4 | 8 | 16) {
+        bail!("unsupported BitsPerComponent {bpc}");
+    }
 
     let (components, palette, tint_inverted) = color_info(pdf, dict)?;
-    let row_in = (width as usize * components * bpc as usize).div_ceil(8);
-    if data.len() < row_in * height as usize {
+    let (row_in, pixels) = checked_layout(width, height, components, bpc)?;
+    let input_len = row_in
+        .checked_mul(height as usize)
+        .ok_or_else(|| anyhow!("image byte length overflow"))?;
+    if data.len() < input_len {
         bail!("short image data");
     }
 
     // Normalize to 8-bit samples.
-    let mut samples: Vec<u8> = Vec::with_capacity(width as usize * height as usize * components);
+    let sample_capacity = pixels
+        .checked_mul(components)
+        .ok_or_else(|| anyhow!("image sample count overflow"))?;
+    let mut samples: Vec<u8> = Vec::with_capacity(sample_capacity);
     for row in 0..height as usize {
         let r = &data[row * row_in..(row + 1) * row_in];
         match bpc {
@@ -409,10 +465,15 @@ fn smask_alpha(pdf: &Pdf, dict: &Dict, width: u32, height: u32) -> Result<Option
     if sw != width || sh != height {
         return Ok(None); // scaled masks: skip rather than resample
     }
-    let sbpc = pdf
-        .dict_get(&sd, b"BitsPerComponent")?
-        .and_then(|v| v.as_num())
-        .unwrap_or(8.0) as u32;
+    let sbpc = checked_dimension(
+        pdf.dict_get(&sd, b"BitsPerComponent")?
+            .and_then(|v| v.as_num())
+            .unwrap_or(8.0),
+        "soft-mask bits per component",
+    )?;
+    if !matches!(sbpc, 1 | 2 | 4 | 8 | 16) {
+        return Ok(None);
+    }
     // DCT-coded masks would need a JPEG decode; keep to bitmap masks.
     let filters = match pdf.dict_get(&sd, b"Filter")? {
         Some(Val::Name(n)) => vec![n.to_vec()],
@@ -430,11 +491,14 @@ fn smask_alpha(pdf: &Pdf, dict: &Dict, width: u32, height: u32) -> Result<Option
         return Ok(None);
     }
     let data = decode_stream(&sd, sraw, pdf)?;
-    let row_in = (width as usize * sbpc as usize).div_ceil(8);
-    if data.len() < row_in * height as usize {
+    let (row_in, pixels) = checked_layout(width, height, 1, sbpc)?;
+    let input_len = row_in
+        .checked_mul(height as usize)
+        .ok_or_else(|| anyhow!("soft-mask byte length overflow"))?;
+    if data.len() < input_len {
         return Ok(None);
     }
-    let mut alpha = Vec::with_capacity(width as usize * height as usize);
+    let mut alpha = Vec::with_capacity(pixels);
     for row in 0..height as usize {
         let r = &data[row * row_in..(row + 1) * row_in];
         match sbpc {
@@ -570,6 +634,24 @@ trailer << /Root 1 0 R >>",
         let image = extract_ccitt(&pdf(), &dict, &[0b1100_0000]).unwrap();
         let width = u32::from_be_bytes(image.bytes[16..20].try_into().unwrap());
         assert_eq!(width, 8);
+    }
+
+    #[test]
+    fn rejects_bitmap_dimensions_that_overflow_the_decoded_layout() {
+        let dict = vec![
+            (b"Width".as_slice(), Val::Num(u32::MAX as f64)),
+            (b"Height".as_slice(), Val::Num(u32::MAX as f64)),
+            (b"BitsPerComponent".as_slice(), Val::Num(16.0)),
+            (b"ColorSpace".as_slice(), Val::Name(b"DeviceCMYK")),
+        ];
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            extract_xobject(&pdf(), &dict, &[])
+        }));
+        assert!(result.is_ok(), "malformed dimensions panicked");
+        assert!(
+            result.unwrap().is_err(),
+            "malformed dimensions were accepted"
+        );
     }
 
     #[test]

@@ -18,11 +18,13 @@ import type { PageContent } from "./types.js";
 /** Minimum number of pages to enable header/footer detection. */
 const MIN_PAGES = 5;
 
-/** Minimum Y position for top zone (from bottom of page in PDF coords). */
-const TOP_ZONE_MIN_Y = 700;
+/** Fraction of page height treated as each running-margin zone. */
+const MARGIN_ZONE_RATIO = 0.12;
 
-/** Maximum Y position for bottom zone. */
-const BOTTOM_ZONE_MAX_Y = 80;
+function inMarginZone(midY: number, pageHeight: number): boolean {
+  const margin = pageHeight * MARGIN_ZONE_RATIO;
+  return midY >= pageHeight - margin || midY <= margin;
+}
 
 /**
  * Minimum consecutive pages a text must appear on to be considered a
@@ -50,7 +52,7 @@ export function stripHeadersFooters(pages: PageContent[]): void {
     const zoneTexts = new Set<string>();
     for (const tb of page.textBoxes) {
       const midY = (tb.bounds.top + tb.bounds.bottom) / 2;
-      if (midY >= TOP_ZONE_MIN_Y || midY <= BOTTOM_ZONE_MAX_Y) {
+      if (inMarginZone(midY, page.pageHeight)) {
         const key = tb.text.trim().replace(/\s+/g, " ");
         if (key.length > 0) zoneTexts.add(key);
       }
@@ -113,7 +115,7 @@ export function stripHeadersFooters(pages: PageContent[]): void {
   for (const page of pages) {
     page.textBoxes = page.textBoxes.filter((tb) => {
       const midY = (tb.bounds.top + tb.bounds.bottom) / 2;
-      if (midY < TOP_ZONE_MIN_Y && midY > BOTTOM_ZONE_MAX_Y) return true;
+      if (!inMarginZone(midY, page.pageHeight)) return true;
 
       const normalized = tb.text.trim().replace(/\s+/g, " ");
       return !repeatedTexts.has(normalized);

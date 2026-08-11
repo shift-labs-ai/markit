@@ -4,6 +4,7 @@
 //! sibling modules behind this type.
 
 use anyhow::{anyhow, bail, Result};
+use elsa::FrozenMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::cell::RefCell;
 
@@ -13,23 +14,37 @@ use super::lexer::ObjLexer;
 use super::values::{dget, Dict, Val};
 use super::xref::{find_startxref, XrefEntry};
 
+/// Parsed PDF document. Resolved values borrow the document as well as its
+/// input, because compressed-object and decrypted-stream bytes are owned by
+/// document-local caches.
+///
+/// ```compile_fail
+/// use markit::converters::pdf::own_pdf::Pdf;
+/// let bytes = b"1 0 obj null endobj";
+/// let value;
+/// {
+///     let pdf = Pdf::parse(bytes).unwrap();
+///     value = pdf.object(1).unwrap();
+/// }
+/// drop(value);
+/// ```
 pub struct Pdf<'a> {
     pub(super) data: &'a [u8],
     /// obj num → xref entry.
     pub(super) xref: FxHashMap<u32, XrefEntry>,
     pub trailer: Dict<'a>,
     /// Decompressed object streams, keyed by their object number.
-    pub(super) objstm_cache: RefCell<FxHashMap<u32, ObjStm>>,
+    pub(super) objstm_cache: FrozenMap<u32, Box<ObjStm>>,
     /// Object streams currently being resolved. A separate set makes
     /// cyclic InStream references an error instead of recursive descent.
     pub(super) objstm_in_progress: RefCell<FxHashSet<u32>>,
     /// AES-256 stream decryption (V5 standard handler), when active.
-    pub(super) decrypt: Option<Decryptor>,
+    pub(super) decrypt: RefCell<Option<Decryptor>>,
     /// Legacy (V1/V2/V4) decryption: per-object keys.
-    pub(super) legacy: Option<LegacyCrypt>,
+    pub(super) legacy: RefCell<Option<LegacyCrypt>>,
     /// Decrypted stream bytes for legacy encryption, keyed by object
     /// number (entries are never evicted, so returned slices stay valid).
-    pub(super) legacy_cache: RefCell<FxHashMap<u32, Vec<u8>>>,
+    pub(super) legacy_cache: FrozenMap<u32, Box<[u8]>>,
 }
 
 pub(super) struct ObjStm {
@@ -45,11 +60,11 @@ impl<'a> Pdf<'a> {
             data,
             xref: FxHashMap::default(),
             trailer: Vec::new(),
-            objstm_cache: RefCell::new(FxHashMap::default()),
+            objstm_cache: FrozenMap::new(),
             objstm_in_progress: RefCell::new(FxHashSet::default()),
-            decrypt: None,
-            legacy: None,
-            legacy_cache: RefCell::new(FxHashMap::default()),
+            decrypt: RefCell::new(None),
+            legacy: RefCell::new(None),
+            legacy_cache: FrozenMap::new(),
         };
         let loaded = match find_startxref(data) {
             Ok(start) => pdf.load_xref_chain(start).is_ok() && !pdf.trailer.is_empty(),
@@ -77,15 +92,19 @@ impl<'a> Pdf<'a> {
             let mut j = hit;
             let mut seen_gen = false;
             let mut seen_num = false;
+            let mut gen_end = 0usize;
+            let mut gen_start = 0usize;
             let mut num_end = 0usize;
             let mut num_start = 0usize;
             while j > 0 {
                 let b = data[j - 1];
                 if b.is_ascii_digit() {
                     if !seen_gen {
+                        gen_end = j;
                         while j > 0 && data[j - 1].is_ascii_digit() {
                             j -= 1;
                         }
+                        gen_start = j;
                         seen_gen = true;
                     } else {
                         num_end = j;
@@ -107,8 +126,18 @@ impl<'a> Pdf<'a> {
                     .ok()
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(0);
+                let generation: u16 = std::str::from_utf8(&data[gen_start..gen_end])
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
                 // Later definitions win in damaged files.
-                self.xref.insert(num, XrefEntry::Offset(num_start));
+                self.xref.insert(
+                    num,
+                    XrefEntry::Offset {
+                        at: num_start,
+                        generation,
+                    },
+                );
             }
             at = hit + 4;
         }
@@ -147,11 +176,11 @@ impl<'a> Pdf<'a> {
             data,
             xref: FxHashMap::default(),
             trailer: Vec::new(),
-            objstm_cache: RefCell::new(FxHashMap::default()),
+            objstm_cache: FrozenMap::new(),
             objstm_in_progress: RefCell::new(FxHashSet::default()),
-            decrypt: None,
-            legacy: None,
-            legacy_cache: RefCell::new(FxHashMap::default()),
+            decrypt: RefCell::new(None),
+            legacy: RefCell::new(None),
+            legacy_cache: FrozenMap::new(),
         };
         pdf.load_xref_chain(start)?;
         Ok(pdf)
@@ -164,17 +193,20 @@ impl<'a> Pdf<'a> {
     }
 
     /// Resolve an object by number, parsing it on demand.
-    pub fn object(&self, num: u32) -> Result<Val<'a>> {
+    pub fn object<'s>(&'s self, num: u32) -> Result<Val<'s>>
+    where
+        'a: 's,
+    {
         match self.xref.get(&num) {
-            Some(XrefEntry::Offset(at)) => {
+            Some(XrefEntry::Offset { at, generation }) => {
                 let mut lx = ObjLexer::new(self.data, *at);
                 let (n, v) = lx.indirect_object(self)?;
                 if n != num {
                     bail!("xref offset mismatch for {num}");
                 }
-                if self.legacy.is_some() {
+                if self.legacy.borrow().is_some() {
                     if let Val::Stream(d, raw) = v {
-                        let plain = self.legacy_decrypt(num, raw)?;
+                        let plain = self.legacy_decrypt(num, *generation, raw)?;
                         return Ok(Val::Stream(d, plain));
                     }
                 }
@@ -183,8 +215,10 @@ impl<'a> Pdf<'a> {
             Some(XrefEntry::InStream { stream_obj, index }) => {
                 let (stream_obj, index) = (*stream_obj, *index);
                 self.ensure_objstm(stream_obj)?;
-                let cache = self.objstm_cache.borrow();
-                let stm = cache.get(&stream_obj).ok_or_else(|| anyhow!("objstm"))?;
+                let stm = self
+                    .objstm_cache
+                    .get(&stream_obj)
+                    .ok_or_else(|| anyhow!("objstm"))?;
                 let (onum, off) = *stm
                     .offsets
                     .get(index)
@@ -192,15 +226,7 @@ impl<'a> Pdf<'a> {
                 if onum != num {
                     bail!("objstm num mismatch");
                 }
-                // SAFETY: ObjStm entries are inserted once into
-                // objstm_cache and never removed or replaced; the Vec's
-                // allocation therefore remains stable for the lifetime of
-                // Pdf. Every value returned from this slice remains tied to
-                // that same Pdf, so extending this stable allocation's
-                // borrow to 'a cannot outlive its owner.
-                let slice: &'a [u8] =
-                    unsafe { std::slice::from_raw_parts(stm.data.as_ptr(), stm.data.len()) };
-                let mut lx = ObjLexer::new(slice, stm.first + off);
+                let mut lx = ObjLexer::new(stm.data.as_slice(), stm.first + off);
                 lx.value_with(self)
             }
             None => Ok(Val::Null),
@@ -208,7 +234,7 @@ impl<'a> Pdf<'a> {
     }
 
     pub(super) fn ensure_objstm(&self, num: u32) -> Result<()> {
-        if self.objstm_cache.borrow().contains_key(&num) {
+        if self.objstm_cache.get(&num).is_some() {
             return Ok(());
         }
         if !self.objstm_in_progress.borrow_mut().insert(num) {
@@ -242,13 +268,13 @@ impl<'a> Pdf<'a> {
                     offsets.push((onum, off));
                 }
             }
-            self.objstm_cache.borrow_mut().insert(
+            self.objstm_cache.insert(
                 num,
-                ObjStm {
+                Box::new(ObjStm {
                     data,
                     offsets,
                     first,
-                },
+                }),
             );
             Ok(())
         })();
@@ -257,7 +283,10 @@ impl<'a> Pdf<'a> {
     }
 
     /// Deep-resolve a value: follow Ref until a concrete value.
-    pub fn resolve(&self, v: &Val<'a>) -> Result<Val<'a>> {
+    pub fn resolve<'s>(&'s self, v: &Val<'s>) -> Result<Val<'s>>
+    where
+        'a: 's,
+    {
         let mut cur = v.clone();
         for _ in 0..32 {
             match cur {
@@ -268,7 +297,10 @@ impl<'a> Pdf<'a> {
         bail!("reference chain too deep or cyclic")
     }
 
-    pub fn dict_get(&self, dict: &Dict<'a>, key: &[u8]) -> Result<Option<Val<'a>>> {
+    pub fn dict_get<'s>(&'s self, dict: &Dict<'s>, key: &[u8]) -> Result<Option<Val<'s>>>
+    where
+        'a: 's,
+    {
         match dget(dict, key) {
             Some(v) => Ok(Some(self.resolve(v)?)),
             None => Ok(None),
@@ -281,22 +313,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn repair_scan_preserves_object_generation() {
+        let data = b"%PDF-1.4\n1 7 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [] /Count 0 >> endobj\ntrailer << /Root 1 7 R >>";
+        let pdf = Pdf::parse(data).unwrap();
+        assert!(matches!(
+            pdf.xref.get(&1),
+            Some(XrefEntry::Offset { generation: 7, .. })
+        ));
+    }
+
+    #[test]
     fn object_stream_count_must_fit_decoded_header() {
         let data = b"1 0 obj << /Type /ObjStm /N 100000 /First 0 /Length 0 >> stream
 
 endstream
 endobj";
         let mut xref = FxHashMap::default();
-        xref.insert(1, XrefEntry::Offset(0));
+        xref.insert(
+            1,
+            XrefEntry::Offset {
+                at: 0,
+                generation: 0,
+            },
+        );
         let pdf = Pdf {
             data,
             xref,
             trailer: Vec::new(),
-            objstm_cache: RefCell::new(FxHashMap::default()),
+            objstm_cache: FrozenMap::new(),
             objstm_in_progress: RefCell::new(FxHashSet::default()),
-            decrypt: None,
-            legacy: None,
-            legacy_cache: RefCell::new(FxHashMap::default()),
+            decrypt: RefCell::new(None),
+            legacy: RefCell::new(None),
+            legacy_cache: FrozenMap::new(),
         };
         let err = pdf.ensure_objstm(1).unwrap_err().to_string();
         assert!(err.contains("ObjStm /N"), "wrong rejection path: {err}");
@@ -324,11 +372,11 @@ endobj";
             data,
             xref,
             trailer: Vec::new(),
-            objstm_cache: RefCell::new(FxHashMap::default()),
+            objstm_cache: FrozenMap::new(),
             objstm_in_progress: RefCell::new(FxHashSet::default()),
-            decrypt: None,
-            legacy: None,
-            legacy_cache: RefCell::new(FxHashMap::default()),
+            decrypt: RefCell::new(None),
+            legacy: RefCell::new(None),
+            legacy_cache: FrozenMap::new(),
         };
         assert!(pdf.object(1).is_err());
     }

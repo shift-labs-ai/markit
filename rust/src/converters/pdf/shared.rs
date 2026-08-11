@@ -1,0 +1,285 @@
+//! Shared PDF extraction normalization used by the own engine.
+
+use anyhow::Result;
+
+use super::types::{Bounds, ImageRegion, Rect, Segment, TextBox};
+
+const SAME_LINE_Y_TOLERANCE: f64 = 2.0;
+const MAX_MERGE_GAP: f64 = 14.0;
+const MIN_IMAGE_AREA: f64 = 5000.0;
+const LINE_ASPECT_THRESHOLD: f64 = 6.0;
+const MIN_LENGTH: f64 = 2.0;
+const MAX_THICKNESS: f64 = 3.0;
+
+#[derive(Debug, Clone)]
+struct RawTextItem {
+    text: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    font_size: f64,
+    is_bold: bool,
+}
+
+pub(crate) struct RawTextItemPub {
+    pub text: String,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub font_size: f64,
+    pub is_bold: bool,
+}
+
+fn script_same_line(a: &RawTextItem, b: &RawTextItem) -> bool {
+    let (small, large) = if a.font_size <= b.font_size {
+        (a, b)
+    } else {
+        (b, a)
+    };
+    if large.font_size <= 0.0 || small.font_size > large.font_size * 0.8 {
+        return false;
+    }
+    let overlap = (small.y + small.height).min(large.y + large.height) - small.y.max(large.y);
+    overlap >= 0.5 * small.height.min(large.height).max(1.0)
+}
+
+fn merge_into_words(raws: &[RawTextItem]) -> Vec<RawTextItem> {
+    if raws.is_empty() {
+        return Vec::new();
+    }
+    let cmp = |a: &RawTextItem, b: &RawTextItem| {
+        let dy = b.y - a.y;
+        if dy.abs() > SAME_LINE_Y_TOLERANCE && !script_same_line(a, b) {
+            dy.partial_cmp(&0.0).unwrap_or(std::cmp::Ordering::Equal)
+        } else {
+            a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal)
+        }
+    };
+    let mut sorted = raws.to_vec();
+    super::js_stable_sort(&mut sorted, cmp);
+    let mut merged = Vec::new();
+    let mut cur = sorted[0].clone();
+    for next in sorted.iter().skip(1) {
+        let same_y =
+            (next.y - cur.y).abs() <= SAME_LINE_Y_TOLERANCE || script_same_line(&cur, next);
+        let close = next.x <= cur.x + cur.width + MAX_MERGE_GAP;
+        if same_y && close {
+            let sep = if next.x - (cur.x + cur.width) > 1.0 {
+                " "
+            } else {
+                ""
+            };
+            cur.text = format!("{}{}{}", cur.text, sep, next.text);
+            cur.width = next.x + next.width - cur.x;
+            cur.height = cur.height.max(next.height);
+            cur.font_size = cur.font_size.max(next.font_size);
+            cur.is_bold |= next.is_bold;
+        } else {
+            merged.push(cur);
+            cur = next.clone();
+        }
+    }
+    merged.push(cur);
+    merged
+}
+
+pub(crate) fn finish_text_boxes_pub(
+    raws: Vec<RawTextItemPub>,
+    page_number: u32,
+) -> Result<Vec<TextBox>> {
+    let raws = raws
+        .into_iter()
+        .map(|r| RawTextItem {
+            text: r.text,
+            x: r.x,
+            y: r.y,
+            width: r.width,
+            height: r.height,
+            font_size: r.font_size,
+            is_bold: r.is_bold,
+        })
+        .collect();
+    finish_text_boxes(raws, page_number)
+}
+
+fn finish_text_boxes(raws: Vec<RawTextItem>, page_number: u32) -> Result<Vec<TextBox>> {
+    Ok(merge_into_words(&raws)
+        .into_iter()
+        .enumerate()
+        .map(|(i, item)| TextBox {
+            id: format!("p{page_number}-t{i}"),
+            text: match super::bidi::fix_rtl(&item.text) {
+                Some(text) => text.trim().to_string(),
+                None => item.text.trim().to_string(),
+            },
+            page_number,
+            font_size: item.font_size,
+            is_bold: item.is_bold,
+            bounds: Bounds {
+                left: item.x,
+                right: item.x + item.width,
+                bottom: item.y,
+                top: item.y + item.height,
+            },
+        })
+        .filter(|item| !item.text.is_empty())
+        .collect())
+}
+
+pub(crate) fn image_bbox_is_large_pub((x0, y0, x1, y1): (f32, f32, f32, f32)) -> bool {
+    let w = ((x1 - x0) as i32) as f64;
+    let h = ((y1 - y0) as i32) as f64;
+    w * h >= MIN_IMAGE_AREA
+}
+
+pub(crate) fn image_regions_from_bboxes_pub(
+    bboxes: &[(f32, f32, f32, f32)],
+    page_number: u32,
+    page_height: f64,
+) -> Vec<ImageRegion> {
+    let mut regions = Vec::new();
+    for &(x0, y0, x1, y1) in bboxes {
+        if !image_bbox_is_large_pub((x0, y0, x1, y1)) {
+            continue;
+        }
+        let x = (x0 as i32) as f64;
+        let y = (y0 as i32) as f64;
+        let w = ((x1 - x0) as i32) as f64;
+        let h = ((y1 - y0) as i32) as f64;
+        regions.push(ImageRegion {
+            id: format!("p{page_number}-img{}", regions.len()),
+            page_number,
+            bbox: Rect { x, y, w, h },
+            top_y: page_height - y,
+        });
+    }
+    regions
+}
+
+pub(crate) fn thin_rect_to_segment_pub(
+    id: String,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+) -> Option<Segment> {
+    let aw = w.abs();
+    let ah = h.abs();
+    if aw > ah * LINE_ASPECT_THRESHOLD && aw >= MIN_LENGTH && ah <= MAX_THICKNESS {
+        let cy = y + ah / 2.0;
+        return Some(Segment {
+            id,
+            x1: x,
+            y1: cy,
+            x2: x + aw,
+            y2: cy,
+        });
+    }
+    if ah > aw * LINE_ASPECT_THRESHOLD && ah >= MIN_LENGTH && aw <= MAX_THICKNESS {
+        let cx = x + aw / 2.0;
+        return Some(Segment {
+            id,
+            x1: cx,
+            y1: y,
+            x2: cx,
+            y2: y + ah,
+        });
+    }
+    None
+}
+
+pub(crate) fn push_stroked_rect_edges_pub(
+    segments: &mut Vec<Segment>,
+    id: &str,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+) {
+    let aw = w.abs();
+    let ah = h.abs();
+    if aw >= MIN_LENGTH {
+        segments.push(Segment {
+            id: format!("{id}-b"),
+            x1: x,
+            y1: y,
+            x2: x + aw,
+            y2: y,
+        });
+        segments.push(Segment {
+            id: format!("{id}-t"),
+            x1: x,
+            y1: y + ah,
+            x2: x + aw,
+            y2: y + ah,
+        });
+    }
+    if ah >= MIN_LENGTH {
+        segments.push(Segment {
+            id: format!("{id}-l"),
+            x1: x,
+            y1: y,
+            x2: x,
+            y2: y + ah,
+        });
+        segments.push(Segment {
+            id: format!("{id}-r"),
+            x1: x + aw,
+            y1: y,
+            x2: x + aw,
+            y2: y + ah,
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thin_rectangles_become_axis_aligned_segments() {
+        assert!(thin_rect_to_segment_pub("h".into(), 0.0, 0.0, 100.0, 1.0).is_some());
+        assert!(thin_rect_to_segment_pub("square".into(), 0.0, 0.0, 10.0, 10.0).is_none());
+    }
+
+    #[test]
+    fn adjacent_items_merge_but_separate_lines_do_not() {
+        let boxes = finish_text_boxes_pub(
+            vec![
+                RawTextItemPub {
+                    text: "hello".into(),
+                    x: 0.0,
+                    y: 10.0,
+                    width: 20.0,
+                    height: 10.0,
+                    font_size: 10.0,
+                    is_bold: false,
+                },
+                RawTextItemPub {
+                    text: "world".into(),
+                    x: 24.0,
+                    y: 10.0,
+                    width: 20.0,
+                    height: 10.0,
+                    font_size: 10.0,
+                    is_bold: false,
+                },
+                RawTextItemPub {
+                    text: "next".into(),
+                    x: 0.0,
+                    y: 30.0,
+                    width: 20.0,
+                    height: 10.0,
+                    font_size: 10.0,
+                    is_bold: false,
+                },
+            ],
+            1,
+        )
+        .unwrap();
+        assert_eq!(boxes.len(), 2);
+        assert!(boxes.iter().any(|item| item.text == "hello world"));
+    }
+}

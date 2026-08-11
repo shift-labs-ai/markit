@@ -54,7 +54,7 @@ export type TableGrid = {
 export type ImageRegion = {
   id: string;
   pageNumber: number;
-  /** Bounding box in mupdf coordinates (top-left origin). */
+  /** Bounding box in page coordinates (top-left origin). */
   bbox: { x: number; y: number; w: number; h: number };
   /** Y position in PDF coordinates (bottom-left) for ordering. */
   topY: number;
@@ -63,6 +63,8 @@ export type ImageRegion = {
 /** Result of extracting content from a single PDF page. */
 export type PageContent = {
   pageNumber: number;
+  pageWidth: number;
+  pageHeight: number;
   textBoxes: TextBox[];
   segments: Segment[];
   images: ImageRegion[];

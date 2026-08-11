@@ -23,6 +23,7 @@ pub(crate) struct RawItem {
     pub is_bold: bool,
 }
 
+#[derive(Clone)]
 struct TextState {
     font: Option<std::rc::Rc<FontInfo>>,
     size: f64,
@@ -82,6 +83,12 @@ impl PathPaint {
     }
 }
 
+struct GraphicsState {
+    ctm: Mat,
+    text: TextState,
+    stroke_width: f64,
+}
+
 pub(crate) struct Interp<'a> {
     pdf: &'a Pdf<'a>,
     /// Raw text items in paint order — page assembly's input.
@@ -106,8 +113,9 @@ pub(crate) struct Interp<'a> {
     /// Depth of the outermost hidden optional-content span, when inside.
     hidden_until: Option<u32>,
     ctm: Mat,
-    ctm_stack: Vec<Mat>,
+    state_stack: Vec<GraphicsState>,
     ts: TextState,
+    stroke_width: f64,
     // path state for segment building
     path_start: Option<(f64, f64)>,
     path_cur: Option<(f64, f64)>,
@@ -119,6 +127,13 @@ pub(crate) struct Interp<'a> {
 }
 
 impl<'a> Interp<'a> {
+    pub(crate) fn clip_to_page(&mut self, width: f64, height: f64) {
+        let clip = (0.0, 0.0, width, height);
+        clip_items(&mut self.items, 0, clip);
+        clip_segments(&mut self.segments, 0, clip);
+        clip_images(&mut self.image_placements, 0, clip);
+    }
+
     /// A fresh interpreter for one page. The base CTM is the page's
     /// origin/rotation transform; hidden_ocgs the document's OFF set.
     pub(crate) fn new(
@@ -139,8 +154,9 @@ impl<'a> Interp<'a> {
             hidden_ocgs,
             hidden_until: None,
             ctm: base,
-            ctm_stack: Vec::new(),
+            state_stack: Vec::new(),
             ts: TextState::default(),
+            stroke_width: 1.0,
             path_start: None,
             path_cur: None,
             path_segments: Vec::new(),
@@ -168,10 +184,22 @@ impl<'a> Interp<'a> {
                 }
             };
             match op {
-                b"q" => self.ctm_stack.push(self.ctm),
+                b"q" => self.state_stack.push(GraphicsState {
+                    ctm: self.ctm,
+                    text: self.ts.clone(),
+                    stroke_width: self.stroke_width,
+                }),
                 b"Q" => {
-                    if let Some(m) = self.ctm_stack.pop() {
-                        self.ctm = m;
+                    if let Some(saved) = self.state_stack.pop() {
+                        // Text matrices are not part of the graphics state;
+                        // text parameters and the selected font are.
+                        let tm = self.ts.tm;
+                        let tlm = self.ts.tlm;
+                        self.ctm = saved.ctm;
+                        self.ts = saved.text;
+                        self.ts.tm = tm;
+                        self.ts.tlm = tlm;
+                        self.stroke_width = saved.stroke_width;
                     }
                 }
                 b"cm" => {
@@ -219,6 +247,11 @@ impl<'a> Interp<'a> {
                 b"Tw" => self.ts.word_spacing = n(0).unwrap_or(0.0),
                 b"Tz" => self.ts.h_scale = n(0).unwrap_or(100.0) / 100.0,
                 b"Ts" => self.ts.rise = n(0).unwrap_or(0.0),
+                b"w" => {
+                    if let Some(width) = n(0).filter(|width| width.is_finite()) {
+                        self.stroke_width = width.abs();
+                    }
+                }
                 b"Tj" => {
                     if let Some(o @ Operand::Str { .. }) = lex.operands.first().copied() {
                         self.show_text(lex.str_bytes(o));
@@ -277,13 +310,8 @@ impl<'a> Interp<'a> {
                 b"h" => self.close_path(),
                 b"re" => {
                     if let (Some(x), Some(y), Some(w), Some(h)) = (n(0), n(1), n(2), n(3)) {
-                        let (p0, p1) = (self.ctm.apply(x, y), self.ctm.apply(x + w, y + h));
-                        self.path_rects.push((
-                            p0.0.min(p1.0),
-                            p0.1.min(p1.1),
-                            (p1.0 - p0.0).abs(),
-                            (p1.1 - p0.1).abs(),
-                        ));
+                        let (x0, y0, x1, y1) = self.ctm.rect_bbox(x, y, x + w, y + h);
+                        self.path_rects.push((x0, y0, x1 - x0, y1 - y0));
                     }
                 }
                 b"S" => self.flush_path(PathPaint::Stroke),
@@ -332,7 +360,7 @@ impl<'a> Interp<'a> {
                         }
                     }
                     // /ActualText in the property dict replaces whatever
-                    // the enclosed operators draw (MuPDF honors this).
+                    // the enclosed operators draw, per the PDF graphics model.
                     if self.actual_text.is_none() {
                         if let Some(o @ Operand::Dict { .. }) = lex.operands.last().copied() {
                             if let Some(s) = parse_actual_text(lex.dict_bytes(o)) {
@@ -367,10 +395,8 @@ impl<'a> Interp<'a> {
                         lex.clear();
                         continue;
                     }
-                    let (ax, ay) = self.ctm.apply(0.0, 0.0);
-                    let (bx, by) = self.ctm.apply(1.0, 1.0);
                     self.image_placements.push(ImagePlacement {
-                        bbox: (ax.min(bx), ay.min(by), ax.max(bx), ay.max(by)),
+                        bbox: self.ctm.rect_bbox(0.0, 0.0, 1.0, 1.0),
                         source: ImageSource::Inline,
                     });
                 }
@@ -407,6 +433,28 @@ impl<'a> Interp<'a> {
                 }
                 false
             }
+            _ => false,
+        }
+    }
+
+    fn optional_content_hidden(&self, value: &Val<'a>) -> bool {
+        match value {
+            Val::Ref(number) if self.hidden_ocgs.contains(number) => true,
+            Val::Ref(number) => match self.pdf.object(*number) {
+                Ok(Val::Dict(dict)) => self.optional_content_dict_hidden(&dict),
+                _ => false,
+            },
+            Val::Dict(dict) => self.optional_content_dict_hidden(dict),
+            _ => false,
+        }
+    }
+
+    fn optional_content_dict_hidden(&self, dict: &Dict<'a>) -> bool {
+        match dget(dict, b"OCGs") {
+            Some(Val::Ref(number)) => self.hidden_ocgs.contains(number),
+            Some(Val::Array(groups)) => groups.iter().any(
+                |group| matches!(group, Val::Ref(number) if self.hidden_ocgs.contains(number)),
+            ),
             _ => false,
         }
     }
@@ -513,7 +561,6 @@ impl<'a> Interp<'a> {
         .mul(self.ts.tm)
         .mul(self.ctm);
 
-        let (x0, y0) = trm.apply(0.0, 0.0);
         let size_dev = self.ts.size * self.ts.tm.mul(self.ctm).y_scale();
         let mut text = String::new();
         let mut advance = 0.0f64; // text-space units (pre-scale)
@@ -611,29 +658,27 @@ impl<'a> Interp<'a> {
         }
         .mul(self.ts.tm);
 
-        let (x1, _) = trm.apply(advance / self.ts.size.max(1e-9), 0.0);
+        let advance_em = advance / self.ts.size.max(1e-9);
+        let (box_x0, box_y0, box_x1, box_y1) = if font.vertical {
+            trm.rect_bbox(0.0, -advance_em, 1.0, 1.0)
+        } else {
+            trm.rect_bbox(0.0, -0.20, advance_em, 1.0)
+        };
 
         if let Some(span) = &mut self.actual_text {
             // Geometry only: the replacement text supersedes the glyphs.
             let bold = self.ts.font.as_ref().is_some_and(|f| f.is_bold);
             match &mut span.geom {
                 Some((gx0, gy0, gx1, gy1, gsize, gbold)) => {
-                    *gx0 = gx0.min(x0.min(x1));
-                    *gy0 = gy0.min(y0 - 0.20 * size_dev);
-                    *gx1 = gx1.max(x0.max(x1));
-                    *gy1 = gy1.max(y0 + size_dev);
+                    *gx0 = gx0.min(box_x0);
+                    *gy0 = gy0.min(box_y0);
+                    *gx1 = gx1.max(box_x1);
+                    *gy1 = gy1.max(box_y1);
                     *gsize = gsize.max(size_dev);
                     *gbold |= bold;
                 }
                 geom @ None => {
-                    *geom = Some((
-                        x0.min(x1),
-                        y0 - 0.20 * size_dev,
-                        x0.max(x1),
-                        y0 + size_dev,
-                        size_dev,
-                        bold,
-                    ));
+                    *geom = Some((box_x0, box_y0, box_x1, box_y1, size_dev, bold));
                 }
             }
             return;
@@ -643,14 +688,13 @@ impl<'a> Interp<'a> {
             return;
         }
 
-        let width_dev = (x1 - x0).abs().max(0.01);
         self.items.push(RawItem {
             text,
-            x: x0.min(x1),
-            y: y0 - 0.20 * size_dev, // approximate descent below baseline
-            width: width_dev,
-            height: 1.2 * size_dev,
-            // MuPDF's stext JSON int-truncates sizes; heading detection
+            x: box_x0,
+            y: box_y0,
+            width: (box_x1 - box_x0).max(0.01),
+            height: (box_y1 - box_y0).max(0.01),
+            // Preserve the established integer-size normalization; heading detection
             // clusters by size, so match that quantization.
             font_size: (size_dev as i32) as f64,
             is_bold: font.is_bold,
@@ -675,23 +719,25 @@ impl<'a> Interp<'a> {
     }
 
     fn flush_path(&mut self, paint: PathPaint) {
+        let effective_stroke_width = self.stroke_width * self.ctm.x_scale().max(self.ctm.y_scale());
+        let paints_thin_stroke = paint.strokes() && effective_stroke_width <= 3.0;
         for (x, y, w, h) in std::mem::take(&mut self.path_rects) {
             let filled_rule = if paint.fills() {
                 let id = format!("p{}-fr{}", self.page_number, self.seg_counter);
-                super::extract::thin_rect_to_segment_pub(id, x, y, w, h)
+                super::shared::thin_rect_to_segment_pub(id, x, y, w, h)
             } else {
                 None
             };
             if let Some(segment) = filled_rule {
                 self.seg_counter += 1;
                 self.segments.push(segment);
-            } else if paint.strokes() {
+            } else if paints_thin_stroke {
                 let id = format!("p{}-r{}", self.page_number, self.seg_counter);
                 self.seg_counter += 1;
-                super::extract::push_stroked_rect_edges_pub(&mut self.segments, &id, x, y, w, h);
+                super::shared::push_stroked_rect_edges_pub(&mut self.segments, &id, x, y, w, h);
             }
         }
-        if paint.strokes() {
+        if paints_thin_stroke {
             for (x1, y1, x2, y2) in std::mem::take(&mut self.path_segments) {
                 // Only axis-aligned-ish lines matter for table grids.
                 if (x1 - x2).abs() < 0.8 || (y1 - y2).abs() < 0.8 {
@@ -718,16 +764,17 @@ impl<'a> Interp<'a> {
         let subtype = dget(&sdict, b"Subtype")
             .and_then(|v| v.as_name())
             .unwrap_or(b"");
+        if dget(&sdict, b"OC").is_some_and(|oc| self.optional_content_hidden(oc)) {
+            return;
+        }
 
         if subtype == b"Image" {
             if self.hidden_until.is_some() {
                 return;
             }
             // Unit square through the CTM.
-            let (ax, ay) = self.ctm.apply(0.0, 0.0);
-            let (bx, by) = self.ctm.apply(1.0, 1.0);
             self.image_placements.push(ImagePlacement {
-                bbox: (ax.min(bx), ay.min(by), ax.max(bx), ay.max(by)),
+                bbox: self.ctm.rect_bbox(0.0, 0.0, 1.0, 1.0),
                 source: ImageSource::XObject {
                     dict: sdict.clone(),
                     raw,
@@ -744,7 +791,12 @@ impl<'a> Interp<'a> {
                 Ok(Some(Val::Dict(d))) => Some(d),
                 _ => None,
             };
+            // A Form XObject executes with an implicit graphics-state save.
+            // Its text and stroke parameters must not leak to the caller.
             let saved_ctm = self.ctm;
+            let saved_text = self.ts.clone();
+            let saved_stroke_width = self.stroke_width;
+            let saved_stack_len = self.state_stack.len();
             if let Some(Val::Array(m)) = dget(&sdict, b"Matrix") {
                 let v: Vec<f64> = m.iter().filter_map(|o| o.as_num()).collect();
                 if v.len() == 6 {
@@ -759,15 +811,111 @@ impl<'a> Interp<'a> {
                     .mul(self.ctm);
                 }
             }
+            let clip = match dget(&sdict, b"BBox") {
+                Some(Val::Array(values)) => {
+                    let values: Vec<f64> = values.iter().filter_map(Val::as_num).collect();
+                    (values.len() == 4).then(|| {
+                        self.ctm
+                            .rect_bbox(values[0], values[1], values[2], values[3])
+                    })
+                }
+                _ => None,
+            };
+            let item_start = self.items.len();
+            let segment_start = self.segments.len();
+            let image_start = self.image_placements.len();
             self.depth += 1;
             let _ = match &form_res {
                 Some(fr) => self.run(&data, Some(fr)),
                 None => self.run(&data, resources),
             };
             self.depth -= 1;
+            if let Some(clip) = clip {
+                clip_items(&mut self.items, item_start, clip);
+                clip_segments(&mut self.segments, segment_start, clip);
+                clip_images(&mut self.image_placements, image_start, clip);
+            }
             self.ctm = saved_ctm;
+            self.ts = saved_text;
+            self.stroke_width = saved_stroke_width;
+            self.state_stack.truncate(saved_stack_len);
         }
     }
+}
+
+type ClipRect = (f64, f64, f64, f64);
+
+fn intersects((x0, y0, x1, y1): ClipRect, (cx0, cy0, cx1, cy1): ClipRect) -> bool {
+    x1 > cx0 && x0 < cx1 && y1 > cy0 && y0 < cy1
+}
+
+fn clip_items(items: &mut Vec<RawItem>, start: usize, clip: ClipRect) {
+    let mut suffix = items.split_off(start);
+    suffix.retain_mut(|item| {
+        let bounds = (item.x, item.y, item.x + item.width, item.y + item.height);
+        if !intersects(bounds, clip) {
+            return false;
+        }
+        let x0 = bounds.0.max(clip.0);
+        let y0 = bounds.1.max(clip.1);
+        let x1 = bounds.2.min(clip.2);
+        let y1 = bounds.3.min(clip.3);
+        item.x = x0;
+        item.y = y0;
+        item.width = x1 - x0;
+        item.height = y1 - y0;
+        true
+    });
+    items.extend(suffix);
+}
+
+fn clip_segments(segments: &mut Vec<Segment>, start: usize, clip: ClipRect) {
+    let mut suffix = segments.split_off(start);
+    suffix.retain_mut(|segment| {
+        let bounds = (
+            segment.x1.min(segment.x2),
+            segment.y1.min(segment.y2),
+            segment.x1.max(segment.x2),
+            segment.y1.max(segment.y2),
+        );
+        if !intersects(bounds, clip)
+            && !(bounds.0 == bounds.2
+                && bounds.0 >= clip.0
+                && bounds.0 <= clip.2
+                && bounds.3 >= clip.1
+                && bounds.1 <= clip.3)
+            && !(bounds.1 == bounds.3
+                && bounds.1 >= clip.1
+                && bounds.1 <= clip.3
+                && bounds.2 >= clip.0
+                && bounds.0 <= clip.2)
+        {
+            return false;
+        }
+        segment.x1 = segment.x1.clamp(clip.0, clip.2);
+        segment.x2 = segment.x2.clamp(clip.0, clip.2);
+        segment.y1 = segment.y1.clamp(clip.1, clip.3);
+        segment.y2 = segment.y2.clamp(clip.1, clip.3);
+        true
+    });
+    segments.extend(suffix);
+}
+
+fn clip_images(images: &mut Vec<ImagePlacement<'_>>, start: usize, clip: ClipRect) {
+    let mut suffix = images.split_off(start);
+    suffix.retain_mut(|image| {
+        if !intersects(image.bbox, clip) {
+            return false;
+        }
+        image.bbox = (
+            image.bbox.0.max(clip.0),
+            image.bbox.1.max(clip.1),
+            image.bbox.2.min(clip.2),
+            image.bbox.3.min(clip.3),
+        );
+        true
+    });
+    images.extend(suffix);
 }
 
 /// Pull /ActualText out of a raw BDC property dict. Handles literal
