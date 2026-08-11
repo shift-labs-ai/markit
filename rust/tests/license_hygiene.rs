@@ -9,7 +9,11 @@ fn published_manifests_exclude_agpl_pdf_engines() {
     ] {
         let contents = std::fs::read_to_string(&path).unwrap();
         let lower = contents.to_ascii_lowercase();
-        assert!(!lower.contains("mupdf"), "{} contains MuPDF", path.display());
+        assert!(
+            !lower.contains("mupdf"),
+            "{} contains MuPDF",
+            path.display()
+        );
         assert!(!lower.contains("agpl"), "{} contains AGPL", path.display());
     }
 }
