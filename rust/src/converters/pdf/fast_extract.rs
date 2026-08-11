@@ -379,4 +379,42 @@ trailer << /Root 1 0 R >>";
         let tb = &pages[0].text_boxes[0];
         assert!(tb.bounds.left >= 0.0 && tb.bounds.right <= 792.0);
     }
+
+    #[test]
+    fn base_encoding_dict_without_differences_remains_authoritative() {
+        let pdf = br"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj
+4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Custom /Encoding << /BaseEncoding /MacRomanEncoding >> /FontDescriptor 6 0 R >> endobj
+5 0 obj << /Length 38 >> stream
+BT /F1 12 Tf 72 720 Td (\200) Tj ET
+endstream endobj
+6 0 obj << /Type /FontDescriptor /FontName /Custom /Flags 4 /FontFile 7 0 R >> endobj
+7 0 obj << /Length 100 >> stream
+%!PS
+/Encoding 256 array
+dup 128 /A put
+readonly def
+eexec
+endstream endobj
+trailer << /Root 1 0 R >>";
+        let pages = extract_pages_fast(pdf).unwrap();
+        assert!(text_of(&pages).contains('Ä'));
+        assert!(!text_of(&pages).contains('A'));
+    }
+
+    #[test]
+    fn unsupported_mac_expert_encoding_refuses_silent_winansi_garbage() {
+        let pdf = br"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj
+4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Custom /Encoding /MacExpertEncoding >> endobj
+5 0 obj << /Length 38 >> stream
+BT /F1 12 Tf 72 720 Td (\200) Tj ET
+endstream endobj
+trailer << /Root 1 0 R >>";
+        assert!(extract_pages_fast(pdf).is_err());
+    }
 }

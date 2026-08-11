@@ -14,7 +14,12 @@ pub fn type1_code_to_unicode(program: &[u8]) -> Option<[u32; 256]> {
     let end = memchr::memmem::find(program, b"eexec").unwrap_or(program.len());
     let head = &program[..end];
     let enc_at = memchr::memmem::find(head, b"/Encoding")?;
-    let body = &head[enc_at..];
+    let encoding = &head[enc_at..];
+    let end = memchr::memmem::find(encoding, b"readonly def")
+        .map(|at| at + b"readonly def".len())
+        .or_else(|| memchr::memmem::find(encoding, b" def").map(|at| at + b" def".len()))
+        .unwrap_or(encoding.len());
+    let body = &encoding[..end];
 
     // StandardEncoding shorthand: nothing to learn beyond the default.
     if body.starts_with(b"/Encoding StandardEncoding") {
@@ -364,6 +369,10 @@ fn std_string(sid: u16) -> Option<&'static str> {
     STD.get(sid as usize).copied()
 }
 
+fn custom_sid_index(sid: u16) -> Option<usize> {
+    usize::from(sid).checked_sub(391)
+}
+
 /// Parse a CFF program's Encoding + Charset into code -> unicode.
 pub fn cff_code_to_unicode(program: &[u8]) -> Option<[u32; 256]> {
     // Header: major, minor, hdrSize, offSize.
@@ -498,7 +507,7 @@ pub fn cff_code_to_unicode(program: &[u8]) -> Option<[u32; 256]> {
         if let Some(name) = std_string(sid) {
             return glyph_to_unicode(name.as_bytes());
         }
-        let custom = strings.get(program, sid as usize - 391)?;
+        let custom = strings.get(program, custom_sid_index(sid)?)?;
         glyph_to_unicode(custom)
     };
 
@@ -558,4 +567,36 @@ pub fn cff_code_to_unicode(program: &[u8]) -> Option<[u32; 256]> {
         }
     }
     mapped.then_some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn standard_sid_cannot_underflow_custom_string_index() {
+        assert_eq!(custom_sid_index(390), None);
+        assert_eq!(custom_sid_index(391), Some(0));
+    }
+
+    #[test]
+    fn truncated_cff_returns_none_without_panicking() {
+        for end in 0..16 {
+            let bytes = vec![0u8; end];
+            let result = std::panic::catch_unwind(|| cff_code_to_unicode(&bytes));
+            assert!(result.is_ok(), "panicked at prefix length {end}");
+        }
+    }
+
+    #[test]
+    fn type1_encoding_stops_at_its_def() {
+        let program = b"/Encoding 256 array
+dup 65 /A put
+readonly def
+/something dup 66 /Z put
+eexec";
+        let map = type1_code_to_unicode(program).unwrap();
+        assert_eq!(map[65], 'A' as u32);
+        assert_eq!(map[66], 0);
+    }
 }

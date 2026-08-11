@@ -4,12 +4,19 @@
 
 pub(crate) fn glyph_to_unicode(name: &[u8]) -> Option<char> {
     let s = std::str::from_utf8(name).ok()?;
-    // uniXXXX / uXXXX[XX]
-    if let Some(hex) = s.strip_prefix("uni").or_else(|| s.strip_prefix("u")) {
+    // uniXXXX may contain multiple four-digit code units; this
+    // char-returning API resolves the first. uXXXX[XX] is one 4–6 digit
+    // scalar and must consume every digit (supplementary planes).
+    if let Some(hex) = s.strip_prefix("uni") {
         if hex.len() >= 4 {
-            if let Ok(v) = u32::from_str_radix(&hex[..4], 16) {
-                return char::from_u32(v);
-            }
+            return u32::from_str_radix(&hex[..4], 16)
+                .ok()
+                .and_then(char::from_u32);
+        }
+    }
+    if let Some(hex) = s.strip_prefix('u') {
+        if (4..=6).contains(&hex.len()) && hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return u32::from_str_radix(hex, 16).ok().and_then(char::from_u32);
         }
     }
     if let Some(c) = agl_lookup(s) {
@@ -110,7 +117,7 @@ fn agl_lookup(s: &str) -> Option<char> {
         "divide" => '\u{00F7}',
         "minus" => '\u{2212}',
         "logicalnot" => '\u{00AC}',
-        "mu" => '\u{00B5}',
+        "mu" => '\u{03BC}',
         "micro" => '\u{00B5}',
         // ── ligatures & special latin ────────────────────────────
         "fi" => '\u{FB01}',
@@ -299,4 +306,26 @@ fn agl_lookup(s: &str) -> Option<char> {
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn supplementary_u_name_uses_all_hex_digits() {
+        assert_eq!(glyph_to_unicode(b"u1F600"), Some('😀'));
+    }
+
+    #[test]
+    fn mu_and_micro_are_distinct_agl_names() {
+        assert_eq!(glyph_to_unicode(b"mu"), Some('μ'));
+        assert_eq!(glyph_to_unicode(b"micro"), Some('µ'));
+    }
+
+    #[test]
+    fn variant_suffix_falls_back_to_base_name() {
+        assert_eq!(glyph_to_unicode(b"eacute.sc"), Some('é'));
+        assert_eq!(glyph_to_unicode(b"unknown"), None);
+    }
 }

@@ -25,7 +25,7 @@ const MAC_ROMAN_HIGH: [u32; 128] = [
 /// StandardEncoding (Adobe), code points 128–255 (0 = unmapped).
 const STANDARD_HIGH: [u32; 128] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0x00A1, 0x00A2, 0x00A3, 0x2044, 0x00A5, 0x0192, 0x00A7, 0x00A4, 0x0027, 0x201C, 0x00AB,
+    0, 0x00A1, 0x00A2, 0x00A3, 0x2044, 0x00A5, 0x0192, 0x00A7, 0x00A4, 0x2018, 0x201C, 0x00AB,
     0x2039, 0x203A, 0xFB01, 0xFB02, 0, 0x2013, 0x2020, 0x2021, 0x00B7, 0, 0x00B6, 0x2022, 0x201A,
     0x201E, 0x201D, 0x00BB, 0x2026, 0x2030, 0, 0x00BF, 0, 0x0060, 0x00B4, 0x02C6, 0x02DC, 0x00AF,
     0x02D8, 0x02D9, 0x00A8, 0, 0x02DA, 0x00B8, 0, 0x02DD, 0x02DB, 0x02C7, 0x2014, 0, 0, 0, 0, 0, 0,
@@ -171,6 +171,10 @@ fn symbol_encoding(map: &mut [Option<char>; 256]) {
         (0xBC, 0x2026),
         (0xBF, 0x21B5),
         (0xC0, 0x2135),
+        (0xC1, 0x2111),
+        (0xC2, 0x211C),
+        (0xC3, 0x2118),
+        (0xC4, 0x2297),
         (0xC5, 0x2295),
         (0xC6, 0x2205),
         (0xC7, 0x2229),
@@ -248,6 +252,12 @@ pub(crate) fn build_simple_encoding(pdf: &Pdf, dict: &Dict, info: &mut FontInfo)
             base_name = Some(b"ZapfDingbats");
         }
     }
+    if base_name == Some(b"MacExpertEncoding") {
+        // MacExpert is not Latin-compatible; guessing WinAnsi silently
+        // corrupts fractions, superiors/inferiors, and small caps.
+        info.unsupported_cmap = true;
+        return;
+    }
     let high: &[u32; 128] = match base_name {
         Some(b"MacRomanEncoding") => &MAC_ROMAN_HIGH,
         Some(b"StandardEncoding") => &STANDARD_HIGH,
@@ -284,5 +294,31 @@ pub(crate) fn build_simple_encoding(pdf: &Pdf, dict: &Dict, info: &mut FontInfo)
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn standard_encoding_quoteleft_is_typographic() {
+        assert_eq!(STANDARD_HIGH[0xA9 - 0x80], 0x2018);
+    }
+
+    #[test]
+    fn symbol_special_math_codes_are_present() {
+        let mut map = [None; 256];
+        symbol_encoding(&mut map);
+        assert_eq!(map[0xC1], Some('ℑ'));
+        assert_eq!(map[0xC2], Some('ℜ'));
+        assert_eq!(map[0xC3], Some('℘'));
+        assert_eq!(map[0xC4], Some('⊗'));
+    }
+
+    #[test]
+    fn named_high_tables_pin_non_ascii_boundaries() {
+        assert_eq!(MAC_ROMAN_HIGH[0], 0x00C4);
+        assert_eq!(WIN_ANSI_HIGH[0], 0x20AC);
     }
 }

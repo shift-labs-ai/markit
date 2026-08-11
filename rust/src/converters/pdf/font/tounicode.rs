@@ -4,7 +4,23 @@
 use super::FontInfo;
 
 pub(crate) fn parse_tounicode(data: &[u8], info: &mut FontInfo) {
-    let text = String::from_utf8_lossy(data);
+    let source = String::from_utf8_lossy(data);
+    // PostScript '%' comments run to end-of-line; hex-looking examples
+    // inside them are not mappings.
+    let cleaned;
+    let text: &str = if source.contains('%') {
+        cleaned = source
+            .lines()
+            .map(|line| line.split_once('%').map_or(line, |(code, _)| code))
+            .collect::<Vec<_>>()
+            .join(
+                "
+",
+            );
+        &cleaned
+    } else {
+        &source
+    };
 
     let take_hex = |s: &str| -> Option<u32> { u32::from_str_radix(s, 16).ok() };
     let hex_to_string = |s: &str| -> String {
@@ -21,7 +37,7 @@ pub(crate) fn parse_tounicode(data: &[u8], info: &mut FontInfo) {
     };
 
     // bfchar sections: <src> <dst>
-    let mut rest = text.as_ref();
+    let mut rest = text;
     while let Some(start) = rest.find("beginbfchar") {
         let Some(end) = rest[start..].find("endbfchar") else {
             break;
@@ -42,7 +58,7 @@ pub(crate) fn parse_tounicode(data: &[u8], info: &mut FontInfo) {
     }
 
     // bfrange sections: <lo> <hi> <dst>  |  <lo> <hi> [<dst> …]
-    let mut rest = text.as_ref();
+    let mut rest = text;
     while let Some(start) = rest.find("beginbfrange") {
         let Some(end) = rest[start..].find("endbfrange") else {
             break;
@@ -141,4 +157,35 @@ fn set_unicode(info: &mut FontInfo, code: u32, hex_len: usize, s: String) {
         info.to_unicode_simple[code as usize] = s.chars().next();
     }
     info.to_unicode.insert(code, s);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn percent_comments_do_not_create_phantom_mappings() {
+        let cmap = b"1 beginbfchar
+% example <41> <0058>
+<42> <0059>
+endbfchar";
+        let mut font = FontInfo::default();
+        parse_tounicode(cmap, &mut font);
+        assert_eq!(font.to_unicode_simple[0x41], None);
+        assert_eq!(font.to_unicode_simple[0x42], Some('Y'));
+    }
+
+    #[test]
+    fn scalar_and_array_bfranges_decode() {
+        let cmap = b"2 beginbfrange
+<01> <02> <0041>
+<10> <11> [<03B1> <03B2>]
+endbfrange";
+        let mut font = FontInfo::default();
+        parse_tounicode(cmap, &mut font);
+        assert_eq!(font.to_unicode_simple[1], Some('A'));
+        assert_eq!(font.to_unicode_simple[2], Some('B'));
+        assert_eq!(font.to_unicode_simple[0x10], Some('α'));
+        assert_eq!(font.to_unicode_simple[0x11], Some('β'));
+    }
 }

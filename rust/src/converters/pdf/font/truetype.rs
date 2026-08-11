@@ -88,13 +88,21 @@ fn walk_subtable(sub: &[u8], mut emit: impl FnMut(u32, u16)) -> Option<()> {
         }
         12 => {
             let ngroups = u32be(sub, 12)? as usize;
-            for g in 0..ngroups.min(10_000) {
-                let rec = 16 + g * 12;
+            const MAX_CMAP_MAPPINGS: usize = 1_000_000;
+            let mut mappings = 0usize;
+            for g in 0..ngroups {
+                let rec = 16usize.checked_add(g.checked_mul(12)?)?;
                 let start = u32be(sub, rec)?;
-                let end = u32be(sub, rec + 4)?.min(start + 0xFFFF);
+                let end = u32be(sub, rec + 4)?;
+                let count = end.checked_sub(start)?.checked_add(1)? as usize;
+                mappings = mappings.checked_add(count)?;
+                if mappings > MAX_CMAP_MAPPINGS {
+                    return None;
+                }
                 let start_gid = u32be(sub, rec + 8)?;
                 for code in start..=end {
-                    emit(code, (start_gid + (code - start)) as u16);
+                    let gid = u16::try_from(start_gid.checked_add(code - start)?).ok()?;
+                    emit(code, gid);
                 }
             }
         }
@@ -268,4 +276,26 @@ pub fn code_to_unicode(font: &[u8]) -> Option<[u32; 256]> {
     }
 
     mapped.then_some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oversized_format12_group_is_rejected_not_partially_accepted() {
+        let mut sub = vec![0u8; 28];
+        sub[0..2].copy_from_slice(&12u16.to_be_bytes());
+        sub[12..16].copy_from_slice(&1u32.to_be_bytes());
+        sub[16..20].copy_from_slice(&0x1_0000u32.to_be_bytes());
+        sub[20..24].copy_from_slice(&0x2_0000u32.to_be_bytes());
+        sub[24..28].copy_from_slice(&1u32.to_be_bytes());
+        assert!(walk_subtable(&sub, |_, _| {}).is_none());
+    }
+
+    #[test]
+    fn truncated_subtable_returns_none_without_panicking() {
+        assert!(walk_subtable(&[0, 4], |_, _| {}).is_none());
+        assert!(walk_subtable(&[0, 12, 0], |_, _| {}).is_none());
+    }
 }

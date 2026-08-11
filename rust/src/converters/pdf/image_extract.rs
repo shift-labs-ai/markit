@@ -118,8 +118,15 @@ fn extract_ccitt(pdf: &Pdf, dict: &Dict, data: &[u8]) -> Result<ExtractedImage> 
             .unwrap_or(dflt)
     };
     let k = pg(b"K", 0.0) as i32;
-    let columns = pg(b"Columns", 1728.0) as usize;
-    let cols = if columns > 0 { columns } else { width };
+    // PDF image XObjects default Columns to their /Width. The 1728
+    // default belongs to standalone fax data, not an image dictionary.
+    let cols = parms
+        .as_ref()
+        .and_then(|d| pdf.dict_get(d, b"Columns").ok().flatten())
+        .and_then(|v| v.as_num())
+        .map(|v| v as usize)
+        .filter(|&v| v > 0)
+        .unwrap_or(width);
     let byte_align = matches!(
         parms
             .as_ref()
@@ -491,10 +498,76 @@ fn color_info(pdf: &Pdf, dict: &Dict) -> Result<(usize, Option<Vec<u8>>, bool)> 
                     };
                     Ok((1, Some(lookup), false))
                 }
-                b"DeviceN" | b"Separation" => Ok((1, None, false)),
+                b"Separation" => Ok((1, None, true)),
+                b"DeviceN" => {
+                    let components = match a.get(1).map(|v| pdf.resolve(v)) {
+                        Some(Ok(Val::Array(names))) => names.len().max(1),
+                        _ => 1,
+                    };
+                    Ok((components, None, true))
+                }
                 _ => bail!("unsupported colorspace"),
             }
         }
         _ => bail!("unsupported colorspace"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pdf() -> Pdf<'static> {
+        Pdf::parse(
+            b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [] /Count 0 >> endobj
+trailer << /Root 1 0 R >>",
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn devicen_uses_colorant_count_and_tint_polarity() {
+        let dict = vec![(
+            b"ColorSpace".as_slice(),
+            Val::Array(vec![
+                Val::Name(b"DeviceN"),
+                Val::Array(vec![Val::Name(b"Cyan"), Val::Name(b"Spot")]),
+                Val::Name(b"DeviceCMYK"),
+                Val::Null,
+            ]),
+        )];
+        assert_eq!(color_info(&pdf(), &dict).unwrap(), (2, None, true));
+    }
+
+    #[test]
+    fn separation_tint_is_inverted_for_luminance() {
+        let dict = vec![(
+            b"ColorSpace".as_slice(),
+            Val::Array(vec![
+                Val::Name(b"Separation"),
+                Val::Name(b"Spot"),
+                Val::Name(b"DeviceCMYK"),
+                Val::Null,
+            ]),
+        )];
+        assert_eq!(color_info(&pdf(), &dict).unwrap(), (1, None, true));
+    }
+
+    #[test]
+    fn ccitt_columns_default_to_image_width() {
+        let dict = vec![
+            (b"Width".as_slice(), Val::Num(8.0)),
+            (b"Height".as_slice(), Val::Num(2.0)),
+            (
+                b"DecodeParms".as_slice(),
+                Val::Dict(vec![(b"K".as_slice(), Val::Num(-1.0))]),
+            ),
+        ];
+        // Two all-white G4 rows (V0, V0).
+        let image = extract_ccitt(&pdf(), &dict, &[0b1100_0000]).unwrap();
+        let width = u32::from_be_bytes(image.bytes[16..20].try_into().unwrap());
+        assert_eq!(width, 8);
     }
 }

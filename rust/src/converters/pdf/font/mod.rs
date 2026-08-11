@@ -13,7 +13,7 @@ pub(crate) mod type1;
 
 use rustc_hash::FxHashMap;
 
-use super::own_pdf::{decode_stream, dget, Dict, Pdf, Val};
+use super::own_pdf::{decode_stream, Dict, Pdf, Val};
 use encoding::build_simple_encoding;
 use tounicode::parse_tounicode;
 
@@ -216,11 +216,7 @@ pub(crate) fn build_font(pdf: &Pdf, dict: &Dict) -> FontInfo {
     // WinAnsi default is a guess. The embedded TrueType program knows the
     // truth — recover code->unicode from its cmap/post tables.
     if !has_tounicode && !is_type0 {
-        let has_encoding = match g(b"Encoding") {
-            Some(Val::Name(_)) => true,
-            Some(Val::Dict(d)) => dget(&d, b"Differences").is_some(),
-            _ => false,
-        };
+        let has_encoding = matches!(g(b"Encoding"), Some(Val::Name(_) | Val::Dict(_)));
         if !has_encoding {
             if let Some(Val::Dict(fd)) = g(b"FontDescriptor") {
                 let program_map = |key: &[u8]| -> Option<[u32; 256]> {
@@ -356,8 +352,11 @@ fn parse_cid_widths(pdf: &Pdf, w: &[Val], out: &mut FxHashMap<u32, f64>) {
         match w.get(i + 1).and_then(|o| pdf.resolve(o).ok()) {
             Some(Val::Array(list)) => {
                 for (j, o) in list.iter().enumerate() {
+                    let Some(cid) = (first as u32).checked_add(j as u32) else {
+                        break;
+                    };
                     if let Some(v) = pdf.resolve(o).ok().and_then(|v| v.as_num()) {
-                        out.insert(first as u32 + j as u32, v);
+                        out.insert(cid, v);
                     }
                 }
                 i += 2;
@@ -371,8 +370,14 @@ fn parse_cid_widths(pdf: &Pdf, w: &[Val], out: &mut FxHashMap<u32, f64>) {
                 else {
                     break;
                 };
-                for c in first as u32..=last as u32 {
-                    out.insert(c, v);
+                let first = first as u32;
+                let last = last as u32;
+                const MAX_CID_WIDTH_RANGE: u32 = 65_536;
+                let span = last.checked_sub(first).and_then(|n| n.checked_add(1));
+                if span.is_some_and(|n| n <= MAX_CID_WIDTH_RANGE) {
+                    for c in first..=last {
+                        out.insert(c, v);
+                    }
                 }
                 i += 3;
             }
@@ -420,5 +425,27 @@ fn recover_cid_unicode(pdf: &Pdf, cid_font: &Dict, info: &mut FontInfo) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pathological_cid_width_range_is_not_materialized() {
+        let bytes = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [] /Count 0 >> endobj
+trailer << /Root 1 0 R >>";
+        let pdf = Pdf::parse(bytes).unwrap();
+        let widths = [Val::Num(0.0), Val::Num(70_000.0), Val::Num(500.0)];
+        let mut out = FxHashMap::default();
+        parse_cid_widths(&pdf, &widths, &mut out);
+        assert!(
+            out.is_empty(),
+            "pathological range allocated {} widths",
+            out.len()
+        );
     }
 }
