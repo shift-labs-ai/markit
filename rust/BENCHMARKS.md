@@ -1,25 +1,32 @@
 # Benchmark targets
 
-## Current standing (2026-08-11, after chrome-detector + Type3 recovery)
+## Current standing (2026-08-11, end of quality sprint)
 
 olmOCR-bench, 1,403 single-page PDFs, 8,413 checks:
 
-- **Overall: 30.0% ± 0.9%** (macro over categories; was 27.1% at 03a0d7f)
-- Throughput: ~196 docs/s in-process (154.9 via the Node harness at 03a0d7f)
+- **Overall: 35.4% ± 0.9%** (was 27.1% at 03a0d7f)
+- Throughput: ~200 docs/s in-process (154.9 via the Node harness at 03a0d7f)
 - Conversion failures: 0 (was 7)
+- Gap to liteparse's published 39.1%: 3.7 points
 
 Per category (delta from 03a0d7f):
 
 | Category | Score | Δ |
 |---|---:|---:|
-| headers_footers | 56.2% | +20.3 |
-| multi_column | 27.8% | +2.0 |
-| long_tiny_text | 20.8% | +0.7 |
+| headers_footers | 68.0% | +32.1 |
+| multi_column | 41.3% | +15.5 |
+| table_tests | 34.7% | +13.0 |
+| long_tiny_text | 24.9% | +4.8 |
 | baseline | 100.0% | +0.5 |
-| table_tests | 21.6% | −0.1 |
 | old_scans | 13.3% | 0 |
 | arxiv_math | 0.6% | 0 |
 | old_scans_math | 0.0% | 0 |
+
+Remaining pools (run7 failure mining): table cell-not-found (292) and
+no-tables (267); multi_column anchors interrupted by region
+segmentation (~500); long_tiny_text presence (333, partly image-only
+pages needing OCR); headers_footers absent (243); old_scans + math
+need OCR / formula reconstruction respectively.
 
 Caveats carried forward:
 - The 100% baseline is still partly comment-only outputs (image

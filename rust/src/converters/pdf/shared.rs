@@ -104,16 +104,42 @@ pub(crate) fn finish_text_boxes_pub(
     finish_text_boxes(raws, page_number)
 }
 
+/// Expand Unicode Latin ligature codepoints to their ASCII letters.
+/// Fonts with a ToUnicode CMap frequently map the single “ﬁ” glyph to
+/// U+FB01; search, matching, and downstream consumers want "fi".
+fn expand_ligatures(text: &str) -> String {
+    if !text.chars().any(|c| ('\u{FB00}'..='\u{FB06}').contains(&c)) {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len() + 8);
+    for c in text.chars() {
+        match c {
+            '\u{FB00}' => out.push_str("ff"),
+            '\u{FB01}' => out.push_str("fi"),
+            '\u{FB02}' => out.push_str("fl"),
+            '\u{FB03}' => out.push_str("ffi"),
+            '\u{FB04}' => out.push_str("ffl"),
+            '\u{FB05}' => out.push_str("ft"),
+            '\u{FB06}' => out.push_str("st"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 fn finish_text_boxes(raws: Vec<RawTextItem>, page_number: u32) -> Result<Vec<TextBox>> {
     Ok(merge_into_words(&raws)
         .into_iter()
         .enumerate()
         .map(|(i, item)| TextBox {
             id: format!("p{page_number}-t{i}"),
-            text: match super::bidi::fix_rtl(&item.text) {
-                Some(text) => text.trim().to_string(),
-                None => item.text.trim().to_string(),
-            },
+            text: expand_ligatures(
+                match super::bidi::fix_rtl(&item.text) {
+                    Some(text) => text.trim().to_string(),
+                    None => item.text.trim().to_string(),
+                }
+                .as_str(),
+            ),
             page_number,
             font_size: item.font_size,
             is_bold: item.is_bold,
@@ -242,6 +268,24 @@ mod tests {
     fn thin_rectangles_become_axis_aligned_segments() {
         assert!(thin_rect_to_segment_pub("h".into(), 0.0, 0.0, 100.0, 1.0).is_some());
         assert!(thin_rect_to_segment_pub("square".into(), 0.0, 0.0, 10.0, 10.0).is_none());
+    }
+
+    #[test]
+    fn ligature_codepoints_expand_to_ascii() {
+        let boxes = finish_text_boxes_pub(
+            vec![RawTextItemPub {
+                text: "\u{FB01}gure \u{FB02}ow e\u{FB03}cient".into(),
+                x: 0.0,
+                y: 10.0,
+                width: 60.0,
+                height: 10.0,
+                font_size: 10.0,
+                is_bold: false,
+            }],
+            1,
+        )
+        .unwrap();
+        assert_eq!(boxes[0].text, "figure flow efficient");
     }
 
     #[test]
