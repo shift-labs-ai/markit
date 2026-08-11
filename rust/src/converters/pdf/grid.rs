@@ -493,12 +493,23 @@ pub fn resolve_table_grids(
             continue;
         }
 
+        // Only boxes near the group's y-range can land in its cells or
+        // header row; splitting and ray-casting the whole page per group
+        // is quadratic on multi-table pages.
+        let group_boxes: Vec<TextBox> = text_boxes
+            .iter()
+            .filter(|tb| {
+                let cy = (tb.bounds.top + tb.bounds.bottom) / 2.0;
+                cy >= y_min - 5.0 && cy <= y_max + 25.0
+            })
+            .cloned()
+            .collect();
         let (grid, cids) = build_table_grid(
             page_number,
             y_lines,
             &group_x_lines,
             &filtered_segments,
-            text_boxes,
+            &group_boxes,
         );
 
         // A one-column ruled grid is usually a framed box whose interior

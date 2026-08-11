@@ -136,171 +136,149 @@ pub(super) fn expand_sub_rows_by_y_clusters(
     cell_boxes: &mut HashMap<usize, Vec<usize>>, // cell_index -> box indices into a shared vec
     all_boxes: &[TextBox],
 ) -> usize {
-    let mut added_rows: usize = 0;
+    // Streaming rewrite of the original in-place expansion: identical
+    // per-row decisions (clusters, guards, redistribution), but rows
+    // are emitted once into fresh cell storage instead of shifting and
+    // rescanning the whole grid per split — the old path was
+    // O(rows² × cols) and dominated conversion time on rule-heavy pages.
+    let mut by_pos: HashMap<(usize, usize), (TableCell, Vec<usize>)> = HashMap::new();
+    for (idx, cell) in cells.drain(..).enumerate() {
+        let boxes = cell_boxes.remove(&idx).unwrap_or_default();
+        by_pos.insert((cell.row, cell.col), (cell, boxes));
+    }
+    cell_boxes.clear();
 
-    for orig_row in 0..original_rows {
-        let current_row = orig_row + added_rows;
-
-        // Collect row cell infos
-        struct RowCellInfo {
-            #[allow(dead_code)] // parity with the TS struct shape
-            cell_idx: usize,
-            col: usize,
-            box_indices: Vec<usize>,
+    let mut out_cells: Vec<TableCell> = Vec::new();
+    let mut out_boxes: HashMap<usize, Vec<usize>> = HashMap::new();
+    let push_cell = |out_cells: &mut Vec<TableCell>,
+                     out_boxes: &mut HashMap<usize, Vec<usize>>,
+                     mut cell: TableCell,
+                     row: usize,
+                     boxes: Vec<usize>| {
+        cell.row = row;
+        if !boxes.is_empty() {
+            out_boxes.insert(out_cells.len(), boxes);
         }
-        let mut row_cell_infos: Vec<RowCellInfo> = Vec::new();
+        out_cells.push(cell);
+    };
+
+    let mut out_row = 0usize;
+    for orig_row in 0..original_rows {
+        // Gather this row's cells and their boxes.
+        let mut row_cells: Vec<(usize, TableCell, Vec<usize>)> = Vec::new();
         for col in 0..cols {
-            if let Some(cell_idx) = cells
-                .iter()
-                .position(|c| c.row == current_row && c.col == col)
-            {
-                if let Some(bi) = cell_boxes.get(&cell_idx) {
-                    if !bi.is_empty() {
-                        row_cell_infos.push(RowCellInfo {
-                            cell_idx,
-                            col,
-                            box_indices: bi.clone(),
-                        });
-                    }
-                }
+            if let Some((cell, boxes)) = by_pos.remove(&(orig_row, col)) {
+                row_cells.push((col, cell, boxes));
             }
         }
-        if row_cell_infos.is_empty() {
-            continue;
-        }
 
-        let all_mid_ys: Vec<f64> = row_cell_infos
+        let non_empty: Vec<usize> = row_cells
             .iter()
-            .flat_map(|rci| {
-                rci.box_indices
-                    .iter()
-                    .map(|&bi| (all_boxes[bi].bounds.top + all_boxes[bi].bounds.bottom) / 2.0)
-            })
+            .filter(|(_, _, boxes)| !boxes.is_empty())
+            .map(|(col, _, _)| *col)
             .collect();
 
-        let sorted_y: Vec<f64> = {
-            let mut s: Vec<f64> = all_mid_ys
+        // Cluster the row's box mid-Ys (descending, gap > Y_CLUSTER_GAP).
+        let clusters: Vec<f64> = {
+            let mut sorted_y: Vec<f64> = row_cells
                 .iter()
-                .map(|y| (y * 10.0).round() / 10.0)
+                .flat_map(|(_, _, boxes)| {
+                    boxes.iter().map(|&bi| {
+                        let y = (all_boxes[bi].bounds.top + all_boxes[bi].bounds.bottom) / 2.0;
+                        (y * 10.0).round() / 10.0
+                    })
+                })
                 .collect();
-            s.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
-            s.dedup();
-            s
+            sorted_y.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+            sorted_y.dedup();
+            let mut clusters: Vec<f64> = Vec::new();
+            for y in sorted_y {
+                match clusters.last() {
+                    Some(last) if last - y <= Y_CLUSTER_GAP => {}
+                    _ => clusters.push(y),
+                }
+            }
+            clusters
         };
-        // sorted_y is descending
-        let mut clusters = vec![sorted_y[0]];
-        for i in 1..sorted_y.len() {
-            if clusters.last().unwrap() - sorted_y[i] > Y_CLUSTER_GAP {
-                clusters.push(sorted_y[i]);
+
+        let split = if non_empty.is_empty() || clusters.len() < 2 {
+            false
+        } else {
+            let mut cols_in_top_cluster: HashSet<usize> = HashSet::new();
+            for (col, _, boxes) in &row_cells {
+                if boxes.iter().any(|&bi| {
+                    assign_to_y_cluster(
+                        (all_boxes[bi].bounds.top + all_boxes[bi].bounds.bottom) / 2.0,
+                        &clusters,
+                    ) == 0
+                }) {
+                    cols_in_top_cluster.insert(*col);
+                }
             }
-        }
-        if clusters.len() < 2 {
-            continue;
-        }
+            let sparse_cols_have_multiple_boxes = row_cells
+                .iter()
+                .any(|(col, _, boxes)| !cols_in_top_cluster.contains(col) && boxes.len() > 1);
+            cols_in_top_cluster.len() >= MIN_COLS_IN_TOP_CLUSTER
+                && cols_in_top_cluster.len() < non_empty.len()
+                && sparse_cols_have_multiple_boxes
+        };
 
-        let mut cols_in_top_cluster: HashSet<usize> = HashSet::new();
-        let mut total_non_empty_cols: HashSet<usize> = HashSet::new();
-        for rci in &row_cell_infos {
-            total_non_empty_cols.insert(rci.col);
-            if rci.box_indices.iter().any(|&bi| {
-                assign_to_y_cluster(
-                    (all_boxes[bi].bounds.top + all_boxes[bi].bounds.bottom) / 2.0,
-                    &clusters,
-                ) == 0
-            }) {
-                cols_in_top_cluster.insert(rci.col);
+        if !split {
+            for (_, cell, boxes) in row_cells {
+                push_cell(&mut out_cells, &mut out_boxes, cell, out_row, boxes);
             }
-        }
-
-        if cols_in_top_cluster.len() < MIN_COLS_IN_TOP_CLUSTER {
-            continue;
-        }
-        if cols_in_top_cluster.len() >= total_non_empty_cols.len() {
-            continue;
-        }
-
-        let sparse_cols_have_multiple_boxes = row_cell_infos
-            .iter()
-            .any(|rci| !cols_in_top_cluster.contains(&rci.col) && rci.box_indices.len() > 1);
-        if !sparse_cols_have_multiple_boxes {
+            out_row += 1;
             continue;
         }
 
         let num_sub_rows = clusters.len();
-        let num_new_rows = num_sub_rows - 1;
-
-        // Shift rows down
-        for cell in cells.iter_mut() {
-            if cell.row > current_row {
-                cell.row += num_new_rows;
-            }
-        }
-
-        // Cell indices change as rows are inserted; preserve box
-        // assignments by stable (row, col) coordinates, then rebuild the
-        // index-keyed map after insertion.
-        let mut boxes_by_pos: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
-        for (&cell_idx, bi) in cell_boxes.iter() {
-            let c = &cells[cell_idx];
-            boxes_by_pos.insert((c.row, c.col), bi.clone());
-        }
-        cell_boxes.clear();
-
-        // Add new sub-row cells
-        for sub_row in 1..num_sub_rows {
-            for col in 0..cols {
-                cells.push(TableCell {
-                    row: current_row + sub_row,
-                    col,
-                    text: String::new(),
-                    row_span: 1,
-                    col_span: 1,
-                });
-            }
-        }
-
-        // Redistribute boxes across sub-rows
-        for rci in &row_cell_infos {
-            let mut sub_row_box_groups: Vec<Vec<usize>> = vec![vec![]; num_sub_rows];
-            for &bi in &rci.box_indices {
+        // Redistribute each column's boxes across the sub-rows; sub-row
+        // 0 keeps the original cell (text and all), later sub-rows get
+        // fresh empty cells.
+        let mut sub_rows: Vec<Vec<(usize, TableCell, Vec<usize>)>> =
+            (0..num_sub_rows).map(|_| Vec::new()).collect();
+        for (col, cell, boxes) in row_cells {
+            let mut groups: Vec<Vec<usize>> = vec![Vec::new(); num_sub_rows];
+            for bi in boxes {
                 let cy = (all_boxes[bi].bounds.top + all_boxes[bi].bounds.bottom) / 2.0;
-                let cluster_idx = assign_to_y_cluster(cy, &clusters);
-                sub_row_box_groups[cluster_idx].push(bi);
+                groups[assign_to_y_cluster(cy, &clusters)].push(bi);
             }
-
-            // Update orig cell (sub_row 0)
-            if sub_row_box_groups[0].is_empty() {
-                boxes_by_pos.remove(&(current_row, rci.col));
-            } else {
-                boxes_by_pos.insert((current_row, rci.col), sub_row_box_groups[0].clone());
-            }
-
-            for sub_row in 1..num_sub_rows {
-                if !sub_row_box_groups[sub_row].is_empty() {
-                    boxes_by_pos.insert(
-                        (current_row + sub_row, rci.col),
-                        sub_row_box_groups[sub_row].clone(),
-                    );
-                }
+            for (sub, group) in groups.into_iter().enumerate() {
+                let sub_cell = if sub == 0 {
+                    cell.clone()
+                } else {
+                    TableCell {
+                        row: 0,
+                        col,
+                        text: String::new(),
+                        row_span: 1,
+                        col_span: 1,
+                    }
+                };
+                sub_rows[sub].push((col, sub_cell, group));
             }
         }
-
-        // Rebuild cell_boxes from boxes_by_pos
-        for (cell_idx, c) in cells.iter().enumerate() {
-            if let Some(bi) = boxes_by_pos.get(&(c.row, c.col)) {
-                cell_boxes.insert(cell_idx, bi.clone());
+        for (sub, row) in sub_rows.into_iter().enumerate() {
+            for (_, cell, boxes) in row {
+                push_cell(&mut out_cells, &mut out_boxes, cell, out_row + sub, boxes);
             }
         }
-
-        added_rows += num_new_rows;
-        // Don't clear boxes_by_pos, we already rebuilt cell_boxes
-        continue;
+        out_row += num_sub_rows;
     }
 
-    // If we didn't enter the loop body that rebuilds, make sure cell_boxes is consistent
-    // Actually it should be fine — we only modify cell_boxes inside the loop when clusters >= 2
+    // Cells beyond original_rows do not exist today; carry any
+    // stragglers defensively at their shifted position.
+    let added = out_row - original_rows.min(out_row);
+    let mut stragglers: Vec<(TableCell, Vec<usize>)> = by_pos.into_values().collect();
+    stragglers.sort_by_key(|(cell, _)| (cell.row, cell.col));
+    for (cell, boxes) in stragglers {
+        let row = cell.row + added;
+        push_cell(&mut out_cells, &mut out_boxes, cell, row, boxes);
+    }
 
-    original_rows + added_rows
+    *cells = out_cells;
+    *cell_boxes = out_boxes;
+    out_row.max(original_rows)
 }
 
 // ---------------------------------------------------------------------------

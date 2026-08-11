@@ -9,7 +9,7 @@ use crate::converters::pdf::types::{Bounds, Segment, TableCell, TableGrid, TextB
 
 use super::lines::expand_sub_rows_by_y_clusters;
 use super::prune::prune_empty_rows_and_cols;
-use super::raycast::cast as cast_rays_for_text_box;
+use super::raycast::RayIndex;
 
 /// Find which column a horizontal position falls into.
 /// Returns None if outside the grid.
@@ -181,6 +181,7 @@ pub(super) fn build_table_grid(
 
     // Split text boxes that span multiple columns before placement
     let split_boxes = split_cross_column_boxes(text_boxes, x_lines);
+    let ray_index = RayIndex::new(filtered_segments);
 
     // Track which split piece IDs get placed in cells
     let mut placed_split_ids: HashSet<String> = HashSet::new();
@@ -255,8 +256,6 @@ pub(super) fn build_table_grid(
             continue;
         }
 
-        let ray_confidence = cast_rays_for_text_box(tb, filtered_segments).count();
-
         let row_opt = y_lines.windows(2).position(|w| cy <= w[0] && cy >= w[1]);
         let mut row = match row_opt {
             Some(r) => r,
@@ -282,7 +281,7 @@ pub(super) fn build_table_grid(
         if col >= cols {
             continue;
         }
-        if ray_confidence == 0 {
+        if !ray_index.any_hit(tb) {
             continue;
         }
 

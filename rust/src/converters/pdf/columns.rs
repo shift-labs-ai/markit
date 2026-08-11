@@ -97,15 +97,28 @@ fn find_gutters(text_boxes: &[TextBox]) -> Vec<f64> {
 
     let max_crossing = 1.max((text_boxes.len() as f64 * MAX_CROSSING_FRACTION) as usize);
 
+    // Crossing histogram via a difference array: O(boxes + width)
+    // instead of a per-bin scan over every box.
+    let bins = (hi - lo + 1) as usize;
+    let mut diff = vec![0i32; bins + 1];
+    for tb in text_boxes {
+        // Box crosses bin x when left + 2 < x < right - 2.
+        let from = ((tb.bounds.left + 2.0).floor() as i64 + 1).max(lo);
+        let to = ((tb.bounds.right - 2.0).ceil() as i64 - 1).min(hi);
+        if from <= to {
+            diff[(from - lo) as usize] += 1;
+            diff[(to - lo + 1) as usize] -= 1;
+        }
+    }
+
     // Runs of bins crossed by at most max_crossing boxes.
     let mut runs: Vec<(i64, i64)> = Vec::new();
     let mut run_start: Option<i64> = None;
-    for x in lo..=hi {
-        let crossing = text_boxes
-            .iter()
-            .filter(|tb| tb.bounds.left + 2.0 < x as f64 && (x as f64) < tb.bounds.right - 2.0)
-            .count();
-        if crossing <= max_crossing {
+    let mut crossing = 0i32;
+    for (bin, delta) in diff.iter().take(bins).enumerate() {
+        crossing += delta;
+        let x = lo + bin as i64;
+        if crossing <= max_crossing as i32 {
             if run_start.is_none() {
                 run_start = Some(x);
             }
@@ -248,16 +261,21 @@ fn vertical_segment_spans_gap(segments: &[Segment], lower: f64, upper: f64) -> b
 }
 
 /// Split a region at horizontal whitespace bands taller than the
-/// structural threshold. Returns None when the region is one piece.
-fn horizontal_splits(boxes: &[TextBox], segments: &[Segment]) -> Option<Vec<Vec<TextBox>>> {
-    let threshold = (H_SPLIT_GAP_LINES * median_height(boxes)).max(H_SPLIT_MIN_GAP_PTS);
-    let mut sorted = boxes.to_vec();
-    sorted.sort_by(|a, b| b.bounds.top.total_cmp(&a.bounds.top));
+/// structural threshold. Takes ownership to avoid deep-cloning boxes
+/// at every recursion level; gives them back when the region is one
+/// piece.
+#[allow(clippy::result_large_err)]
+fn horizontal_splits(
+    mut boxes: Vec<TextBox>,
+    segments: &[Segment],
+) -> Result<Vec<Vec<TextBox>>, Vec<TextBox>> {
+    let threshold = (H_SPLIT_GAP_LINES * median_height(&boxes)).max(H_SPLIT_MIN_GAP_PTS);
+    boxes.sort_by(|a, b| b.bounds.top.total_cmp(&a.bounds.top));
 
     let mut parts: Vec<Vec<TextBox>> = Vec::new();
     let mut current: Vec<TextBox> = Vec::new();
     let mut min_bottom = f64::INFINITY;
-    for tb in sorted {
+    for tb in boxes {
         if !current.is_empty()
             && min_bottom - tb.bounds.top >= threshold
             && !vertical_segment_spans_gap(segments, tb.bounds.top, min_bottom)
@@ -271,7 +289,11 @@ fn horizontal_splits(boxes: &[TextBox], segments: &[Segment]) -> Option<Vec<Vec<
     if !current.is_empty() {
         parts.push(current);
     }
-    (parts.len() >= 2).then_some(parts)
+    if parts.len() >= 2 {
+        Ok(parts)
+    } else {
+        Err(parts.pop().unwrap_or_default())
+    }
 }
 
 /// Cell-gap threshold and width cap for the tabular-region check.
@@ -358,12 +380,15 @@ fn layout_region(
         return;
     }
 
-    if let Some(parts) = horizontal_splits(&boxes, segments) {
-        for part in parts {
-            layout_region(part, segments, depth + 1, true, out, gutters_out);
+    let boxes = match horizontal_splits(boxes, segments) {
+        Ok(parts) => {
+            for part in parts {
+                layout_region(part, segments, depth + 1, true, out, gutters_out);
+            }
+            return;
         }
-        return;
-    }
+        Err(boxes) => boxes,
+    };
 
     // A ruled table region must not be column-split — its interior
     // whitespace belongs to the grid, not the page layout. Neither may
