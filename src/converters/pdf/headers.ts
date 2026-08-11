@@ -122,3 +122,168 @@ export function stripHeadersFooters(pages: PageContent[]): void {
     });
   }
 }
+
+/**
+ * Fraction of page height treated as the top/bottom band for the
+ * single-page chrome detector. Wider than the repetition band: chrome on
+ * a first page can sit a little deeper (e.g. a citation banner above a
+ * paper title).
+ */
+const SP_BAND_RATIO = 0.15;
+
+/**
+ * Minimum gap, in multiples of the page's body font size, between a
+ * chrome candidate and the nearest body-side line. Real chrome is
+ * visually separated from content.
+ */
+const SP_ISOLATION_GAP_RATIO = 1.0;
+
+/** Chrome candidates longer than this are body prose, never chrome. */
+const SP_MAX_CHARS = 200;
+
+/**
+ * Does the text match an unambiguous running-chrome signature?
+ * URLs/DOIs, journal-banner phrases, copyright marks, `Page N`,
+ * standalone page numbers, volume/issue markers, and journal citation
+ * lines (year + page range, short). False positives on body prose are
+ * the main risk — every branch here must be unambiguous.
+ */
+export function matchesChromePattern(text: string): boolean {
+  const t = text.trim();
+  if (t.length === 0) return false;
+  const lower = t.toLowerCase();
+
+  // URL / DOI prefixes — chrome lines are very often a citation URL.
+  if (
+    lower.includes("http://") ||
+    lower.includes("https://") ||
+    lower.startsWith("www.") ||
+    lower.includes(" www.") ||
+    lower.includes("doi:") ||
+    lower.includes("doi.org/") ||
+    lower.includes("dx.doi.org")
+  ) {
+    return true;
+  }
+
+  // Common journal-paper banner phrases.
+  if (
+    lower.includes("please cite this article") ||
+    lower.includes("contents lists available at") ||
+    lower.includes("available online at") ||
+    lower.includes("downloaded from")
+  ) {
+    return true;
+  }
+
+  // Copyright / trademark chrome.
+  if (
+    t.includes("\u00a9") ||
+    lower.includes("copyright ") ||
+    lower.includes("all rights reserved")
+  ) {
+    return true;
+  }
+
+  // "Page N" / "Page N of M".
+  if (/^page \d/.test(lower)) return true;
+
+  // Lone page number (≤4 digits).
+  if (/^\d{1,4}$/.test(t)) return true;
+
+  // Volume markers ("Vol. 24" / "Vol 24" / "Vol, 24") with a digit later.
+  if (/(?:^|[^a-z0-9])vol[. ,].*\d/.test(lower)) return true;
+
+  // Journal-cite style: a 4-digit year AND a numeric page range, short
+  // enough to plausibly be chrome.
+  if (t.length <= 120 && hasYear(lower) && hasDigitRange(t)) return true;
+
+  return false;
+}
+
+function hasYear(lower: string): boolean {
+  return /(?:^|[^a-z0-9])(?:19|20)\d\d(?![a-z0-9])/.test(lower);
+}
+
+/**
+ * A digits–digits range that is not a `YYYY-MM`/`YYYY-MM-DD` calendar
+ * date (a 4-digit 19xx/20xx group followed by a 1-2 digit group is a
+ * date, not a page range).
+ */
+function hasDigitRange(t: string): boolean {
+  for (const m of t.matchAll(/(\d+) *[-\u2013\u2014] *(\d+)/g)) {
+    const g1 = m[1];
+    const g2 = m[2];
+    const g1IsYear =
+      g1.length === 4 && (g1.startsWith("19") || g1.startsWith("20"));
+    if (!(g1IsYear && g2.length <= 2)) return true;
+  }
+  return false;
+}
+
+/** Median font size of a page's text boxes — the body-size reference. */
+function bodyFontSize(page: PageContent): number {
+  const sizes = page.textBoxes
+    .map((tb) => tb.fontSize)
+    .filter((s) => s > 0)
+    .sort((a, b) => a - b);
+  if (sizes.length === 0) return 0;
+  return sizes[Math.floor(sizes.length / 2)];
+}
+
+/**
+ * Per-page chrome detection: position + isolation + pattern signature.
+ *
+ * Complements `stripHeadersFooters`: the repetition detector needs ≥5
+ * pages, so single pages (and inconsistent per-page chrome) slip
+ * through. A box is stripped when it sits fully inside the top or
+ * bottom band, matches an unambiguous chrome pattern, is short, and is
+ * separated from the nearest body-side non-chrome line by at least one
+ * body-line height. Titles and headings never match the pattern gate,
+ * so they survive regardless of position.
+ *
+ * Coordinates are PDF user space: Y grows upward, `bounds.top` is the
+ * numerically larger edge.
+ */
+export function stripSinglePageChrome(pages: PageContent[]): void {
+  for (const page of pages) {
+    const h = page.pageHeight;
+    if (h <= 0 || page.textBoxes.length === 0) continue;
+    const topBandFloor = h * (1 - SP_BAND_RATIO);
+    const bottomBandCeil = h * SP_BAND_RATIO;
+    const bodySize = bodyFontSize(page);
+
+    const strip = new Set<string>();
+    for (const tb of page.textBoxes) {
+      const text = tb.text.trim();
+      if (text.length === 0 || text.length > SP_MAX_CHARS) continue;
+      const inTop = tb.bounds.bottom >= topBandFloor;
+      const inBottom = tb.bounds.top <= bottomBandCeil;
+      if (!inTop && !inBottom) continue;
+      if (!matchesChromePattern(text)) continue;
+
+      const gapRef =
+        bodySize > 0 ? bodySize : Math.max(tb.bounds.top - tb.bounds.bottom, 1);
+      const requiredGap = SP_ISOLATION_GAP_RATIO * gapRef;
+
+      // Gap from this box to the nearest non-chrome line on the body side.
+      let nearest = Number.POSITIVE_INFINITY;
+      for (const other of page.textBoxes) {
+        if (other.id === tb.id) continue;
+        if (matchesChromePattern(other.text.trim())) continue;
+        if (inTop && other.bounds.top < tb.bounds.bottom) {
+          nearest = Math.min(nearest, tb.bounds.bottom - other.bounds.top);
+        } else if (inBottom && other.bounds.bottom > tb.bounds.top) {
+          nearest = Math.min(nearest, other.bounds.bottom - tb.bounds.top);
+        }
+      }
+      if (nearest < requiredGap) continue;
+
+      strip.add(tb.id);
+    }
+
+    if (strip.size > 0) {
+      page.textBoxes = page.textBoxes.filter((tb) => !strip.has(tb.id));
+    }
+  }
+}

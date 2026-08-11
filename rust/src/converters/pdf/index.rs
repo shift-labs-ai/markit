@@ -19,7 +19,7 @@ use crate::types::{ConversionResult, Converter, StreamInfo};
 use super::columns::detect_columns;
 use super::fast_extract::extract_pages_fast;
 use super::grid::resolve_table_grids;
-use super::headers::strip_headers_footers;
+use super::headers::{strip_headers_footers, strip_single_page_chrome};
 use super::render::{render_page_content, ImageBlock};
 use super::types::{Segment, TextBox};
 
@@ -87,8 +87,12 @@ impl Converter for PdfConverter {
     fn convert(&self, input: &[u8], info: &StreamInfo) -> Result<ConversionResult> {
         let mut pages = extract_pages_fast(input)?;
 
-        // Remove running headers/footers before processing
+        // Remove running headers/footers before processing. The
+        // repetition detector handles multi-page documents; the per-page
+        // chrome detector complements it on single pages and
+        // inconsistent per-page chrome.
         strip_headers_footers(&mut pages);
+        strip_single_page_chrome(&mut pages);
 
         let image_dir = info.image_dir.as_deref();
         if let Some(dir) = image_dir {

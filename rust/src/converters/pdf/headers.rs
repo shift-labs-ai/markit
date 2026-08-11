@@ -123,6 +123,255 @@ pub fn strip_headers_footers(pages: &mut [PageContent]) {
     }
 }
 
+/// Fraction of page height treated as the top/bottom band for the
+/// single-page chrome detector. Wider than the repetition band: chrome on
+/// a first page can sit a little deeper (e.g. a citation banner above a
+/// paper title).
+const SP_BAND_RATIO: f64 = 0.15;
+
+/// Minimum gap, in multiples of the page's body font size, between a
+/// chrome candidate and the nearest body-side line. Real chrome is
+/// visually separated from content.
+const SP_ISOLATION_GAP_RATIO: f64 = 1.0;
+
+/// Chrome candidates longer than this are body prose, never chrome.
+const SP_MAX_CHARS: usize = 200;
+
+/// Does the text match an unambiguous running-chrome signature?
+/// URLs/DOIs, journal-banner phrases, copyright marks, `Page N`,
+/// standalone page numbers, volume/issue markers, and journal citation
+/// lines (year + page range, short). False positives on body prose are
+/// the main risk — every branch here must be unambiguous.
+pub(crate) fn matches_chrome_pattern(text: &str) -> bool {
+    let t = text.trim();
+    if t.is_empty() {
+        return false;
+    }
+    let lower = t.to_lowercase();
+
+    // URL / DOI prefixes — chrome lines are very often a citation URL.
+    if lower.contains("http://")
+        || lower.contains("https://")
+        || lower.starts_with("www.")
+        || lower.contains(" www.")
+        || lower.contains("doi:")
+        || lower.contains("doi.org/")
+        || lower.contains("dx.doi.org")
+    {
+        return true;
+    }
+
+    // Common journal-paper banner phrases.
+    if lower.contains("please cite this article")
+        || lower.contains("contents lists available at")
+        || lower.contains("available online at")
+        || lower.contains("downloaded from")
+    {
+        return true;
+    }
+
+    // Copyright / trademark chrome.
+    if t.contains('\u{a9}') || lower.contains("copyright ") || lower.contains("all rights reserved")
+    {
+        return true;
+    }
+
+    // "Page N" / "Page N of M".
+    if let Some(rest) = lower.strip_prefix("page ") {
+        if rest.as_bytes().first().is_some_and(u8::is_ascii_digit) {
+            return true;
+        }
+    }
+
+    // Lone page number (≤4 digits).
+    if !t.is_empty() && t.len() <= 4 && t.bytes().all(|b| b.is_ascii_digit()) {
+        return true;
+    }
+
+    // Volume markers ("Vol. 24" / "Vol 24" / "Vol, 24") with a digit later.
+    if has_vol_marker(&lower) {
+        return true;
+    }
+
+    // Journal-cite style: a 4-digit year AND a numeric page range, short
+    // enough to plausibly be chrome.
+    if t.len() <= 120 && has_year(&lower) && has_digit_range(t) {
+        return true;
+    }
+
+    false
+}
+
+/// `vol` at a word start followed by `.`, ` ` or `,`, with any digit later.
+fn has_vol_marker(lower: &str) -> bool {
+    let b = lower.as_bytes();
+    for i in 0..b.len().saturating_sub(4) {
+        let starts_word = i == 0 || !b[i - 1].is_ascii_alphanumeric();
+        if starts_word
+            && b[i] == b'v'
+            && b[i + 1] == b'o'
+            && b[i + 2] == b'l'
+            && matches!(b[i + 3], b'.' | b' ' | b',')
+            && b[i + 4..].iter().any(u8::is_ascii_digit)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// A 19xx/20xx group standing alone as a word.
+fn has_year(lower: &str) -> bool {
+    let b = lower.as_bytes();
+    for i in 0..b.len().saturating_sub(3) {
+        let starts_word = i == 0 || !b[i - 1].is_ascii_alphanumeric();
+        if !starts_word {
+            continue;
+        }
+        if ((b[i] == b'1' && b[i + 1] == b'9') || (b[i] == b'2' && b[i + 1] == b'0'))
+            && b[i + 2].is_ascii_digit()
+            && b[i + 3].is_ascii_digit()
+        {
+            let ends_word = i + 4 >= b.len() || !b[i + 4].is_ascii_alphanumeric();
+            if ends_word {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// A digits–digits range that is not a `YYYY-MM`/`YYYY-MM-DD` calendar
+/// date (a 4-digit 19xx/20xx group followed by a 1-2 digit group is a
+/// date, not a page range).
+fn has_digit_range(t: &str) -> bool {
+    let chars: Vec<char> = t.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if !chars[i].is_ascii_digit() {
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        while j < chars.len() && chars[j].is_ascii_digit() {
+            j += 1;
+        }
+        let g1_len = j - i;
+        let mut k = j;
+        while k < chars.len() && chars[k] == ' ' {
+            k += 1;
+        }
+        if k < chars.len() && matches!(chars[k], '-' | '\u{2013}' | '\u{2014}') {
+            let mut m = k + 1;
+            while m < chars.len() && chars[m] == ' ' {
+                m += 1;
+            }
+            if m < chars.len() && chars[m].is_ascii_digit() {
+                let mut n = m + 1;
+                while n < chars.len() && chars[n].is_ascii_digit() {
+                    n += 1;
+                }
+                let g2_len = n - m;
+                let g1_is_year = g1_len == 4
+                    && ((chars[i] == '1' && chars[i + 1] == '9')
+                        || (chars[i] == '2' && chars[i + 1] == '0'));
+                if !(g1_is_year && g2_len <= 2) {
+                    return true;
+                }
+                i = n;
+                continue;
+            }
+        }
+        i = j;
+    }
+    false
+}
+
+/// Median font size of a page's text boxes — the body-size reference.
+fn body_font_size(page: &PageContent) -> f64 {
+    let mut sizes: Vec<f64> = page
+        .text_boxes
+        .iter()
+        .map(|tb| tb.font_size)
+        .filter(|s| *s > 0.0)
+        .collect();
+    if sizes.is_empty() {
+        return 0.0;
+    }
+    sizes.sort_by(|a, b| a.total_cmp(b));
+    sizes[sizes.len() / 2]
+}
+
+/// Per-page chrome detection: position + isolation + pattern signature.
+///
+/// Complements `strip_headers_footers`: the repetition detector needs ≥5
+/// pages, so single pages (and inconsistent per-page chrome) slip
+/// through. A box is stripped when it sits fully inside the top or
+/// bottom band, matches an unambiguous chrome pattern, is short, and is
+/// separated from the nearest body-side non-chrome line by at least one
+/// body-line height. Titles and headings never match the pattern gate,
+/// so they survive regardless of position.
+///
+/// Coordinates are PDF user space: Y grows upward, `bounds.top` is the
+/// numerically larger edge.
+pub fn strip_single_page_chrome(pages: &mut [PageContent]) {
+    for page in pages.iter_mut() {
+        let h = page.page_height;
+        if h <= 0.0 || page.text_boxes.is_empty() {
+            continue;
+        }
+        let top_band_floor = h * (1.0 - SP_BAND_RATIO);
+        let bottom_band_ceil = h * SP_BAND_RATIO;
+        let body_size = body_font_size(page);
+
+        let mut strip: HashSet<String> = HashSet::new();
+        for tb in &page.text_boxes {
+            let text = tb.text.trim();
+            if text.is_empty() || text.len() > SP_MAX_CHARS {
+                continue;
+            }
+            let in_top = tb.bounds.bottom >= top_band_floor;
+            let in_bottom = tb.bounds.top <= bottom_band_ceil;
+            if !in_top && !in_bottom {
+                continue;
+            }
+            if !matches_chrome_pattern(text) {
+                continue;
+            }
+
+            let gap_ref = if body_size > 0.0 {
+                body_size
+            } else {
+                (tb.bounds.top - tb.bounds.bottom).max(1.0)
+            };
+            let required_gap = SP_ISOLATION_GAP_RATIO * gap_ref;
+
+            // Gap from this box to the nearest non-chrome line on the
+            // body side.
+            let mut nearest = f64::INFINITY;
+            for other in &page.text_boxes {
+                if other.id == tb.id || matches_chrome_pattern(other.text.trim()) {
+                    continue;
+                }
+                if in_top && other.bounds.top < tb.bounds.bottom {
+                    nearest = nearest.min(tb.bounds.bottom - other.bounds.top);
+                } else if in_bottom && other.bounds.bottom > tb.bounds.top {
+                    nearest = nearest.min(other.bounds.bottom - tb.bounds.top);
+                }
+            }
+            if nearest < required_gap {
+                continue;
+            }
+
+            strip.insert(tb.id.clone());
+        }
+
+        if !strip.is_empty() {
+            page.text_boxes.retain(|tb| !strip.contains(&tb.id));
+        }
+    }
+}
+
 /// Collapse runs of whitespace to a single space.
 fn normalize_whitespace(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
@@ -314,6 +563,113 @@ mod tests {
                 page.page_number
             );
         }
+    }
+
+    fn chrome_box(id: &str, text: &str, top: f64, bottom: f64) -> TextBox {
+        TextBox {
+            id: id.to_string(),
+            text: text.to_string(),
+            page_number: 1,
+            font_size: 10.0,
+            is_bold: false,
+            bounds: Bounds {
+                left: 50.0,
+                right: 200.0,
+                top,
+                bottom,
+            },
+        }
+    }
+
+    fn single_page(text_boxes: Vec<TextBox>) -> Vec<PageContent> {
+        vec![PageContent {
+            page_number: 1,
+            page_width: 612.0,
+            page_height: 792.0,
+            text_boxes,
+            segments: Vec::new(),
+            images: Vec::new(),
+        }]
+    }
+
+    #[test]
+    fn chrome_pattern_recognizes_common_signatures() {
+        assert!(matches_chrome_pattern("http://example.com/foo"));
+        assert!(matches_chrome_pattern("www.nature.com/scientificreports/"));
+        assert!(matches_chrome_pattern(
+            "Please cite this article in press as:"
+        ));
+        assert!(matches_chrome_pattern("Page 12 of 24"));
+        assert!(matches_chrome_pattern("9"));
+        assert!(matches_chrome_pattern("\u{a9} 2023 Acme Corp"));
+        assert!(matches_chrome_pattern(
+            "Cell Chemical Biology 24, 1\u{2013}9, November 16, 2017"
+        ));
+    }
+
+    #[test]
+    fn chrome_pattern_never_matches_body_prose_or_titles() {
+        assert!(!matches_chrome_pattern(
+            "The quick brown fox jumps over the lazy dog."
+        ));
+        assert!(!matches_chrome_pattern("Introduction"));
+        // Year without a page range is a title, not chrome.
+        assert!(!matches_chrome_pattern("Acme Annual Report 2023"));
+        // YYYY-MM tracking dates are not page ranges.
+        assert!(!matches_chrome_pattern("Company Tracking #: MS-2024-07"));
+    }
+
+    #[test]
+    fn strips_isolated_top_band_url_on_single_page() {
+        // 792pt page: top band is y >= 673.2.
+        let mut pages = single_page(vec![
+            chrome_box("chrome", "www.nature.com/scientificreports/", 780.0, 770.0),
+            chrome_box("title", "Main Body Title", 600.0, 586.0),
+            chrome_box("b1", "Body prose line one.", 570.0, 560.0),
+        ]);
+        strip_single_page_chrome(&mut pages);
+        let ids: Vec<&str> = pages[0].text_boxes.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, ["title", "b1"]);
+    }
+
+    #[test]
+    fn strips_bottom_journal_citation() {
+        let mut pages = single_page(vec![
+            chrome_box("b1", "Body line.", 500.0, 490.0),
+            chrome_box("b2", "More body.", 480.0, 470.0),
+            chrome_box(
+                "cite",
+                "Cell Chemical Biology 24, 1\u{2013}9, November 16, 2017",
+                30.0,
+                20.0,
+            ),
+        ]);
+        strip_single_page_chrome(&mut pages);
+        let ids: Vec<&str> = pages[0].text_boxes.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, ["b1", "b2"]);
+    }
+
+    #[test]
+    fn preserves_band_title_without_chrome_pattern() {
+        let mut pages = single_page(vec![
+            chrome_box("title", "My Important Document", 770.0, 750.0),
+            chrome_box("author", "Author Name", 730.0, 720.0),
+            chrome_box("b1", "Body prose here.", 500.0, 490.0),
+        ]);
+        strip_single_page_chrome(&mut pages);
+        assert_eq!(pages[0].text_boxes.len(), 3);
+    }
+
+    #[test]
+    fn keeps_chrome_without_isolation_gap() {
+        let mut pages = single_page(vec![
+            chrome_box("url", "http://example.com/foo", 780.0, 770.0),
+            // Next line 5pt below — well within one body-line height.
+            chrome_box("b1", "Body line right after.", 765.0, 755.0),
+            chrome_box("b2", "Continuing body.", 750.0, 740.0),
+        ]);
+        strip_single_page_chrome(&mut pages);
+        assert_eq!(pages[0].text_boxes.len(), 3);
     }
 
     #[test]

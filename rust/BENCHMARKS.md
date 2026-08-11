@@ -1,17 +1,30 @@
 # Benchmark targets
 
-## Current standing (commit 03a0d7f, 2026-08-11)
+## Current standing (2026-08-11, after chrome-detector + Type3 recovery)
 
 olmOCR-bench, 1,403 single-page PDFs, 8,413 checks:
 
-- **Overall: 27.1% ± 0.9%** (macro over categories)
-- Throughput: 154.9 docs/s (9.06 s total, one warm native process, no concurrency)
-- Conversion failures: 7 (0.5%) — all "text ops decoded to nothing"
+- **Overall: 30.0% ± 0.9%** (macro over categories; was 27.1% at 03a0d7f)
+- Throughput: ~196 docs/s in-process (154.9 via the Node harness at 03a0d7f)
+- Conversion failures: 0 (was 7)
+
+Per category (delta from 03a0d7f):
+
+| Category | Score | Δ |
+|---|---:|---:|
+| headers_footers | 56.2% | +20.3 |
+| multi_column | 27.8% | +2.0 |
+| long_tiny_text | 20.8% | +0.7 |
+| baseline | 100.0% | +0.5 |
+| table_tests | 21.6% | −0.1 |
+| old_scans | 13.3% | 0 |
+| arxiv_math | 0.6% | 0 |
+| old_scans_math | 0.0% | 0 |
 
 Caveats carried forward:
-- The 99.5% baseline is inflated: comment-only outputs (image placeholders)
-  pass the benchmark's alphanumeric check. All 98 old-scan outputs were
-  comment-only, plus 21/36 old-scan-math and 23/62 long-tiny-text.
+- The 100% baseline is still partly comment-only outputs (image
+  placeholders) passing the alphanumeric check — all 98 old-scan outputs,
+  plus 21/36 old-scan-math and ~23/62 long-tiny-text.
 - Speed is not quality-adjusted (no OCR, near-zero formula reconstruction).
 
 ## Targets
