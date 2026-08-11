@@ -16,6 +16,7 @@ use anyhow::Result;
 
 use crate::types::{ConversionResult, Converter, StreamInfo};
 
+use super::borderless::detect_borderless_tables;
 use super::columns::detect_columns;
 use super::fast_extract::extract_pages_fast;
 use super::grid::resolve_table_grids;
@@ -43,12 +44,19 @@ fn process_column(
         .cloned()
         .collect();
 
-    render_page_content(
-        &free_text_boxes,
-        &result.grids,
-        image_blocks,
-        Some(text_boxes),
-    )
+    // Tables without any ruling leave nothing for segment detection:
+    // reconstruct them from text alignment among the remaining boxes.
+    let (borderless_grids, borderless_consumed) =
+        detect_borderless_tables(&free_text_boxes, page_number);
+    let borderless_set: HashSet<&str> = borderless_consumed.iter().map(|s| s.as_str()).collect();
+    let free_text_boxes: Vec<TextBox> = free_text_boxes
+        .into_iter()
+        .filter(|tb| !borderless_set.contains(tb.id.as_str()))
+        .collect();
+    let mut grids = result.grids;
+    grids.extend(borderless_grids);
+
+    render_page_content(&free_text_boxes, &grids, image_blocks, Some(text_boxes))
 }
 
 fn image_blocks_in_x_range(
