@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { existsSync } from "node:fs";
-import { extractPages } from "./extract.js";
+import { extractPages, extractSegmentsFromContentStream } from "./extract.js";
 
 // Skip tests if fixture PDFs are not available
 const FIXTURE_DIR = "test/fixtures/pdfs";
@@ -177,5 +177,32 @@ describe("extractPages: image regions", () => {
     // Page 6 (Preface) has no images
     const p6 = pages[5];
     expect(p6.images).toHaveLength(0);
+  });
+});
+
+describe("path paint semantics", () => {
+  it("b adds the implicit closing edge", () => {
+    const segments = extractSegmentsFromContentStream(
+      "0 0 m 100 0 l 100 100 l 0 100 l b",
+      1,
+    );
+    expect(segments).toHaveLength(4);
+    expect(segments).toContainEqual(
+      expect.objectContaining({ x1: 0, y1: 100, x2: 0, y2: 0 }),
+    );
+  });
+
+  it("B preserves stroke edges for a thick rectangle", () => {
+    expect(
+      extractSegmentsFromContentStream("0 0 100 100 re B", 1),
+    ).toHaveLength(4);
+  });
+});
+
+describe("combined thin-rule painting", () => {
+  it("B emits one rule rather than duplicate fill and stroke segments", () => {
+    expect(extractSegmentsFromContentStream("0 0 200 1 re B", 1)).toHaveLength(
+      1,
+    );
   });
 });

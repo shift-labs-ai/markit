@@ -64,6 +64,23 @@ pub(crate) struct ImagePlacement<'a> {
     pub(crate) source: ImageSource<'a>,
 }
 
+#[derive(Clone, Copy)]
+enum PathPaint {
+    Fill,
+    Stroke,
+    Both,
+}
+
+impl PathPaint {
+    fn fills(self) -> bool {
+        matches!(self, Self::Fill | Self::Both)
+    }
+
+    fn strokes(self) -> bool {
+        matches!(self, Self::Stroke | Self::Both)
+    }
+}
+
 pub(crate) struct Interp<'a> {
     pdf: &'a Pdf<'a>,
     /// Raw text items in paint order — page assembly's input.
@@ -256,12 +273,7 @@ impl<'a> Interp<'a> {
                         }
                     }
                 }
-                b"h" => {
-                    if let (Some(c), Some(s)) = (self.path_cur, self.path_start) {
-                        self.path_segments.push((c.0, c.1, s.0, s.1));
-                        self.path_cur = Some(s);
-                    }
-                }
+                b"h" => self.close_path(),
                 b"re" => {
                     if let (Some(x), Some(y), Some(w), Some(h)) = (n(0), n(1), n(2), n(3)) {
                         let (p0, p1) = (self.ctm.apply(x, y), self.ctm.apply(x + w, y + h));
@@ -273,8 +285,17 @@ impl<'a> Interp<'a> {
                         ));
                     }
                 }
-                b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*" => self.flush_path(true),
-                b"f" | b"F" | b"f*" => self.flush_path(false),
+                b"S" => self.flush_path(PathPaint::Stroke),
+                b"B" | b"B*" => self.flush_path(PathPaint::Both),
+                b"s" => {
+                    self.close_path();
+                    self.flush_path(PathPaint::Stroke);
+                }
+                b"b" | b"b*" => {
+                    self.close_path();
+                    self.flush_path(PathPaint::Both);
+                }
+                b"f" | b"F" | b"f*" => self.flush_path(PathPaint::Fill),
                 b"n" => self.clear_path(),
                 // ── XObjects: forms (recurse) + images (bbox) ───────
                 b"Do" => {
@@ -617,21 +638,34 @@ impl<'a> Interp<'a> {
         self.path_cur = None;
     }
 
-    fn flush_path(&mut self, stroked: bool) {
+    fn close_path(&mut self) {
+        if let (Some(current), Some(start)) = (self.path_cur, self.path_start) {
+            if current != start {
+                self.path_segments
+                    .push((current.0, current.1, start.0, start.1));
+            }
+            self.path_cur = Some(start);
+        }
+    }
+
+    fn flush_path(&mut self, paint: PathPaint) {
         for (x, y, w, h) in std::mem::take(&mut self.path_rects) {
-            if stroked {
+            let filled_rule = if paint.fills() {
+                let id = format!("p{}-fr{}", self.page_number, self.seg_counter);
+                super::extract::thin_rect_to_segment_pub(id, x, y, w, h)
+            } else {
+                None
+            };
+            if let Some(segment) = filled_rule {
+                self.seg_counter += 1;
+                self.segments.push(segment);
+            } else if paint.strokes() {
                 let id = format!("p{}-r{}", self.page_number, self.seg_counter);
                 self.seg_counter += 1;
                 super::extract::push_stroked_rect_edges_pub(&mut self.segments, &id, x, y, w, h);
-            } else {
-                let id = format!("p{}-fr{}", self.page_number, self.seg_counter);
-                self.seg_counter += 1;
-                if let Some(seg) = super::extract::thin_rect_to_segment_pub(id, x, y, w, h) {
-                    self.segments.push(seg);
-                }
             }
         }
-        if stroked {
+        if paint.strokes() {
             for (x1, y1, x2, y2) in std::mem::take(&mut self.path_segments) {
                 // Only axis-aligned-ish lines matter for table grids.
                 if (x1 - x2).abs() < 0.8 || (y1 - y2).abs() < 0.8 {

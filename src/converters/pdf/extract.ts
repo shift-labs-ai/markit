@@ -255,7 +255,7 @@ function ctmApply(m: CTM, x: number, y: number): [number, number] {
  * rectangles (re+f), stroked rectangles (re+S), and explicit lines (m/l+S).
  * Tracks the CTM via q/Q/cm operators so coordinates are in page space.
  */
-function extractSegmentsFromContentStream(
+export function extractSegmentsFromContentStream(
   raw: string,
   pageNumber: number,
 ): Segment[] {
@@ -282,42 +282,48 @@ function extractSegmentsFromContentStream(
     y2: number;
   }> = [];
 
-  function flushPath(mode: "fill" | "stroke") {
-    const sid = () => `p${pageNumber}-s${segments.length}`;
+  function closePath() {
+    if (curX !== pathStartX || curY !== pathStartY) {
+      pendingLines.push({
+        x1: curX,
+        y1: curY,
+        x2: pathStartX,
+        y2: pathStartY,
+      });
+    }
+    curX = pathStartX;
+    curY = pathStartY;
+  }
 
-    if (mode === "fill") {
-      for (const r of pendingRects) {
-        // Transform the rect corners through CTM, then check if it's a thin line
-        const [x0, y0] = ctmApply(ctm, r.x, r.y);
-        const [x1, y1] = ctmApply(ctm, r.x + r.w, r.y + r.h);
-        const seg = thinRectToSegment(
-          sid(),
-          Math.min(x0, x1),
-          Math.min(y0, y1),
-          Math.abs(x1 - x0),
-          Math.abs(y1 - y0),
-        );
-        if (seg) segments.push(seg);
+  function flushPath(mode: "fill" | "stroke" | "both") {
+    const sid = () => `p${pageNumber}-s${segments.length}`;
+    const paintsFill = mode === "fill" || mode === "both";
+    const paintsStroke =
+      (mode === "stroke" || mode === "both") && strokeWidth <= MAX_THICKNESS;
+
+    for (const r of pendingRects) {
+      const [x0, y0] = ctmApply(ctm, r.x, r.y);
+      const [x1, y1] = ctmApply(ctm, r.x + r.w, r.y + r.h);
+      const x = Math.min(x0, x1);
+      const y = Math.min(y0, y1);
+      const w = Math.abs(x1 - x0);
+      const h = Math.abs(y1 - y0);
+      const filledRule = paintsFill
+        ? thinRectToSegment(sid(), x, y, w, h)
+        : null;
+      if (filledRule) {
+        segments.push(filledRule);
+      } else if (paintsStroke) {
+        pushStrokedRectEdges(segments, sid(), x, y, w, h);
       }
-    } else if (mode === "stroke" && strokeWidth <= MAX_THICKNESS) {
-      for (const r of pendingRects) {
-        const [x0, y0] = ctmApply(ctm, r.x, r.y);
-        const [x1, y1] = ctmApply(ctm, r.x + r.w, r.y + r.h);
-        pushStrokedRectEdges(
-          segments,
-          sid(),
-          Math.min(x0, x1),
-          Math.min(y0, y1),
-          Math.abs(x1 - x0),
-          Math.abs(y1 - y0),
-        );
-      }
+    }
+
+    if (paintsStroke) {
       for (const l of pendingLines) {
         const [lx1, ly1] = ctmApply(ctm, l.x1, l.y1);
         const [lx2, ly2] = ctmApply(ctm, l.x2, l.y2);
         const dx = Math.abs(lx2 - lx1);
         const dy = Math.abs(ly2 - ly1);
-        // Only keep H/V lines
         if ((dx >= MIN_LENGTH && dy < 1) || (dy >= MIN_LENGTH && dx < 1)) {
           segments.push({ id: sid(), x1: lx1, y1: ly1, x2: lx2, y2: ly2 });
         }
@@ -369,36 +375,15 @@ function extractSegmentsFromContentStream(
       curX = x2;
       curY = y2;
     } else if (t === "h") {
-      // closePath: line back to start
-      if (curX !== pathStartX || curY !== pathStartY) {
-        pendingLines.push({
-          x1: curX,
-          y1: curY,
-          x2: pathStartX,
-          y2: pathStartY,
-        });
-      }
-      curX = pathStartX;
-      curY = pathStartY;
+      closePath();
     } else if (t === "f" || t === "F" || t === "f*") {
       flushPath("fill");
     } else if (t === "S" || t === "s") {
-      if (t === "s") {
-        // closeStroke: implicit closePath
-        if (curX !== pathStartX || curY !== pathStartY) {
-          pendingLines.push({
-            x1: curX,
-            y1: curY,
-            x2: pathStartX,
-            y2: pathStartY,
-          });
-        }
-      }
+      if (t === "s") closePath();
       flushPath("stroke");
     } else if (t === "B" || t === "B*" || t === "b" || t === "b*") {
-      // fill + stroke combined
-      flushPath("fill");
-      flushPath("stroke");
+      if (t === "b" || t === "b*") closePath();
+      flushPath("both");
     } else if (t === "n") {
       // end path without painting — discard
       pendingRects.length = 0;

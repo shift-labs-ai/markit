@@ -645,54 +645,44 @@ fn extract_segments_from_content_stream(raw: &str, page_number: u32) -> Vec<Segm
         ctm: &CTM,
         stroke_width: f64,
     ) {
-        if mode == "fill" {
-            for r in pending_rects.drain(..) {
-                let (x0, y0) = ctm_apply(ctm, r.x, r.y);
-                let (x1, y1) = ctm_apply(ctm, r.x + r.w, r.y + r.h);
+        let paints_fill = matches!(mode, "fill" | "both");
+        let paints_stroke = matches!(mode, "stroke" | "both") && stroke_width <= MAX_THICKNESS;
+
+        for r in pending_rects.iter() {
+            let (x0, y0) = ctm_apply(ctm, r.x, r.y);
+            let (x1, y1) = ctm_apply(ctm, r.x + r.w, r.y + r.h);
+            let (x, y) = (x0.min(x1), y0.min(y1));
+            let (w, h) = ((x1 - x0).abs(), (y1 - y0).abs());
+            let filled_rule = if paints_fill {
+                thin_rect_to_segment(format!("p{}-s{}", page_number, segments.len()), x, y, w, h)
+            } else {
+                None
+            };
+            if let Some(segment) = filled_rule {
+                segments.push(segment);
+            } else if paints_stroke {
                 let id = format!("p{}-s{}", page_number, segments.len());
-                if let Some(seg) = thin_rect_to_segment(
-                    id,
-                    x0.min(x1),
-                    y0.min(y1),
-                    (x1 - x0).abs(),
-                    (y1 - y0).abs(),
-                ) {
-                    segments.push(seg);
-                }
+                push_stroked_rect_edges(segments, &id, x, y, w, h);
             }
-        } else if mode == "stroke" && stroke_width <= MAX_THICKNESS {
-            for r in pending_rects.drain(..) {
-                let (x0, y0) = ctm_apply(ctm, r.x, r.y);
-                let (x1, y1) = ctm_apply(ctm, r.x + r.w, r.y + r.h);
-                let id = format!("p{}-s{}", page_number, segments.len());
-                push_stroked_rect_edges(
-                    segments,
-                    &id,
-                    x0.min(x1),
-                    y0.min(y1),
-                    (x1 - x0).abs(),
-                    (y1 - y0).abs(),
-                );
-            }
-            for l in pending_lines.drain(..) {
-                let (lx1, ly1) = ctm_apply(ctm, l.x1, l.y1);
-                let (lx2, ly2) = ctm_apply(ctm, l.x2, l.y2);
-                let dx = (lx2 - lx1).abs();
-                let dy = (ly2 - ly1).abs();
+        }
+
+        if paints_stroke {
+            for line in pending_lines.iter() {
+                let (x1, y1) = ctm_apply(ctm, line.x1, line.y1);
+                let (x2, y2) = ctm_apply(ctm, line.x2, line.y2);
+                let (dx, dy) = ((x2 - x1).abs(), (y2 - y1).abs());
                 if (dx >= MIN_LENGTH && dy < 1.0) || (dy >= MIN_LENGTH && dx < 1.0) {
                     segments.push(Segment {
                         id: format!("p{}-s{}", page_number, segments.len()),
-                        x1: lx1,
-                        y1: ly1,
-                        x2: lx2,
-                        y2: ly2,
+                        x1,
+                        y1,
+                        x2,
+                        y2,
                     });
                 }
             }
         }
-        // TS clears BOTH pending arrays at the end of every flushPath call,
-        // including fill mode (lines discarded) and thick strokes (everything
-        // discarded). Without this, unpainted paths leak into later flushes.
+
         pending_rects.clear();
         pending_lines.clear();
     }
@@ -805,17 +795,18 @@ fn extract_segments_from_content_stream(raw: &str, page_number: u32) -> Vec<Segm
                 );
             }
             "B" | "B*" | "b" | "b*" => {
+                if matches!(t, "b" | "b*") && (cur_x != path_start_x || cur_y != path_start_y) {
+                    pending_lines.push(PLine {
+                        x1: cur_x,
+                        y1: cur_y,
+                        x2: path_start_x,
+                        y2: path_start_y,
+                    });
+                    cur_x = path_start_x;
+                    cur_y = path_start_y;
+                }
                 flush_path(
-                    "fill",
-                    page_number,
-                    &mut segments,
-                    &mut pending_rects,
-                    &mut pending_lines,
-                    &ctm,
-                    stroke_width,
-                );
-                flush_path(
-                    "stroke",
+                    "both",
                     page_number,
                     &mut segments,
                     &mut pending_rects,
@@ -1629,5 +1620,26 @@ mod tests {
                 eprintln!("Could not create page: {}", e);
             }
         }
+    }
+
+    #[test]
+    fn close_fill_stroke_operator_adds_implicit_closing_edge() {
+        let segs = extract_segments_from_content_stream("0 0 m 100 0 l 100 100 l 0 100 l b", 1);
+        assert_eq!(segs.len(), 4);
+        assert!(segs
+            .iter()
+            .any(|s| s.x1 == 0.0 && s.y1 == 100.0 && s.x2 == 0.0 && s.y2 == 0.0));
+    }
+
+    #[test]
+    fn fill_stroke_thick_rectangle_preserves_stroke_edges() {
+        let segs = extract_segments_from_content_stream("0 0 100 100 re B", 1);
+        assert_eq!(segs.len(), 4);
+    }
+
+    #[test]
+    fn fill_stroke_thin_rectangle_is_one_rule_not_five_segments() {
+        let segs = extract_segments_from_content_stream("0 0 200 1 re B", 1);
+        assert_eq!(segs.len(), 1);
     }
 }
