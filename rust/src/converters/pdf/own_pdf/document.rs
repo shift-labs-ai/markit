@@ -4,7 +4,7 @@
 //! sibling modules behind this type.
 
 use anyhow::{anyhow, bail, Result};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::cell::RefCell;
 
 use super::crypto::{Decryptor, LegacyCrypt};
@@ -20,6 +20,9 @@ pub struct Pdf<'a> {
     pub trailer: Dict<'a>,
     /// Decompressed object streams, keyed by their object number.
     pub(super) objstm_cache: RefCell<FxHashMap<u32, ObjStm>>,
+    /// Object streams currently being resolved. A separate set makes
+    /// cyclic InStream references an error instead of recursive descent.
+    pub(super) objstm_in_progress: RefCell<FxHashSet<u32>>,
     /// AES-256 stream decryption (V5 standard handler), when active.
     pub(super) decrypt: Option<Decryptor>,
     /// Legacy (V1/V2/V4) decryption: per-object keys.
@@ -43,6 +46,7 @@ impl<'a> Pdf<'a> {
             xref: FxHashMap::default(),
             trailer: Vec::new(),
             objstm_cache: RefCell::new(FxHashMap::default()),
+            objstm_in_progress: RefCell::new(FxHashSet::default()),
             decrypt: None,
             legacy: None,
             legacy_cache: RefCell::new(FxHashMap::default()),
@@ -144,6 +148,7 @@ impl<'a> Pdf<'a> {
             xref: FxHashMap::default(),
             trailer: Vec::new(),
             objstm_cache: RefCell::new(FxHashMap::default()),
+            objstm_in_progress: RefCell::new(FxHashSet::default()),
             decrypt: None,
             legacy: None,
             legacy_cache: RefCell::new(FxHashMap::default()),
@@ -206,34 +211,49 @@ impl<'a> Pdf<'a> {
         if self.objstm_cache.borrow().contains_key(&num) {
             return Ok(());
         }
-        let Val::Stream(dict, raw) = self.object(num)? else {
-            bail!("not an objstm");
-        };
-        let data = decode_stream(&dict, raw, self)?;
-        let n = dget(&dict, b"N").and_then(|v| v.as_num()).unwrap_or(0.0) as usize;
-        let first = dget(&dict, b"First")
-            .and_then(|v| v.as_num())
-            .unwrap_or(0.0) as usize;
-        let mut offsets = Vec::with_capacity(n);
-        {
-            let mut lx = ObjLexer::new(&data, 0);
-            for _ in 0..n {
-                lx.skip_ws();
-                let onum = lx.uint()? as u32;
-                lx.skip_ws();
-                let off = lx.uint()? as usize;
-                offsets.push((onum, off));
-            }
+        if !self.objstm_in_progress.borrow_mut().insert(num) {
+            bail!("cyclic ObjStm dependency at object {num}");
         }
-        self.objstm_cache.borrow_mut().insert(
-            num,
-            ObjStm {
-                data,
-                offsets,
-                first,
-            },
-        );
-        Ok(())
+        let result = (|| {
+            let Val::Stream(dict, raw) = self.object(num)? else {
+                bail!("not an objstm");
+            };
+            let data = decode_stream(&dict, raw, self)?;
+            let n = dget(&dict, b"N").and_then(|v| v.as_num()).unwrap_or(0.0) as usize;
+            let first = dget(&dict, b"First")
+                .and_then(|v| v.as_num())
+                .unwrap_or(0.0) as usize;
+            // Every ObjStm header pair needs at least "N O" (three bytes,
+            // before separators). Reject impossible counts before allocation.
+            if n > data.len() / 3 || first > data.len() {
+                bail!("ObjStm /N or /First exceeds decoded stream");
+            }
+            let mut offsets = Vec::with_capacity(n);
+            {
+                let mut lx = ObjLexer::new(&data, 0);
+                for _ in 0..n {
+                    lx.skip_ws();
+                    let onum = lx.uint()? as u32;
+                    lx.skip_ws();
+                    let off = lx.uint()? as usize;
+                    if off > data.len() - first {
+                        bail!("ObjStm object offset past decoded stream");
+                    }
+                    offsets.push((onum, off));
+                }
+            }
+            self.objstm_cache.borrow_mut().insert(
+                num,
+                ObjStm {
+                    data,
+                    offsets,
+                    first,
+                },
+            );
+            Ok(())
+        })();
+        self.objstm_in_progress.borrow_mut().remove(&num);
+        result
     }
 
     /// Deep-resolve a value: follow Ref until a concrete value.
@@ -253,5 +273,63 @@ impl<'a> Pdf<'a> {
             Some(v) => Ok(Some(self.resolve(v)?)),
             None => Ok(None),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn object_stream_count_must_fit_decoded_header() {
+        let data = b"1 0 obj << /Type /ObjStm /N 100000 /First 0 /Length 0 >> stream
+
+endstream
+endobj";
+        let mut xref = FxHashMap::default();
+        xref.insert(1, XrefEntry::Offset(0));
+        let pdf = Pdf {
+            data,
+            xref,
+            trailer: Vec::new(),
+            objstm_cache: RefCell::new(FxHashMap::default()),
+            objstm_in_progress: RefCell::new(FxHashSet::default()),
+            decrypt: None,
+            legacy: None,
+            legacy_cache: RefCell::new(FxHashMap::default()),
+        };
+        let err = pdf.ensure_objstm(1).unwrap_err().to_string();
+        assert!(err.contains("ObjStm /N"), "wrong rejection path: {err}");
+    }
+
+    #[test]
+    fn cyclic_object_stream_dependencies_are_rejected() {
+        let data = b"";
+        let mut xref = FxHashMap::default();
+        xref.insert(
+            1,
+            XrefEntry::InStream {
+                stream_obj: 2,
+                index: 0,
+            },
+        );
+        xref.insert(
+            2,
+            XrefEntry::InStream {
+                stream_obj: 1,
+                index: 0,
+            },
+        );
+        let pdf = Pdf {
+            data,
+            xref,
+            trailer: Vec::new(),
+            objstm_cache: RefCell::new(FxHashMap::default()),
+            objstm_in_progress: RefCell::new(FxHashSet::default()),
+            decrypt: None,
+            legacy: None,
+            legacy_cache: RefCell::new(FxHashMap::default()),
+        };
+        assert!(pdf.object(1).is_err());
     }
 }

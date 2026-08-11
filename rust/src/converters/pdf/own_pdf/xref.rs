@@ -80,7 +80,9 @@ impl<'a> Pdf<'a> {
                 }
                 let offset: usize = std::str::from_utf8(&entry[0..10])?.trim().parse()?;
                 let kind = entry[17];
-                let num = first + i as u32;
+                let num = first
+                    .checked_add(i as u32)
+                    .ok_or_else(|| anyhow!("xref object number overflow"))?;
                 if kind == b'n' {
                     self.xref.entry(num).or_insert(XrefEntry::Offset(offset));
                 }
@@ -112,10 +114,16 @@ impl<'a> Pdf<'a> {
                 .collect(),
             _ => bail!("xref stream missing W"),
         };
-        if w.len() < 3 {
+        if w.len() < 3 || w[..3].iter().any(|&width| width > 8) {
             bail!("bad W");
         }
-        let row = w[0] + w[1] + w[2];
+        let row = w[0]
+            .checked_add(w[1])
+            .and_then(|n| n.checked_add(w[2]))
+            .ok_or_else(|| anyhow!("xref row width overflow"))?;
+        if row == 0 {
+            bail!("zero-width xref rows");
+        }
         let size = dget(&dict, b"Size").and_then(|v| v.as_num()).unwrap_or(0.0) as u32;
         let index: Vec<u32> = match dget(&dict, b"Index") {
             Some(Val::Array(a)) => a
@@ -130,7 +138,10 @@ impl<'a> Pdf<'a> {
         for pair in index.chunks(2) {
             let [first, count] = pair else { break };
             for i in 0..*count {
-                if pos + row > data.len() {
+                let Some(row_end) = pos.checked_add(row) else {
+                    bail!("xref stream position overflow");
+                };
+                if row_end > data.len() {
                     break;
                 }
                 let f = |o: usize, l: usize| -> u64 {
@@ -141,7 +152,9 @@ impl<'a> Pdf<'a> {
                 let t = if w[0] == 0 { 1 } else { f(0, w[0]) };
                 let b2 = f(w[0], w[1]);
                 let b3 = f(w[0] + w[1], w[2]);
-                let num = first + i;
+                let num = first
+                    .checked_add(i)
+                    .ok_or_else(|| anyhow!("xref object number overflow"))?;
                 match t {
                     1 => {
                         self.xref
@@ -170,4 +183,56 @@ pub(super) fn find_startxref(data: &[u8]) -> Result<usize> {
     let mut lx = ObjLexer::new(data, tail_start + at + 9);
     lx.skip_ws();
     Ok(lx.uint()? as usize)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustc_hash::FxHashMap;
+    use std::cell::RefCell;
+
+    fn blank_pdf(data: &[u8]) -> Pdf<'_> {
+        Pdf {
+            data,
+            xref: FxHashMap::default(),
+            trailer: Vec::new(),
+            objstm_cache: RefCell::new(FxHashMap::default()),
+            objstm_in_progress: RefCell::new(Default::default()),
+            decrypt: None,
+            legacy: None,
+            legacy_cache: RefCell::new(FxHashMap::default()),
+        }
+    }
+
+    #[test]
+    fn zero_width_xref_rows_are_rejected() {
+        let data = b"1 0 obj << /Type /XRef /W [0 0 0] /Size 1 /Length 0 >> stream
+
+endstream
+endobj";
+        let mut pdf = blank_pdf(data);
+        assert!(pdf.load_xref_stream(0).is_err(), "zero-width rows accepted");
+    }
+
+    #[test]
+    fn xref_fields_wider_than_u64_are_rejected() {
+        let data = b"1 0 obj << /Type /XRef /W [9 0 0] /Size 1 /Length 9 >> stream
+123456789
+endstream
+endobj";
+        let mut pdf = blank_pdf(data);
+        assert!(
+            pdf.load_xref_stream(0).is_err(),
+            "oversized W field accepted"
+        );
+    }
+
+    #[test]
+    fn classic_xref_object_number_overflow_is_rejected() {
+        let data = b"xref
+4294967295 2
+0000000000 00000 n \n0000000000 00000 n \ntrailer << /Size 0 >>";
+        let mut pdf = blank_pdf(data);
+        assert!(pdf.load_xref_table(0).is_err());
+    }
 }

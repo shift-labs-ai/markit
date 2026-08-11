@@ -7,6 +7,18 @@ use anyhow::{anyhow, bail, Result};
 use super::document::Pdf;
 use super::values::{Dict, Val};
 
+/// Hard ceiling for any one decoded PDF stream. This prevents compact
+/// Flate/LZW/RunLength bombs from exhausting the process. Legitimate
+/// page, font, and image streams are far below 512 MiB.
+const MAX_DECODED_STREAM_BYTES: usize = 512 * 1024 * 1024;
+
+fn ensure_room(current: usize, additional: usize, limit: usize) -> Result<()> {
+    if additional > limit.saturating_sub(current) {
+        bail!("decoded stream exceeds {limit} bytes");
+    }
+    Ok(())
+}
+
 pub fn decode_stream<'a>(dict: &Dict<'a>, raw: &[u8], pdf: &Pdf<'a>) -> Result<Vec<u8>> {
     // Decryption applies to the raw bytes, before any filter. Streams
     // reached before setup (the xref stream itself) are never encrypted.
@@ -18,11 +30,18 @@ pub fn decode_stream<'a>(dict: &Dict<'a>, raw: &[u8], pdf: &Pdf<'a>) -> Result<V
         raw
     };
 
+    if raw.len() > MAX_DECODED_STREAM_BYTES {
+        bail!("stream exceeds {} bytes", MAX_DECODED_STREAM_BYTES);
+    }
     let filter = pdf.dict_get(dict, b"Filter")?;
     let mut out = match filter {
         None => raw.to_vec(),
         Some(Val::Name(n)) => apply_filter(n, raw)?,
         Some(Val::Array(fs)) => {
+            const MAX_FILTER_CHAIN: usize = 8;
+            if fs.len() > MAX_FILTER_CHAIN {
+                bail!("filter chain exceeds {MAX_FILTER_CHAIN}");
+            }
             let mut cur = raw.to_vec();
             for f in fs {
                 let Val::Name(n) = pdf.resolve(&f)? else {
@@ -51,7 +70,10 @@ pub fn decode_stream<'a>(dict: &Dict<'a>, raw: &[u8], pdf: &Pdf<'a>) -> Result<V
                 .dict_get(&p, b"Colors")?
                 .and_then(|v| v.as_num())
                 .unwrap_or(1.0) as usize;
-            out = png_unpredict(&out, columns * colors)?;
+            let row_len = columns
+                .checked_mul(colors)
+                .ok_or_else(|| anyhow!("predictor row width overflow"))?;
+            out = png_unpredict(&out, row_len)?;
         } else if predictor != 1 {
             bail!("unsupported predictor");
         }
@@ -60,8 +82,12 @@ pub fn decode_stream<'a>(dict: &Dict<'a>, raw: &[u8], pdf: &Pdf<'a>) -> Result<V
 }
 
 fn apply_filter(name: &[u8], data: &[u8]) -> Result<Vec<u8>> {
+    apply_filter_limited(name, data, MAX_DECODED_STREAM_BYTES)
+}
+
+fn apply_filter_limited(name: &[u8], data: &[u8], limit: usize) -> Result<Vec<u8>> {
     match name {
-        b"FlateDecode" | b"Fl" => inflate(data),
+        b"FlateDecode" | b"Fl" => inflate_limited(data, limit),
         b"ASCIIHexDecode" | b"AHx" => {
             let mut out = Vec::with_capacity(data.len() / 2);
             let mut hi: Option<u8> = None;
@@ -76,19 +102,23 @@ fn apply_filter(name: &[u8], data: &[u8]) -> Result<Vec<u8>> {
                     _ => continue,
                 };
                 match hi.take() {
-                    Some(h) => out.push((h << 4) | v),
+                    Some(h) => {
+                        ensure_room(out.len(), 1, limit)?;
+                        out.push((h << 4) | v);
+                    }
                     None => hi = Some(v),
                 }
             }
             if let Some(h) = hi {
+                ensure_room(out.len(), 1, limit)?;
                 out.push(h << 4);
             }
             Ok(out)
         }
-        b"ASCII85Decode" | b"A85" => ascii85(data),
-        b"LZWDecode" | b"LZW" => lzw_decode(data),
+        b"ASCII85Decode" | b"A85" => ascii85(data, limit),
+        b"LZWDecode" | b"LZW" => lzw_decode(data, limit),
         b"RunLengthDecode" | b"RL" => {
-            let mut out = Vec::with_capacity(data.len() * 2);
+            let mut out = Vec::with_capacity(data.len().saturating_mul(2).min(limit));
             let mut i = 0usize;
             while i < data.len() {
                 let l = data[i];
@@ -99,6 +129,7 @@ fn apply_filter(name: &[u8], data: &[u8]) -> Result<Vec<u8>> {
                         if i + n > data.len() {
                             break;
                         }
+                        ensure_room(out.len(), n, limit)?;
                         out.extend_from_slice(&data[i..i + n]);
                         i += n;
                     }
@@ -107,7 +138,9 @@ fn apply_filter(name: &[u8], data: &[u8]) -> Result<Vec<u8>> {
                         if i >= data.len() {
                             break;
                         }
-                        out.extend(std::iter::repeat_n(data[i], 257 - l as usize));
+                        let n = 257 - l as usize;
+                        ensure_room(out.len(), n, limit)?;
+                        out.extend(std::iter::repeat_n(data[i], n));
                         i += 1;
                     }
                 }
@@ -119,11 +152,11 @@ fn apply_filter(name: &[u8], data: &[u8]) -> Result<Vec<u8>> {
 }
 
 /// LZW as PDF uses it (MSB-first codes, 9–12 bits, EarlyChange=1).
-fn lzw_decode(data: &[u8]) -> Result<Vec<u8>> {
+fn lzw_decode(data: &[u8], limit: usize) -> Result<Vec<u8>> {
     const CLEAR: u16 = 256;
     const EOD: u16 = 257;
 
-    let mut out = Vec::with_capacity(data.len() * 3);
+    let mut out = Vec::with_capacity(data.len().saturating_mul(3).min(limit));
     let mut dict: Vec<Vec<u8>> = (0..=257u16).map(|i| vec![i as u8]).collect();
     let mut code_len = 9usize;
     let mut prev: Option<u16> = None;
@@ -162,6 +195,7 @@ fn lzw_decode(data: &[u8]) -> Result<Vec<u8>> {
                 } else {
                     bail!("bad LZW stream");
                 };
+                ensure_room(out.len(), entry.len(), limit)?;
                 out.extend_from_slice(&entry);
                 if let Some(p) = prev {
                     let mut ne = dict[p as usize].clone();
@@ -178,8 +212,8 @@ fn lzw_decode(data: &[u8]) -> Result<Vec<u8>> {
     }
 }
 
-fn ascii85(data: &[u8]) -> Result<Vec<u8>> {
-    let mut out = Vec::with_capacity(data.len() * 4 / 5);
+fn ascii85(data: &[u8], limit: usize) -> Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(data.len().saturating_mul(4).saturating_div(5).min(limit));
     let mut group = [0u8; 5];
     let mut n = 0usize;
     let mut i = 0usize;
@@ -192,12 +226,16 @@ fn ascii85(data: &[u8]) -> Result<Vec<u8>> {
         i += 1;
         match b {
             b'~' => break, // ~> EOD
-            b'z' if n == 0 => out.extend_from_slice(&[0, 0, 0, 0]),
+            b'z' if n == 0 => {
+                ensure_room(out.len(), 4, limit)?;
+                out.extend_from_slice(&[0, 0, 0, 0]);
+            }
             b'!'..=b'u' => {
                 group[n] = b - b'!';
                 n += 1;
                 if n == 5 {
                     let v = group.iter().fold(0u32, |a, &d| a * 85 + d as u32);
+                    ensure_room(out.len(), 4, limit)?;
                     out.extend_from_slice(&v.to_be_bytes());
                     n = 0;
                 }
@@ -211,6 +249,7 @@ fn ascii85(data: &[u8]) -> Result<Vec<u8>> {
             *g = 84;
         }
         let v = group.iter().fold(0u32, |a, &d| a * 85 + d as u32);
+        ensure_room(out.len(), n - 1, limit)?;
         out.extend_from_slice(&v.to_be_bytes()[..n - 1]);
     }
     Ok(out)
@@ -218,15 +257,23 @@ fn ascii85(data: &[u8]) -> Result<Vec<u8>> {
 
 /// Public shim for image extraction.
 pub fn inflate_pub(data: &[u8]) -> Result<Vec<u8>> {
-    inflate(data)
+    inflate_limited(data, MAX_DECODED_STREAM_BYTES)
 }
 
-fn inflate(data: &[u8]) -> Result<Vec<u8>> {
+fn inflate_limited(data: &[u8], limit: usize) -> Result<Vec<u8>> {
     use std::io::Read;
-    let mut out = Vec::with_capacity(data.len() * 4);
+    let initial = data.len().saturating_mul(4).min(limit);
+    let mut out = Vec::with_capacity(initial);
+    let read_limit = limit
+        .checked_add(1)
+        .ok_or_else(|| anyhow!("decoded stream limit overflow"))?;
     flate2::read::ZlibDecoder::new(data)
+        .take(read_limit as u64)
         .read_to_end(&mut out)
         .map_err(|e| anyhow!("inflate: {e}"))?;
+    if out.len() > limit {
+        bail!("decoded stream exceeds {limit} bytes");
+    }
     Ok(out)
 }
 
@@ -343,6 +390,14 @@ mod tests {
     }
 
     #[test]
+    fn flate_output_limit_stops_decompression_bombs() {
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+        z.write_all(&vec![0u8; 2048]).unwrap();
+        let z = z.finish().unwrap();
+        assert!(apply_filter_limited(b"FlateDecode", &z, 1024).is_err());
+    }
+
+    #[test]
     fn truncated_predictor_row_is_rejected() {
         assert!(png_unpredict(&[0, 1, 2], 3).is_err());
         assert!(png_unpredict(&[], usize::MAX).is_err());
@@ -362,5 +417,27 @@ mod tests {
                 assert!(r.is_ok(), "{} panicked", String::from_utf8_lossy(name));
             }
         }
+    }
+
+    #[test]
+    fn excessive_filter_chain_is_rejected() {
+        use rustc_hash::FxHashMap;
+        use std::cell::RefCell;
+
+        let pdf = Pdf {
+            data: b"",
+            xref: FxHashMap::default(),
+            trailer: Vec::new(),
+            objstm_cache: RefCell::new(FxHashMap::default()),
+            objstm_in_progress: RefCell::new(Default::default()),
+            decrypt: None,
+            legacy: None,
+            legacy_cache: RefCell::new(FxHashMap::default()),
+        };
+        let filters = (0..9)
+            .map(|_| Val::Name(b"ASCIIHexDecode".as_slice()))
+            .collect();
+        let dict = vec![(b"Filter".as_slice(), Val::Array(filters))];
+        assert!(decode_stream(&dict, b"", &pdf).is_err());
     }
 }

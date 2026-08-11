@@ -53,9 +53,11 @@ impl<'a> ObjLexer<'a> {
         if start == self.pos {
             bail!("expected integer at {start}");
         }
-        Ok(self.data[start..self.pos]
-            .iter()
-            .fold(0u64, |a, b| a * 10 + (b - b'0') as u64))
+        self.data[start..self.pos].iter().try_fold(0u64, |n, b| {
+            n.checked_mul(10)
+                .and_then(|n| n.checked_add((b - b'0') as u64))
+                .ok_or_else(|| anyhow::anyhow!("integer overflow at {start}"))
+        })
     }
 
     /// Parse "N G obj <value> [stream…endstream] endobj".
@@ -132,6 +134,14 @@ impl<'a> ObjLexer<'a> {
     }
 
     pub fn value(&mut self) -> Result<Val<'a>> {
+        self.value_depth(0)
+    }
+
+    fn value_depth(&mut self, depth: usize) -> Result<Val<'a>> {
+        const MAX_VALUE_DEPTH: usize = 64;
+        if depth >= MAX_VALUE_DEPTH {
+            bail!("PDF object nesting exceeds {MAX_VALUE_DEPTH}");
+        }
         self.skip_ws();
         let Some(&b) = self.data.get(self.pos) else {
             bail!("eof in value");
@@ -151,7 +161,7 @@ impl<'a> ObjLexer<'a> {
                             bail!("dict key expected at {}", self.pos);
                         }
                         let key = self.name_body();
-                        let val = self.value()?;
+                        let val = self.value_depth(depth + 1)?;
                         dict.push((key, val));
                     }
                 } else {
@@ -192,7 +202,7 @@ impl<'a> ObjLexer<'a> {
                         self.pos += 1;
                         return Ok(Val::Array(arr));
                     }
-                    arr.push(self.value()?);
+                    arr.push(self.value_depth(depth + 1)?);
                 }
             }
             b'(' => {
@@ -329,5 +339,24 @@ impl<'a> ObjLexer<'a> {
         }
         let s = &self.data[start..self.pos];
         crate::converters::pdf::content_lex::fast_float_pub(s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn excessive_object_nesting_is_rejected() {
+        let mut bytes = vec![b'['; 65];
+        bytes.extend(std::iter::repeat_n(b']', 65));
+        let mut lexer = ObjLexer::new(&bytes, 0);
+        assert!(lexer.value().is_err(), "unbounded nesting was accepted");
+    }
+
+    #[test]
+    fn oversized_integer_is_rejected_without_wrapping() {
+        let mut lexer = ObjLexer::new(b"18446744073709551616", 0);
+        assert!(lexer.uint().is_err());
     }
 }
