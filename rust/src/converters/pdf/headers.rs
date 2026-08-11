@@ -148,7 +148,12 @@ const SP_MAX_GROUP_LINES: usize = 4;
 /// lines (year + page range, short). False positives on body prose are
 /// the main risk — every branch here must be unambiguous.
 pub(crate) fn matches_chrome_pattern(text: &str) -> bool {
-    let t = text.trim();
+    // Strip decorative rules and bullets before matching: banner lines
+    // like "||WWW.EXAMPLE.COM" or "- 8 -" carry ornaments that would
+    // defeat every prefix/whole-line signature.
+    let t = text.trim_matches(|c: char| {
+        c.is_whitespace() || "|\u{2022}\u{00b7}\u{25aa}\u{2013}\u{2014}-_=~*".contains(c)
+    });
     if t.is_empty() {
         return false;
     }
@@ -490,7 +495,17 @@ pub fn strip_single_page_chrome(pages: &mut [PageContent]) {
             groups.push(cur);
 
             for group in groups {
-                if group.len() > SP_MAX_GROUP_LINES {
+                // The cap is on visual LINES, not boxes: a wide spread
+                // repeats its banner side by side on one line.
+                let mut line_count = 0usize;
+                let mut last_top = f64::INFINITY;
+                for tb in &group {
+                    if (last_top - tb.bounds.top).abs() > 3.0 {
+                        line_count += 1;
+                        last_top = tb.bounds.top;
+                    }
+                }
+                if line_count > SP_MAX_GROUP_LINES {
                     continue;
                 }
                 // A group that is most of the page is content, not chrome.
