@@ -59,6 +59,42 @@ fn process_column(
     render_page_content(&free_text_boxes, &grids, image_blocks, Some(text_boxes))
 }
 
+/// Join hyphenated words split across block boundaries — column ends,
+/// region flushes, page breaks. Per-group paragraph merging can never
+/// see these: by render time the continuation lives in another block.
+/// `tech-\n\nniques` → `techniques`; a compound (`state-of-the-` +
+/// `art`) keeps its hyphen. Only fires when a letter precedes the
+/// hyphen and a lowercase letter opens the next block.
+fn dehyphenate_across_blocks(markdown: &str) -> String {
+    let bytes = markdown.as_bytes();
+    let mut out = String::with_capacity(markdown.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'-' && bytes[i + 1..].starts_with(b"\n\n") {
+            let before_alpha = out.chars().last().is_some_and(|c| c.is_alphabetic());
+            let next = markdown[i + 3..].chars().next();
+            let next_lower = next.is_some_and(|c| c.is_lowercase() && c.is_alphabetic());
+            if before_alpha && next_lower {
+                let last_word: String = out
+                    .chars()
+                    .rev()
+                    .take_while(|c| !c.is_whitespace())
+                    .collect();
+                if last_word.contains('-') {
+                    // Compound: keep the hyphen, drop the break.
+                    out.push('-');
+                }
+                i += 3; // skip "-\n\n"
+                continue;
+            }
+        }
+        let ch = markdown[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
 /// A group's bounding extents (with margin) for content assignment.
 struct GroupExtent {
     x_min: f64,
@@ -334,7 +370,9 @@ impl Converter for PdfConverter {
             }
         }
 
-        Ok(ConversionResult::markdown(page_markdowns.join("\n\n")))
+        Ok(ConversionResult::markdown(dehyphenate_across_blocks(
+            &page_markdowns.join("\n\n"),
+        )))
     }
 }
 
@@ -398,6 +436,29 @@ mod tests {
         let assigned = assign_images_to_groups(&blocks, &extents);
         assert_eq!(assigned[0].len(), 1);
         assert_eq!(assigned[1].len(), 0);
+    }
+
+    #[test]
+    fn dehyphenates_across_block_boundaries() {
+        assert_eq!(
+            dehyphenate_across_blocks("knowledge-based tech-\n\nniques applied"),
+            "knowledge-based techniques applied"
+        );
+        // Compound keeps its hyphen.
+        assert_eq!(
+            dehyphenate_across_blocks("the state-of-the-\n\nart system"),
+            "the state-of-the-art system"
+        );
+        // Uppercase continuation is a new sentence/heading: untouched.
+        assert_eq!(
+            dehyphenate_across_blocks("ends with dash-\n\nNew block"),
+            "ends with dash-\n\nNew block"
+        );
+        // List markers are not hyphenated words.
+        assert_eq!(
+            dehyphenate_across_blocks("a list:\n\n- item"),
+            "a list:\n\n- item"
+        );
     }
 
     #[test]
