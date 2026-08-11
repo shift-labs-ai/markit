@@ -2,19 +2,20 @@
 
 pub mod bidi;
 pub mod ccitt;
-pub mod cjk_cmap;
 pub mod columns;
 pub mod content_lex;
 pub mod extract;
 pub mod fast_extract;
+pub(crate) mod font;
+pub(crate) mod geom;
 pub mod grid;
 pub mod headers;
 pub mod image_extract;
 pub mod index;
+pub(crate) mod interp;
 pub mod own_pdf;
+pub(crate) mod pagetree;
 pub mod render;
-pub mod truetype;
-pub mod type1;
 pub mod types;
 
 /// JavaScriptCore-faithful Array#sort for comparators that do not implement

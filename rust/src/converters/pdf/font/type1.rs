@@ -5,7 +5,7 @@
 //! cleartext header ("dup <code> /<name> put"), CFF programs in the
 //! Encoding/Charset structures. Glyph names then map through the AGL.
 
-use super::fast_extract::glyph_to_unicode_pub;
+use super::glyphlist::glyph_to_unicode;
 
 /// Parse the /Encoding section of a Type1 font program (the cleartext
 /// part before eexec). Returns code -> unicode where recoverable.
@@ -52,7 +52,7 @@ pub fn type1_code_to_unicode(program: &[u8]) -> Option<[u32; 256]> {
             p += 1;
         }
         if code < 256 {
-            if let Some(c) = glyph_to_unicode_pub(&body[ns..p]) {
+            if let Some(c) = glyph_to_unicode(&body[ns..p]) {
                 out[code] = c as u32;
                 mapped = true;
             }
@@ -496,10 +496,10 @@ pub fn cff_code_to_unicode(program: &[u8]) -> Option<[u32; 256]> {
 
     let sid_char = |sid: u16| -> Option<char> {
         if let Some(name) = std_string(sid) {
-            return glyph_to_unicode_pub(name.as_bytes());
+            return glyph_to_unicode(name.as_bytes());
         }
         let custom = strings.get(program, sid as usize - 391)?;
-        glyph_to_unicode_pub(custom)
+        glyph_to_unicode(custom)
     };
 
     let mut out = [0u32; 256];

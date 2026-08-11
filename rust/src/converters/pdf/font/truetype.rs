@@ -257,7 +257,7 @@ pub fn code_to_unicode(font: &[u8]) -> Option<[u32; 256]> {
                 } else {
                     names
                         .get(idx as usize - 258)
-                        .and_then(|n| super::fast_extract::glyph_to_unicode_pub(n))
+                        .and_then(|n| super::glyphlist::glyph_to_unicode(n))
                 };
                 if let Some(ch) = ch {
                     out[c] = ch as u32;
