@@ -36,17 +36,22 @@ const H_SPLIT_MIN_GAP_PTS: f64 = 18.0;
 /// structural break rather than paragraph leading.
 const H_SPLIT_GAP_LINES: f64 = 2.5;
 
-/// Minimum gutter width in points.
-const MIN_GUTTER_PTS: i64 = 12;
+/// Minimum gutter width in points at 10pt body text; scaled by the
+/// region's median font size (dense 6pt encyclopedia columns sit
+/// ~8pt apart, which is as structural at that scale as 12pt is at
+/// 10pt).
+const MIN_GUTTER_PTS: f64 = 12.0;
 
 /// Fraction of the text width excluded at each edge when searching for
 /// gutters — a gutter in the outer margins is ragged-edge whitespace,
 /// not a column separator.
 const GUTTER_SEARCH_MARGIN: f64 = 0.15;
 
-/// Fraction of the page's boxes allowed to cross a gutter (full-width
-/// titles, headings, footnote rules). More crossings than this means the
-/// whitespace is coincidental, not structural.
+/// Fraction of the page's LINES allowed to cross a gutter (full-width
+/// titles, headings, footnote rules). More crossings than this means
+/// the whitespace is coincidental, not structural. Lines, not boxes:
+/// fragmented OCR text carries several boxes per line, and a
+/// box-based allowance lets phantom gutters through.
 const MAX_CROSSING_FRACTION: f64 = 0.15;
 
 /// Maximum number of gutters. Two admit unconditionally (three-column
@@ -98,7 +103,27 @@ fn find_gutters(text_boxes: &[TextBox]) -> Vec<f64> {
         return vec![];
     }
 
-    let max_crossing = 1.max((text_boxes.len() as f64 * MAX_CROSSING_FRACTION) as usize);
+    // Count distinct text lines (y-mid clusters) for the crossing
+    // allowance.
+    let mut mids: Vec<f64> = text_boxes
+        .iter()
+        .map(|tb| (tb.bounds.top + tb.bounds.bottom) / 2.0)
+        .collect();
+    mids.sort_by(|a, b| b.total_cmp(a));
+    let mut lines = 0usize;
+    let mut last_mid = f64::INFINITY;
+    for mid in mids {
+        if (last_mid - mid).abs() > 3.0 {
+            lines += 1;
+            last_mid = mid;
+        }
+    }
+    let max_crossing = 1.max((lines as f64 * MAX_CROSSING_FRACTION) as usize);
+
+    let mut sizes: Vec<f64> = text_boxes.iter().map(|tb| tb.font_size).collect();
+    sizes.sort_by(|a, b| a.total_cmp(b));
+    let median_size = sizes.get(sizes.len() / 2).copied().unwrap_or(10.0);
+    let min_gutter = (MIN_GUTTER_PTS * median_size / 10.0).clamp(6.0, MIN_GUTTER_PTS);
 
     // Crossing histogram via a difference array: O(boxes + width)
     // instead of a per-bin scan over every box.
@@ -136,8 +161,10 @@ fn find_gutters(text_boxes: &[TextBox]) -> Vec<f64> {
     // Validate: wide enough, and enough boxes fully on each side.
     let mut centers: Vec<(f64, i64)> = Vec::new();
     for (start, end) in runs {
-        let run_width = end - start + 1;
-        if run_width < MIN_GUTTER_PTS {
+        // k clear integer bins span ~k+1 points of whitespace: the
+        // bordering bins are each partially clear too.
+        let run_width = end - start + 2;
+        if (run_width as f64) < min_gutter {
             continue;
         }
         let center = (start + end) as f64 / 2.0;

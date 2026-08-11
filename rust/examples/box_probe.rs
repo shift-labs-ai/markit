@@ -19,7 +19,7 @@ fn main() {
                 .total_cmp(&a.bounds.top)
                 .then(a.bounds.left.total_cmp(&b.bounds.left))
         });
-        for tb in boxes.iter().take(40) {
+        for tb in boxes.iter().take(2000) {
             println!(
                 "[{:6.1}..{:6.1}] y={:6.1} fs={:4.1} {:?}",
                 tb.bounds.left,
