@@ -248,6 +248,65 @@ function regionHasRuledGrid(boxes: TextBox[], segments: Segment[]): boolean {
   return inside * 10 >= boxes.length * 6;
 }
 
+/** Cell-gap threshold and width cap for the tabular-region check. */
+const TABULAR_CELL_GAP = 15.0;
+const TABULAR_MAX_FRAGMENT_FRACTION = 0.18;
+const TABULAR_MIN_ROWS = 3;
+const TABULAR_MIN_FRAGMENTS = 3;
+
+/**
+ * Does the region read as an unruled table? Rows of >=3 narrow,
+ * well-separated fragments are data rows - text columns produce at
+ * most one wide fragment per column. Such regions must stay whole for
+ * table detection instead of being split into false page columns.
+ */
+function regionIsTabular(boxes: TextBox[]): boolean {
+  const xMin = Math.min(...boxes.map((tb) => tb.bounds.left));
+  const xMax = Math.max(...boxes.map((tb) => tb.bounds.right));
+  const width = xMax - xMin;
+  if (width <= 0) return false;
+  const maxFragment = width * TABULAR_MAX_FRAGMENT_FRACTION;
+
+  // Group into visual rows by Y midpoint.
+  const sorted = [...boxes].sort((a, b) => {
+    const ya = (a.bounds.top + a.bounds.bottom) / 2;
+    const yb = (b.bounds.top + b.bounds.bottom) / 2;
+    return yb - ya;
+  });
+  const rows: TextBox[][] = [];
+  let rowMid = Number.NEGATIVE_INFINITY;
+  for (const tb of sorted) {
+    const mid = (tb.bounds.top + tb.bounds.bottom) / 2;
+    if (rows.length === 0 || Math.abs(rowMid - mid) > 3) {
+      rows.push([tb]);
+      rowMid = mid;
+    } else {
+      rows[rows.length - 1].push(tb);
+    }
+  }
+
+  let qualifying = 0;
+  for (const row of rows) {
+    const rowBoxes = [...row].sort((a, b) => a.bounds.left - b.bounds.left);
+    const fragments: Array<[number, number]> = [];
+    for (const tb of rowBoxes) {
+      const last = fragments[fragments.length - 1];
+      if (last && tb.bounds.left - last[1] < TABULAR_CELL_GAP) {
+        last[1] = Math.max(last[1], tb.bounds.right);
+      } else {
+        fragments.push([tb.bounds.left, tb.bounds.right]);
+      }
+    }
+    if (
+      fragments.length >= TABULAR_MIN_FRAGMENTS &&
+      fragments.every(([l, r]) => r - l <= maxFragment)
+    ) {
+      qualifying++;
+    }
+  }
+  return qualifying >= TABULAR_MIN_ROWS && qualifying * 3 >= rows.length;
+}
+
 /**
  * Recursive layout: horizontal slices first, then tolerant gutter
  * detection, recursing into each column. `isBand` records the leaf's
@@ -276,8 +335,9 @@ function layoutRegion(
   }
 
   // A ruled table region must not be column-split — its interior
-  // whitespace belongs to the grid, not the page layout.
-  if (regionHasRuledGrid(boxes, segments)) {
+  // whitespace belongs to the grid, not the page layout. Neither may
+  // an unruled region whose rows read as data cells.
+  if (regionHasRuledGrid(boxes, segments) || regionIsTabular(boxes)) {
     out.push({ boxes, band: isBand });
     return;
   }

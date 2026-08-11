@@ -274,6 +274,73 @@ fn horizontal_splits(boxes: &[TextBox], segments: &[Segment]) -> Option<Vec<Vec<
     (parts.len() >= 2).then_some(parts)
 }
 
+/// Cell-gap threshold and width cap for the tabular-region check.
+const TABULAR_CELL_GAP: f64 = 15.0;
+const TABULAR_MAX_FRAGMENT_FRACTION: f64 = 0.18;
+const TABULAR_MIN_ROWS: usize = 3;
+const TABULAR_MIN_FRAGMENTS: usize = 3;
+
+/// Does the region read as an unruled table? Rows of ≥3 narrow,
+/// well-separated fragments are data rows — text columns produce at
+/// most one wide fragment per column. Such regions must stay whole for
+/// table detection instead of being split into false page columns.
+fn region_is_tabular(boxes: &[TextBox]) -> bool {
+    let x_min = boxes
+        .iter()
+        .map(|tb| tb.bounds.left)
+        .fold(f64::INFINITY, f64::min);
+    let x_max = boxes
+        .iter()
+        .map(|tb| tb.bounds.right)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let width = x_max - x_min;
+    if width <= 0.0 {
+        return false;
+    }
+    let max_fragment = width * TABULAR_MAX_FRAGMENT_FRACTION;
+
+    // Group into visual rows by Y midpoint.
+    let mut sorted: Vec<&TextBox> = boxes.iter().collect();
+    sorted.sort_by(|a, b| {
+        let ya = (a.bounds.top + a.bounds.bottom) / 2.0;
+        let yb = (b.bounds.top + b.bounds.bottom) / 2.0;
+        yb.total_cmp(&ya)
+    });
+    let mut rows: Vec<Vec<&TextBox>> = Vec::new();
+    let mut row_mid = f64::NEG_INFINITY;
+    for tb in sorted {
+        let mid = (tb.bounds.top + tb.bounds.bottom) / 2.0;
+        if rows.is_empty() || (row_mid - mid).abs() > 3.0 {
+            rows.push(vec![tb]);
+            row_mid = mid;
+        } else {
+            rows.last_mut().unwrap().push(tb);
+        }
+    }
+
+    let mut qualifying = 0usize;
+    for row in &rows {
+        let mut row_boxes: Vec<&&TextBox> = row.iter().collect();
+        row_boxes.sort_by(|a, b| a.bounds.left.total_cmp(&b.bounds.left));
+        // Cluster into fragments by cell gap.
+        let mut fragments: Vec<(f64, f64)> = Vec::new();
+        for tb in row_boxes {
+            match fragments.last_mut() {
+                Some(fragment) if tb.bounds.left - fragment.1 < TABULAR_CELL_GAP => {
+                    fragment.1 = fragment.1.max(tb.bounds.right);
+                }
+                _ => fragments.push((tb.bounds.left, tb.bounds.right)),
+            }
+        }
+        if fragments.len() >= TABULAR_MIN_FRAGMENTS
+            && fragments.iter().all(|(l, r)| r - l <= max_fragment)
+        {
+            qualifying += 1;
+        }
+    }
+    qualifying >= TABULAR_MIN_ROWS && qualifying * 3 >= rows.len()
+}
+
 /// Recursive layout: horizontal slices first, then tolerant gutter
 /// detection, recursing into each column. `is_band` records the leaf's
 /// provenance — horizontal slices and crossing boxes are full-width
@@ -299,8 +366,9 @@ fn layout_region(
     }
 
     // A ruled table region must not be column-split — its interior
-    // whitespace belongs to the grid, not the page layout.
-    if region_has_ruled_grid(&boxes, segments) {
+    // whitespace belongs to the grid, not the page layout. Neither may
+    // an unruled region whose rows read as data cells.
+    if region_has_ruled_grid(&boxes, segments) || region_is_tabular(&boxes) {
         out.push((boxes, is_band));
         return;
     }
