@@ -281,16 +281,20 @@ impl Converter for PdfConverter {
                     .map(|tb| tb.bounds.right)
                     .fold(f64::NEG_INFINITY, f64::max);
                 let page_width = page_x_max - page_x_min;
-                let min_col_fraction = 0.3;
+                // A legitimate column spans roughly page_width/n; the
+                // 30% floor assumed two columns and vetoed every
+                // four-column spread (each column ~22%). Scale with the
+                // detected gutter count.
+                let columns_detected = (layout.boundaries.len() + 1).max(2) as f64;
+                let min_col_fraction = 0.6 / columns_detected;
 
                 // Bands (full-width titles/headings) are legitimately
-                // narrow or wide; only column groups vote.
+                // narrow or wide; only substantive column groups vote —
+                // a stray page number or caption is not a mis-split
+                // table column.
                 let too_narrow = layout.columns.iter().zip(&layout.bands).any(|(col, band)| {
-                    if *band {
+                    if *band || col.len() < 4 {
                         return false;
-                    }
-                    if col.is_empty() {
-                        return true;
                     }
                     let col_x_min = col
                         .iter()
