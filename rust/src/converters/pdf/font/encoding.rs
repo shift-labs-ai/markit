@@ -278,6 +278,16 @@ pub(crate) fn build_simple_encoding(pdf: &Pdf, dict: &Dict, info: &mut FontInfo)
         }
     }
 
+    // Type3 /Differences names key the font's CharProcs and are chosen
+    // freely (dvips/Acrobat Capture emit opaque names like /B1, /AC).
+    // An unrecognized name there carries no unicode; falling back to the
+    // base-encoding character for the code recovers the common case
+    // where codes are ASCII-compatible. Non-Type3 fonts keep the strict
+    // behavior: an unknown name unmaps the code.
+    let is_type3 = matches!(
+        pdf.dict_get(dict, b"Subtype").ok().flatten(),
+        Some(Val::Name(b"Type3"))
+    );
     if let Ok(Some(Val::Dict(enc))) = pdf.dict_get(dict, b"Encoding") {
         if let Ok(Some(Val::Array(diffs))) = pdf.dict_get(&enc, b"Differences") {
             let mut code = 0usize;
@@ -286,7 +296,12 @@ pub(crate) fn build_simple_encoding(pdf: &Pdf, dict: &Dict, info: &mut FontInfo)
                     Ok(Val::Num(v)) => code = v as usize,
                     Ok(Val::Name(n)) => {
                         if code < 256 {
-                            info.to_unicode_simple[code] = glyph_to_unicode(n);
+                            let mapped = glyph_to_unicode(n);
+                            info.to_unicode_simple[code] = if is_type3 {
+                                mapped.or(info.to_unicode_simple[code].filter(|c| !c.is_control()))
+                            } else {
+                                mapped
+                            };
                         }
                         code += 1;
                     }

@@ -100,6 +100,10 @@ pub(crate) struct Interp<'a> {
     pub(crate) image_placements: Vec<ImagePlacement<'a>>,
     /// Number of text-showing operators encountered (any font).
     pub(crate) text_ops: usize,
+    /// A text-showing operator decoded at least one glyph to a
+    /// character — including whitespace. Distinguishes "the encoding is
+    /// unsupported" from "the page's only text is blank".
+    pub(crate) any_decoded: bool,
     /// A font with an unsupported predefined CMap showed text: the page
     /// cannot be decoded faithfully.
     pub(crate) unsupported_font: bool,
@@ -148,6 +152,7 @@ impl<'a> Interp<'a> {
             segments: Vec::new(),
             image_placements: Vec::new(),
             text_ops: 0,
+            any_decoded: false,
             unsupported_font: false,
             mc_depth: 0,
             actual_text: None,
@@ -639,6 +644,10 @@ impl<'a> Interp<'a> {
             } else if let Some(c) = font.to_unicode_simple[code as usize & 0xff] {
                 text.push(c);
             }
+        }
+
+        if !text.is_empty() {
+            self.any_decoded = true;
         }
 
         // Advance Tm: horizontal writing moves across, vertical (WMode

@@ -104,6 +104,7 @@ pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
     let mut out = Vec::with_capacity(pages.len());
     let mut any_text = false;
     let mut any_text_ops = false;
+    let mut any_decoded = false;
     let mut content = Vec::new();
 
     for (index, (page, inherited)) in pages.iter().enumerate() {
@@ -121,6 +122,7 @@ pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
         }
         any_text |= !interp.items.is_empty();
         any_text_ops |= interp.text_ops > 0;
+        any_decoded |= interp.any_decoded;
 
         let raws = interp
             .items
@@ -153,7 +155,11 @@ pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
         });
     }
 
-    if !any_text && any_text_ops && !out.is_empty() {
+    // Text ops that never decoded a single glyph (not even whitespace)
+    // mean the encoding is unsupported. Ops whose glyphs decoded to
+    // blanks only are a genuinely empty overlay — e.g. a scanned page
+    // with a whitespace text layer — and must not fail the document.
+    if !any_text && any_text_ops && !any_decoded && !out.is_empty() {
         bail!("text ops decoded to nothing (unsupported encodings)");
     }
     Ok(out)
@@ -267,6 +273,42 @@ trailer << /Root 1 0 R >>";
         let pages = extract_pages_fast(pdf).expect("type1 recovery");
         let text = text_of(&pages);
         assert!(text.contains("\u{00E9}\u{00F8}"), "got: {text}");
+    }
+
+    /// A page whose text ops decode only to whitespace is an image-only
+    /// page, not an encoding failure.
+    #[test]
+    fn whitespace_only_text_ops_do_not_fail_extraction() {
+        let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj
+4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+5 0 obj << /Length 41 >> stream
+BT /F1 12 Tf 72 720 Td ( ) Tj ET
+endstream endobj
+trailer << /Root 1 0 R >>";
+        let pages = extract_pages_fast(pdf).expect("whitespace-only page");
+        assert!(pages[0].text_boxes.is_empty());
+    }
+
+    /// A Type3 font whose /Differences names are opaque CharProc keys
+    /// falls back to the base-encoding character for each code; a
+    /// recognized name still wins.
+    #[test]
+    fn type3_opaque_differences_fall_back_to_base_encoding() {
+        let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj
+4 0 obj << /Type /Font /Subtype /Type3 /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << >> /Encoding << /Differences [65 /BQ 66 /eacute] >> /FirstChar 65 /LastChar 66 /Widths [500 500] >> endobj
+5 0 obj << /Length 42 >> stream
+BT /F1 12 Tf 72 720 Td (AB) Tj ET
+endstream endobj
+trailer << /Root 1 0 R >>";
+        let pages = extract_pages_fast(pdf).expect("type3 fallback");
+        let text = text_of(&pages);
+        assert!(text.contains("A\u{00E9}"), "got: {text}");
     }
 
     /// Content inside an /OC span whose OCG is OFF in the default
