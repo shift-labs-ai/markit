@@ -49,8 +49,11 @@ const GUTTER_SEARCH_MARGIN: f64 = 0.15;
 /// whitespace is coincidental, not structural.
 const MAX_CROSSING_FRACTION: f64 = 0.15;
 
-/// Maximum number of gutters (three-column layouts).
-const MAX_GUTTERS: usize = 2;
+/// Maximum number of gutters. Two admit unconditionally (three-column
+/// layouts); a third is admitted only when every resulting column
+/// interval holds enough fully-contained boxes (four-column magazine
+/// spreads) — table whitespace fails that proof.
+const MAX_GUTTERS: usize = 3;
 
 /// Result of column layout detection.
 #[derive(Debug, Clone, PartialEq)]
@@ -159,8 +162,31 @@ fn find_gutters(text_boxes: &[TextBox]) -> Vec<f64> {
         return vec![];
     }
 
-    centers.sort_by_key(|c| std::cmp::Reverse(c.1));
-    centers.truncate(MAX_GUTTERS);
+    if centers.len() == MAX_GUTTERS {
+        // The four-column case carries a stricter burden of proof:
+        // every interior interval must hold a real column of text.
+        let mut xs: Vec<f64> = centers.iter().map(|(c, _)| *c).collect();
+        xs.sort_by(|a, b| a.total_cmp(b));
+        let interval_ok = xs.windows(2).all(|pair| {
+            let mut widths: Vec<f64> = text_boxes
+                .iter()
+                .filter(|tb| tb.bounds.left >= pair[0] && tb.bounds.right <= pair[1])
+                .map(|tb| tb.bounds.right - tb.bounds.left)
+                .collect();
+            if widths.len() < MIN_BOXES_PER_COLUMN {
+                return false;
+            }
+            // Prose columns are filled by wide line boxes; table cells
+            // sit narrow inside their interval.
+            widths.sort_by(|a, b| a.total_cmp(b));
+            widths[widths.len() / 2] >= 0.5 * (pair[1] - pair[0])
+        });
+        // Proof failed: this is table whitespace. Reject outright, as
+        // three-plus gutters always were before — splitting by a
+        // subset would carve up the table.
+        return if interval_ok { xs } else { vec![] };
+    }
+
     let mut gutters: Vec<f64> = centers.into_iter().map(|(c, _)| c).collect();
     gutters.sort_by(|a, b| a.total_cmp(b));
     gutters
