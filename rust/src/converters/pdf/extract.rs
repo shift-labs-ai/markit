@@ -421,6 +421,12 @@ pub(crate) fn image_regions_from_bboxes_pub(
     image_regions_from_bboxes(bboxes, page_number, page_height)
 }
 
+pub(crate) fn image_bbox_is_large_pub(bbox: (f32, f32, f32, f32)) -> bool {
+    let w = ((bbox.2 - bbox.0) as i32) as f64;
+    let h = ((bbox.3 - bbox.1) as i32) as f64;
+    w * h >= MIN_IMAGE_AREA
+}
+
 pub(crate) fn thin_rect_to_segment_pub(
     id: String,
     x: f64,
@@ -917,8 +923,6 @@ fn tokenize_content_stream(raw: &str) -> Vec<String> {
 // ---------------------------------------------------------------------------
 
 const MIN_IMAGE_AREA: f64 = 5000.0;
-/// Public shim for the fast image-extraction path.
-pub(crate) const MIN_IMAGE_AREA_PUB: f64 = MIN_IMAGE_AREA;
 
 /// Shared bbox → image-region conversion (both extraction paths).
 fn image_regions_from_bboxes(
@@ -936,7 +940,7 @@ fn image_regions_from_bboxes(
         let w = ((x1 - x0) as i32) as f64;
         let h = ((y1 - y0) as i32) as f64;
 
-        if w * h < MIN_IMAGE_AREA {
+        if !image_bbox_is_large_pub((x0, y0, x1, y1)) {
             continue;
         }
 

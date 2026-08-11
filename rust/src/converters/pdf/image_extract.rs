@@ -7,6 +7,7 @@
 
 use anyhow::{anyhow, bail, Result};
 
+use super::interp::ImageSource;
 use super::own_pdf::{decode_stream, Dict, Pdf, Val};
 use super::types::ImageRegion;
 
@@ -29,15 +30,14 @@ pub fn extract_image_region_fast(input: &[u8], region: &ImageRegion) -> Result<E
         .next()
         .and_then(|s| s.parse().ok())
         .ok_or_else(|| anyhow!("bad region id"))?;
-    let (dict, raw) = placements
+    let source = placements
         .into_iter()
         .nth(idx)
         .ok_or_else(|| anyhow!("image index out of range"))?;
-    if raw.is_empty() {
-        bail!("inline image: no extractable stream");
+    match source {
+        ImageSource::Inline => bail!("inline image: no extractable stream"),
+        ImageSource::XObject { dict, raw } => extract_xobject(&pdf, &dict, raw),
     }
-
-    extract_xobject(&pdf, &dict, raw)
 }
 
 /// JBIG2Decode → grayscale PNG (pure-Rust hayro-jbig2).
@@ -156,6 +156,21 @@ fn extract_ccitt(pdf: &Pdf, dict: &Dict, data: &[u8]) -> Result<ExtractedImage> 
     })
 }
 
+fn jbig2_globals(pdf: &Pdf, dict: &Dict, filter_index: usize) -> Option<Vec<u8>> {
+    let parms = match pdf.dict_get(dict, b"DecodeParms").ok()?? {
+        Val::Dict(d) => Some(d),
+        Val::Array(a) => match a.get(filter_index).map(|v| pdf.resolve(v)) {
+            Some(Ok(Val::Dict(d))) => Some(d),
+            _ => None,
+        },
+        _ => None,
+    }?;
+    match pdf.dict_get(&parms, b"JBIG2Globals").ok()?? {
+        Val::Stream(gd, raw) => decode_stream(&gd, raw, pdf).ok(),
+        _ => None,
+    }
+}
+
 fn extract_xobject(pdf: &Pdf, dict: &Dict, raw: &[u8]) -> Result<ExtractedImage> {
     // Find the outermost filter; DCT passes through undecoded.
     let filter_names: Vec<Vec<u8>> = match pdf.dict_get(dict, b"Filter")? {
@@ -177,21 +192,7 @@ fn extract_xobject(pdf: &Pdf, dict: &Dict, raw: &[u8]) -> Result<ExtractedImage>
                 bail!("unsupported pre-JBIG2 filter");
             }
         }
-        // JBIG2Globals stream from DecodeParms, when present.
-        let globals: Option<Vec<u8>> = (|| {
-            let parms = match pdf.dict_get(dict, b"DecodeParms").ok()?? {
-                Val::Dict(d) => Some(d),
-                Val::Array(a) => a.iter().find_map(|v| match pdf.resolve(v) {
-                    Ok(Val::Dict(d)) => Some(d),
-                    _ => None,
-                }),
-                _ => None,
-            }?;
-            match pdf.dict_get(&parms, b"JBIG2Globals").ok()?? {
-                Val::Stream(gd, graw) => decode_stream(&gd, graw, pdf).ok(),
-                _ => None,
-            }
-        })();
+        let globals = jbig2_globals(pdf, dict, filter_names.len() - 1);
         return extract_jbig2(&bytes, globals.as_deref());
     }
 
@@ -569,5 +570,21 @@ trailer << /Root 1 0 R >>",
         let image = extract_ccitt(&pdf(), &dict, &[0b1100_0000]).unwrap();
         let width = u32::from_be_bytes(image.bytes[16..20].try_into().unwrap());
         assert_eq!(width, 8);
+    }
+
+    #[test]
+    fn jbig2_globals_follow_the_jbig2_filter_position() {
+        let globals = Val::Stream(vec![(b"Length".as_slice(), Val::Num(3.0))], b"abc");
+        let dict = vec![(
+            b"DecodeParms".as_slice(),
+            Val::Array(vec![
+                Val::Dict(Vec::new()),
+                Val::Dict(vec![(b"JBIG2Globals".as_slice(), globals)]),
+            ]),
+        )];
+        assert_eq!(
+            jbig2_globals(&pdf(), &dict, 1).as_deref(),
+            Some(b"abc".as_slice())
+        );
     }
 }

@@ -1,138 +1,23 @@
-//! markit's PDF extraction engine: a pure-Rust content-stream
-//! interpreter over the own_pdf object layer, producing the same
-//! PageContent shape the MuPDF path produces at a fraction of the cost.
-//! MuPDF remains the rasterizer (render_image_region) and the fallback
-//! for anything this engine cannot handle faithfully (see extract_pages).
+//! markit's pure-Rust PDF extraction engine.
 //!
-//! Coordinates: PDF user space is bottom-left/y-up, which is what the
-//! downstream pipeline consumes for text boxes and segments. Image
-//! regions keep the MuPDF path's device-space (y-down) convention.
+//! One shared page interpreter feeds both markdown extraction and native
+//! image-source lookup. Coordinates remain PDF user space (bottom-left,
+//! Y-up) until image regions are converted to device space.
+
+use std::rc::Rc;
 
 use anyhow::{anyhow, bail, Result};
+use rustc_hash::FxHashSet;
 
 use super::geom::rotation_base;
-use super::interp::Interp;
+use super::interp::{ImageSource, Interp};
 use super::own_pdf::{decode_stream, Dict, Pdf, Val};
 use super::pagetree::{collect_hidden_ocgs, walk_pages, Inherit};
 use super::types::PageContent;
 
-/// Extract all pages via the own object layer. Errors mean "use the
-/// MuPDF fallback" (encryption, non-Flate filters, rotated pages,
-/// zero-text documents, structural surprises).
-pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
-    let pdf = Pdf::parse(input)?;
+type PageNode<'a> = (Dict<'a>, Inherit<'a>);
 
-    // Page tree walk (Root → Pages → Kids), tracking inheritable attrs.
-    let Some(Val::Dict(root)) = pdf.dict_get(&pdf.trailer, b"Root")? else {
-        bail!("no Root");
-    };
-    let hidden_ocgs = collect_hidden_ocgs(&pdf, &root);
-    let Some(Val::Dict(pages_root)) = pdf.dict_get(&root, b"Pages")? else {
-        bail!("no Pages");
-    };
-
-    let mut page_dicts = Vec::new();
-    walk_pages(&pdf, &pages_root, &Inherit::default(), &mut page_dicts, 0)?;
-
-    let mut out: Vec<PageContent> = Vec::with_capacity(page_dicts.len());
-    let mut any_text = false;
-    let mut any_text_ops = false;
-    let mut content_buf: Vec<u8> = Vec::new();
-
-    for (idx, (page, inh)) in page_dicts.iter().enumerate() {
-        let page_no = (idx + 1) as u32;
-
-        let mb = inh.media.as_ref().ok_or_else(|| anyhow!("no MediaBox"))?;
-        let (mx0, my0) = (mb[0].min(mb[2]), mb[1].min(mb[3]));
-        let (base, page_height) = rotation_base(inh.rotate, mb, mx0, my0);
-
-        // Concatenate content streams.
-        content_buf.clear();
-        match pdf.dict_get(page, b"Contents")? {
-            Some(Val::Stream(d, raw)) => {
-                content_buf.extend_from_slice(&decode_stream(&d, raw, &pdf)?);
-            }
-            Some(Val::Array(items)) => {
-                for it in items {
-                    if let Val::Stream(d, raw) = pdf.resolve(&it)? {
-                        content_buf.extend_from_slice(&decode_stream(&d, raw, &pdf)?);
-                        content_buf.push(b'\n');
-                    }
-                }
-            }
-            _ => {}
-        }
-
-        let mut interp = Interp::new(&pdf, page_no, base, hidden_ocgs.clone());
-        interp.run(&content_buf, inh.resources.as_ref())?;
-
-        if !interp.items.is_empty() {
-            any_text = true;
-        }
-        if interp.text_ops > 0 {
-            any_text_ops = true;
-        }
-        if interp.unsupported_font {
-            bail!("unsupported predefined CMap (CJK encoding tables)");
-        }
-
-        // Text boxes through the shared merge pipeline (items are already
-        // in bottom-left user space).
-        let raws: Vec<super::extract::RawTextItemPub> = interp
-            .items
-            .into_iter()
-            .map(|i| super::extract::RawTextItemPub {
-                text: i.text,
-                x: i.x,
-                y: i.y,
-                width: i.width,
-                height: i.height,
-                font_size: i.font_size,
-                is_bold: i.is_bold,
-            })
-            .collect();
-        let text_boxes = super::extract::finish_text_boxes_pub(raws, page_no)?;
-
-        // Image regions: convert user-space bbox to the device-space
-        // convention image_regions expects (y down, int truncation).
-        let bboxes: Vec<(f32, f32, f32, f32)> = interp
-            .image_bboxes
-            .iter()
-            .map(|&(x0, y0, x1, y1)| {
-                (
-                    x0 as f32,
-                    (page_height - y1) as f32,
-                    x1 as f32,
-                    (page_height - y0) as f32,
-                )
-            })
-            .collect();
-        let images = super::extract::image_regions_from_bboxes_pub(&bboxes, page_no, page_height);
-
-        out.push(PageContent {
-            page_number: page_no,
-            text_boxes,
-            segments: interp.segments,
-            images,
-        });
-    }
-
-    // Text operators that produced nothing = an encoding we failed to
-    // decode: defer to the fallback. No text operators at all = a scanned
-    // document: image placeholders are the right output, same as MuPDF.
-    if !any_text && any_text_ops && !out.is_empty() {
-        bail!("text ops decoded to nothing (unsupported encodings)");
-    }
-
-    Ok(out)
-}
-/// Image placements for one page, in the same order and with the same
-/// area filter as the ImageRegion ids assigned during extraction
-/// ("p{page}-img{i}"), so a region id indexes directly into this list.
-pub(crate) fn page_image_placements<'a>(
-    pdf: &'a Pdf<'a>,
-    page_number: u32,
-) -> Result<Vec<(Dict<'a>, &'a [u8])>> {
+fn page_tree<'a>(pdf: &'a Pdf<'a>) -> Result<(Rc<FxHashSet<u32>>, Vec<PageNode<'a>>)> {
     let Some(Val::Dict(root)) = pdf.dict_get(&pdf.trailer, b"Root")? else {
         bail!("no Root");
     };
@@ -140,53 +25,137 @@ pub(crate) fn page_image_placements<'a>(
     let Some(Val::Dict(pages_root)) = pdf.dict_get(&root, b"Pages")? else {
         bail!("no Pages");
     };
-    let mut page_dicts = Vec::new();
-    walk_pages(pdf, &pages_root, &Inherit::default(), &mut page_dicts, 0)?;
-    let Some((page, inh)) = page_dicts.into_iter().nth(page_number as usize - 1) else {
-        bail!("page out of range");
-    };
+    let mut pages = Vec::new();
+    walk_pages(pdf, &pages_root, &Inherit::default(), &mut pages, 0)?;
+    Ok((hidden_ocgs, pages))
+}
 
-    let mb = inh.media.as_ref().ok_or_else(|| anyhow!("no MediaBox"))?;
-    let (mx0, my0) = (mb[0].min(mb[2]), mb[1].min(mb[3]));
-    let (base, page_height) = rotation_base(inh.rotate, mb, mx0, my0);
-
-    let mut content_buf: Vec<u8> = Vec::new();
-    match pdf.dict_get(&page, b"Contents")? {
-        Some(Val::Stream(d, raw)) => {
-            content_buf.extend_from_slice(&decode_stream(&d, raw, pdf)?);
+fn decode_page_content(pdf: &Pdf<'_>, page: &Dict<'_>, content: &mut Vec<u8>) -> Result<()> {
+    content.clear();
+    match pdf.dict_get(page, b"Contents")? {
+        Some(Val::Stream(dict, raw)) => {
+            content.extend_from_slice(&decode_stream(&dict, raw, pdf)?);
         }
         Some(Val::Array(items)) => {
-            for it in items {
-                if let Val::Stream(d, raw) = pdf.resolve(&it)? {
-                    content_buf.extend_from_slice(&decode_stream(&d, raw, pdf)?);
-                    content_buf.push(b'\n');
+            for item in items {
+                if let Val::Stream(dict, raw) = pdf.resolve(&item)? {
+                    content.extend_from_slice(&decode_stream(&dict, raw, pdf)?);
+                    content.push(b'\n');
                 }
             }
         }
         _ => {}
     }
+    Ok(())
+}
 
-    let mut interp = Interp::new(pdf, page_number, base, hidden_ocgs.clone());
-    interp.run(&content_buf, inh.resources.as_ref())?;
+fn interpret_page<'a>(
+    pdf: &'a Pdf<'a>,
+    page: &Dict<'a>,
+    inherited: &Inherit<'a>,
+    page_number: u32,
+    hidden_ocgs: Rc<FxHashSet<u32>>,
+    content: &mut Vec<u8>,
+) -> Result<(Interp<'a>, f64)> {
+    let media = inherited
+        .media
+        .as_ref()
+        .ok_or_else(|| anyhow!("no MediaBox"))?;
+    let (mx0, my0) = (media[0].min(media[2]), media[1].min(media[3]));
+    let (base, page_height) = rotation_base(inherited.rotate, media, mx0, my0);
+    decode_page_content(pdf, page, content)?;
+    let mut interp = Interp::new(pdf, page_number, base, hidden_ocgs);
+    interp.run(content, inherited.resources.as_ref())?;
+    Ok((interp, page_height))
+}
 
-    // Apply the same MIN_IMAGE_AREA filter (int-truncated device coords)
-    // that assigned the region ids.
-    let mut out = Vec::new();
-    for (i, &(x0, y0, x1, y1)) in interp.image_bboxes.iter().enumerate() {
-        let dev = (
-            x0 as f32,
-            (page_height - y1) as f32,
-            x1 as f32,
-            (page_height - y0) as f32,
-        );
-        let w = ((dev.2 - dev.0) as i32) as f64;
-        let h = ((dev.3 - dev.1) as i32) as f64;
-        if w * h < super::extract::MIN_IMAGE_AREA_PUB {
-            continue;
+fn device_bbox((x0, y0, x1, y1): (f64, f64, f64, f64), page_height: f64) -> (f32, f32, f32, f32) {
+    (
+        x0 as f32,
+        (page_height - y1) as f32,
+        x1 as f32,
+        (page_height - y0) as f32,
+    )
+}
+
+pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
+    let pdf = Pdf::parse(input)?;
+    let (hidden_ocgs, pages) = page_tree(&pdf)?;
+    let mut out = Vec::with_capacity(pages.len());
+    let mut any_text = false;
+    let mut any_text_ops = false;
+    let mut content = Vec::new();
+
+    for (index, (page, inherited)) in pages.iter().enumerate() {
+        let page_number = (index + 1) as u32;
+        let (interp, page_height) = interpret_page(
+            &pdf,
+            page,
+            inherited,
+            page_number,
+            hidden_ocgs.clone(),
+            &mut content,
+        )?;
+        if interp.unsupported_font {
+            bail!("unsupported predefined CMap (CJK encoding tables)");
         }
-        out.push(interp.image_xobjects[i].clone());
+        any_text |= !interp.items.is_empty();
+        any_text_ops |= interp.text_ops > 0;
+
+        let raws = interp
+            .items
+            .into_iter()
+            .map(|item| super::extract::RawTextItemPub {
+                text: item.text,
+                x: item.x,
+                y: item.y,
+                width: item.width,
+                height: item.height,
+                font_size: item.font_size,
+                is_bold: item.is_bold,
+            })
+            .collect();
+        let text_boxes = super::extract::finish_text_boxes_pub(raws, page_number)?;
+        let bboxes: Vec<_> = interp
+            .image_placements
+            .iter()
+            .map(|placement| device_bbox(placement.bbox, page_height))
+            .collect();
+        let images =
+            super::extract::image_regions_from_bboxes_pub(&bboxes, page_number, page_height);
+        out.push(PageContent {
+            page_number,
+            text_boxes,
+            segments: interp.segments,
+            images,
+        });
+    }
+
+    if !any_text && any_text_ops && !out.is_empty() {
+        bail!("text ops decoded to nothing (unsupported encodings)");
     }
     Ok(out)
+}
+
+pub(crate) fn page_image_placements<'a>(
+    pdf: &'a Pdf<'a>,
+    page_number: u32,
+) -> Result<Vec<ImageSource<'a>>> {
+    let (hidden_ocgs, pages) = page_tree(pdf)?;
+    let Some((page, inherited)) = pages.get(page_number as usize - 1) else {
+        bail!("page out of range");
+    };
+    let mut content = Vec::new();
+    let (interp, page_height) =
+        interpret_page(pdf, page, inherited, page_number, hidden_ocgs, &mut content)?;
+    Ok(interp
+        .image_placements
+        .into_iter()
+        .filter_map(|placement| {
+            let bbox = device_bbox(placement.bbox, page_height);
+            super::extract::image_bbox_is_large_pub(bbox).then_some(placement.source)
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -416,5 +385,34 @@ BT /F1 12 Tf 72 720 Td (\200) Tj ET
 endstream endobj
 trailer << /Root 1 0 R >>";
         assert!(extract_pages_fast(pdf).is_err());
+    }
+
+    #[test]
+    fn inline_and_xobject_image_sources_stay_aligned_with_regions() {
+        let pdf = br"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /XObject << /Im0 6 0 R >> >> /Contents 5 0 R >> endobj
+5 0 obj << /Length 120 >> stream
+q 100 0 0 100 0 0 cm BI /W 1 /H 1 /BPC 1 /CS /G ID 0 EI Q
+q 100 0 0 100 120 0 cm /Im0 Do Q
+endstream endobj
+6 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 1 /ColorSpace /DeviceGray /Length 1 >> stream
+0
+endstream endobj
+trailer << /Root 1 0 R >>";
+        let pages = extract_pages_fast(pdf).unwrap();
+        assert_eq!(pages[0].images.len(), 2);
+        assert_eq!(pages[0].images[0].id, "p1-img0");
+        assert_eq!(pages[0].images[1].id, "p1-img1");
+
+        let parsed = Pdf::parse(pdf).unwrap();
+        let placements = page_image_placements(&parsed, 1).unwrap();
+        assert_eq!(placements.len(), 2);
+        assert!(matches!(placements[0], ImageSource::Inline));
+        assert!(matches!(
+            placements[1],
+            ImageSource::XObject { raw: b"0", .. }
+        ));
     }
 }

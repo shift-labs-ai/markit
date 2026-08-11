@@ -50,16 +50,29 @@ impl Default for TextState {
     }
 }
 
+pub(crate) type ImageBbox = (f64, f64, f64, f64);
+
+#[derive(Clone)]
+pub(crate) enum ImageSource<'a> {
+    Inline,
+    XObject { dict: Dict<'a>, raw: &'a [u8] },
+}
+
+#[derive(Clone)]
+pub(crate) struct ImagePlacement<'a> {
+    pub(crate) bbox: ImageBbox,
+    pub(crate) source: ImageSource<'a>,
+}
+
 pub(crate) struct Interp<'a> {
     pdf: &'a Pdf<'a>,
     /// Raw text items in paint order — page assembly's input.
     pub(crate) items: Vec<RawItem>,
     /// Vector segments (fills/strokes) for table detection.
     pub(crate) segments: Vec<Segment>,
-    /// Placed-image bounding boxes, user space (x0, y0, x1, y1).
-    pub(crate) image_bboxes: Vec<(f64, f64, f64, f64)>,
-    /// Image XObject placements in paint order (dict + raw stream bytes).
-    pub(crate) image_xobjects: Vec<(Dict<'a>, &'a [u8])>,
+    /// Image geometry and source are coupled so paint-order region
+    /// IDs cannot drift away from the stream they identify.
+    pub(crate) image_placements: Vec<ImagePlacement<'a>>,
     /// Number of text-showing operators encountered (any font).
     pub(crate) text_ops: usize,
     /// A font with an unsupported predefined CMap showed text: the page
@@ -100,8 +113,7 @@ impl<'a> Interp<'a> {
             pdf,
             items: Vec::new(),
             segments: Vec::new(),
-            image_bboxes: Vec::new(),
-            image_xobjects: Vec::new(),
+            image_placements: Vec::new(),
             text_ops: 0,
             unsupported_font: false,
             mc_depth: 0,
@@ -322,9 +334,10 @@ impl<'a> Interp<'a> {
                 b"BI" => {
                     let (ax, ay) = self.ctm.apply(0.0, 0.0);
                     let (bx, by) = self.ctm.apply(1.0, 1.0);
-                    self.image_bboxes
-                        .push((ax.min(bx), ay.min(by), ax.max(bx), ay.max(by)));
-                    self.image_xobjects.push((Vec::new(), &[]));
+                    self.image_placements.push(ImagePlacement {
+                        bbox: (ax.min(bx), ay.min(by), ax.max(bx), ay.max(by)),
+                        source: ImageSource::Inline,
+                    });
                 }
                 _ => {}
             }
@@ -653,9 +666,13 @@ impl<'a> Interp<'a> {
             // Unit square through the CTM.
             let (ax, ay) = self.ctm.apply(0.0, 0.0);
             let (bx, by) = self.ctm.apply(1.0, 1.0);
-            self.image_bboxes
-                .push((ax.min(bx), ay.min(by), ax.max(bx), ay.max(by)));
-            self.image_xobjects.push((sdict.clone(), raw));
+            self.image_placements.push(ImagePlacement {
+                bbox: (ax.min(bx), ay.min(by), ax.max(bx), ay.max(by)),
+                source: ImageSource::XObject {
+                    dict: sdict.clone(),
+                    raw,
+                },
+            });
             return;
         }
 
