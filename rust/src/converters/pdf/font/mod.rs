@@ -203,12 +203,33 @@ pub(crate) fn build_font(pdf: &Pdf, dict: &Dict) -> FontInfo {
         build_simple_encoding(pdf, dict, &mut info);
     }
 
-    // ToUnicode overrides encoding-derived mappings.
+    // ToUnicode overrides encoding-derived mappings — except when it
+    // truncates a ligature. Publishers frequently emit CMaps mapping a
+    // /T_h or /f_i glyph to just its first letter; the /Differences
+    // glyph name is the authoritative record of the full expansion, so
+    // snapshot those before the CMap is applied.
+    let ligature_expansions: Vec<(u32, String)> = info
+        .to_unicode
+        .iter()
+        .filter(|(_, s)| s.chars().count() > 1)
+        .map(|(&code, s)| (code, s.clone()))
+        .collect();
     let mut has_tounicode = false;
     if let Some(Val::Stream(sd, raw)) = g(b"ToUnicode") {
         if let Ok(data) = decode_stream(&sd, raw, pdf) {
             parse_tounicode(&data, &mut info);
             has_tounicode = true;
+        }
+    }
+    if has_tounicode {
+        for (code, expansion) in ligature_expansions {
+            let truncated = info.to_unicode.get(&code).is_none_or(|s| {
+                s.chars().count() < expansion.chars().count() && expansion.starts_with(s.as_str())
+            });
+            if truncated {
+                info.to_unicode.insert(code, expansion);
+                info.to_unicode_simple[code as usize & 0xff] = None;
+            }
         }
     }
 
@@ -219,13 +240,21 @@ pub(crate) fn build_font(pdf: &Pdf, dict: &Dict) -> FontInfo {
         let has_encoding = matches!(g(b"Encoding"), Some(Val::Name(_) | Val::Dict(_)));
         if !has_encoding {
             if let Some(Val::Dict(fd)) = g(b"FontDescriptor") {
-                let program_map = |key: &[u8]| -> Option<[u32; 256]> {
+                let program_map = |key: &[u8]| -> Option<type1::CodeUnicodeMap> {
                     let Ok(Some(Val::Stream(sd, raw))) = pdf.dict_get(&fd, key) else {
                         return None;
                     };
                     let program = decode_stream(&sd, raw, pdf).ok()?;
                     match key {
-                        b"FontFile2" => truetype::code_to_unicode(&program),
+                        b"FontFile2" => truetype::code_to_unicode(&program).map(|arr| {
+                            arr.iter()
+                                .map(|&u| {
+                                    (u != 0)
+                                        .then(|| char::from_u32(u).map(String::from))
+                                        .flatten()
+                                })
+                                .collect()
+                        }),
                         b"FontFile" => type1::type1_code_to_unicode(&program),
                         _ => type1::cff_code_to_unicode(&program),
                     }
@@ -234,9 +263,12 @@ pub(crate) fn build_font(pdf: &Pdf, dict: &Dict) -> FontInfo {
                     .or_else(|| program_map(b"FontFile"))
                     .or_else(|| program_map(b"FontFile3"));
                 if let Some(map) = map {
-                    for (code, &u) in map.iter().enumerate() {
-                        if u != 0 {
-                            info.to_unicode_simple[code] = char::from_u32(u);
+                    for (code, s) in map.iter().enumerate() {
+                        let Some(s) = s else { continue };
+                        if s.chars().count() == 1 {
+                            info.to_unicode_simple[code] = s.chars().next();
+                        } else {
+                            info.to_unicode.insert(code as u32, s.clone());
                         }
                     }
                 }

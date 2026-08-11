@@ -330,6 +330,31 @@ trailer << /Root 1 0 R >>";
         assert!(text.contains("The first"), "got: {text}");
     }
 
+    /// A ToUnicode CMap that maps a ligature code to just its first
+    /// letter must not truncate the /Differences expansion (`/T_h` →
+    /// "Th", not "T") — the publisher-CMap bug behind "Te classifer".
+    #[test]
+    fn truncated_tounicode_does_not_override_ligature_differences() {
+        let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj
+4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Minion /Encoding << /BaseEncoding /WinAnsiEncoding /Differences [30 /T_h 31 /f_i] >> /ToUnicode 6 0 R >> endobj
+5 0 obj << /Length 48 >> stream
+BT /F1 12 Tf 72 720 Td (\\036e \\037rst) Tj ET
+endstream endobj
+6 0 obj << /Length 122 >> stream
+2 beginbfchar
+<1e> <0054>
+<1f> <0066>
+endbfchar
+endstream endobj
+trailer << /Root 1 0 R >>";
+        let pages = extract_pages_fast(pdf).expect("truncated tounicode");
+        let text = text_of(&pages);
+        assert!(text.contains("The first"), "got: {text}");
+    }
+
     /// TeX Type3 fonts put f-ligatures at OT1 slots 11–15; the decode
     /// must expand them to ASCII so "first" doesn't lose its "fi".
     #[test]

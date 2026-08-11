@@ -5,11 +5,19 @@
 //! cleartext header ("dup <code> /<name> put"), CFF programs in the
 //! Encoding/Charset structures. Glyph names then map through the AGL.
 
-use super::glyphlist::glyph_to_unicode;
+use super::glyphlist::glyph_to_unicode_multi;
+
+/// Per-code unicode expansion: most entries are one char, ligature
+/// glyph names (`/T_h`, `/f_i`) expand to several.
+pub type CodeUnicodeMap = Vec<Option<String>>;
+
+fn empty_map() -> CodeUnicodeMap {
+    vec![None; 256]
+}
 
 /// Parse the /Encoding section of a Type1 font program (the cleartext
 /// part before eexec). Returns code -> unicode where recoverable.
-pub fn type1_code_to_unicode(program: &[u8]) -> Option<[u32; 256]> {
+pub fn type1_code_to_unicode(program: &[u8]) -> Option<CodeUnicodeMap> {
     // Only the cleartext header matters; eexec starts the encrypted part.
     let end = memchr::memmem::find(program, b"eexec").unwrap_or(program.len());
     let head = &program[..end];
@@ -26,7 +34,7 @@ pub fn type1_code_to_unicode(program: &[u8]) -> Option<[u32; 256]> {
         return None;
     }
 
-    let mut out = [0u32; 256];
+    let mut out = empty_map();
     let mut mapped = false;
     let mut pos = 0usize;
     while let Some(at) = memchr::memmem::find(&body[pos..], b"dup ") {
@@ -57,8 +65,8 @@ pub fn type1_code_to_unicode(program: &[u8]) -> Option<[u32; 256]> {
             p += 1;
         }
         if code < 256 {
-            if let Some(c) = glyph_to_unicode(&body[ns..p]) {
-                out[code] = c as u32;
+            if let Some(s) = glyph_to_unicode_multi(&body[ns..p]) {
+                out[code] = Some(s);
                 mapped = true;
             }
         }
@@ -374,7 +382,7 @@ fn custom_sid_index(sid: u16) -> Option<usize> {
 }
 
 /// Parse a CFF program's Encoding + Charset into code -> unicode.
-pub fn cff_code_to_unicode(program: &[u8]) -> Option<[u32; 256]> {
+pub fn cff_code_to_unicode(program: &[u8]) -> Option<CodeUnicodeMap> {
     // Header: major, minor, hdrSize, offSize.
     let hdr_size = *program.get(2)? as usize;
     // Name INDEX, Top DICT INDEX, String INDEX follow.
@@ -503,24 +511,24 @@ pub fn cff_code_to_unicode(program: &[u8]) -> Option<[u32; 256]> {
         }
     }
 
-    let sid_char = |sid: u16| -> Option<char> {
+    let sid_str = |sid: u16| -> Option<String> {
         if let Some(name) = std_string(sid) {
-            return glyph_to_unicode(name.as_bytes());
+            return glyph_to_unicode_multi(name.as_bytes());
         }
         let custom = strings.get(program, custom_sid_index(sid)?)?;
-        glyph_to_unicode(custom)
+        glyph_to_unicode_multi(custom)
     };
 
-    let mut out = [0u32; 256];
+    let mut out = empty_map();
     let mut mapped = false;
     match encoding_off {
         0 => {
             // Standard encoding: code -> SID via the standard table; the
             // std_string identity makes code==SID workable for the ASCII set.
             for code in 32u16..127 {
-                if let Some(c) = sid_char(code - 31) {
+                if let Some(s) = sid_str(code - 31) {
                     // SID 1 = space at code 32.
-                    out[code as usize] = c as u32;
+                    out[code as usize] = Some(s);
                     mapped = true;
                 }
             }
@@ -535,8 +543,8 @@ pub fn cff_code_to_unicode(program: &[u8]) -> Option<[u32; 256]> {
                         let code = *program.get(off + 2 + k)? as usize;
                         let gid = k + 1;
                         if gid < nglyphs {
-                            if let Some(c) = sid_char(gid_sid[gid]) {
-                                out[code] = c as u32;
+                            if let Some(s) = sid_str(gid_sid[gid]) {
+                                out[code] = Some(s);
                                 mapped = true;
                             }
                         }
@@ -553,8 +561,8 @@ pub fn cff_code_to_unicode(program: &[u8]) -> Option<[u32; 256]> {
                         for k in 0..=n_left {
                             let code = first + k;
                             if code < 256 && gid < nglyphs {
-                                if let Some(c) = sid_char(gid_sid[gid]) {
-                                    out[code] = c as u32;
+                                if let Some(s) = sid_str(gid_sid[gid]) {
+                                    out[code] = Some(s);
                                     mapped = true;
                                 }
                             }
@@ -596,7 +604,19 @@ readonly def
 /something dup 66 /Z put
 eexec";
         let map = type1_code_to_unicode(program).unwrap();
-        assert_eq!(map[65], 'A' as u32);
-        assert_eq!(map[66], 0);
+        assert_eq!(map[65].as_deref(), Some("A"));
+        assert_eq!(map[66], None);
+    }
+
+    #[test]
+    fn type1_underscore_ligature_names_expand() {
+        let program = b"/Encoding 256 array
+dup 30 /T_h put
+dup 31 /f_i put
+readonly def
+eexec";
+        let map = type1_code_to_unicode(program).unwrap();
+        assert_eq!(map[30].as_deref(), Some("Th"));
+        assert_eq!(map[31].as_deref(), Some("fi"));
     }
 }
