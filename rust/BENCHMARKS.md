@@ -8,16 +8,16 @@ liteparse 2.11.1 (no OCR, markdown mode, one warm batch process).
 |  | markit | liteparse |
 |---|---:|---:|
 | **Quality (macro)** | **39.0% ± 0.9** | 38.8% ± 0.9 |
-| **Speed (1,403 PDFs, 1 core)** | **1.31 s · 1,070 docs/s** | 5.9 s · 237 docs/s |
-| **Speed (8 threads)** | **0.33 s · 4,210 docs/s** | n/a (single-threaded CLI) |
+| **Speed (1,403 PDFs, 1 core)** | **1.08 s · 1,300 docs/s** | 5.9 s · 237 docs/s |
+| **Speed (8 threads)** | **0.26 s · 5,470 docs/s** | n/a (single-threaded CLI) |
 | Conversion failures | 0 | 0 |
 
 Quality is a statistical tie at the top (CI overlap) with markit
-nominally ahead; markit is **4.5× faster per core** (both tools
+nominally ahead; markit is **5.5× faster per core** (both tools
 measured single-threaded: liteparse `batch-parse` runs 5.42s user /
 5.93s real, ~1 core). Conversion is stateless per document, so
 markit additionally scales with threads (`CORPUS_BENCH_THREADS=8`
-→ 0.33s, 18× liteparse's wall time). markit was 27.1% and
+→ 0.26s, 23× liteparse's wall time). markit was 27.1% and
 155 docs/s at 03a0d7f.
 
 Head-to-head by category:

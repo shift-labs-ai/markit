@@ -132,8 +132,6 @@ pub(crate) struct Interp<'a> {
     path_cur: Option<(f64, f64)>,
     path_segments: Vec<(f64, f64, f64, f64)>, // raw line segments (user space, CTM applied)
     path_rects: Vec<(f64, f64, f64, f64)>,    // re ops: x, y, w, h (CTM applied, axis-aligned)
-    seg_counter: usize,
-    page_number: u32,
     depth: usize,
 }
 
@@ -149,7 +147,6 @@ impl<'a> Interp<'a> {
     /// origin/rotation transform; hidden_ocgs the document's OFF set.
     pub(crate) fn new(
         pdf: &'a Pdf<'a>,
-        page_number: u32,
         base: Mat,
         hidden_ocgs: std::rc::Rc<FxHashSet<u32>>,
         font_cache: FontCache,
@@ -175,8 +172,6 @@ impl<'a> Interp<'a> {
             path_cur: None,
             path_segments: Vec::new(),
             path_rects: Vec::new(),
-            seg_counter: 0,
-            page_number,
             depth: 0,
         }
     }
@@ -188,6 +183,9 @@ impl<'a> Interp<'a> {
             return Ok(()); // form recursion cap
         }
         let fonts = self.font_map(resources);
+        // The XObject dictionary is resolved (and its tree cloned) once
+        // per run, lazily — not once per Do operator.
+        let mut xobjects: Option<Option<Dict<'a>>> = None;
         let mut lex = Lexer::new(content);
 
         while let Some(op) = lex.next_op() {
@@ -343,8 +341,19 @@ impl<'a> Interp<'a> {
                 // ── XObjects: forms (recurse) + images (bbox) ───────
                 b"Do" => {
                     if let Some(o @ Operand::Name { .. }) = lex.operands.first().copied() {
-                        let name = lex.name_bytes(o).to_vec();
-                        self.do_xobject(&name, resources);
+                        let xd = xobjects.get_or_insert_with(|| {
+                            match resources
+                                .and_then(|res| self.pdf.dict_get(res, b"XObject").ok().flatten())
+                            {
+                                Some(Val::Dict(d)) => Some(d),
+                                _ => None,
+                            }
+                        });
+                        if let Some(xd) = xd.take() {
+                            let name = lex.name_bytes(o).to_vec();
+                            self.do_xobject(&name, &xd, resources);
+                            xobjects = Some(Some(xd));
+                        }
                     }
                 }
                 b"BMC" => self.mc_depth += 1,
@@ -588,7 +597,9 @@ impl<'a> Interp<'a> {
         .mul(self.ctm);
 
         let size_dev = self.ts.size * self.ts.tm.mul(self.ctm).y_scale();
-        let mut text = String::new();
+        // One byte of input ≈ one byte of UTF-8 output for simple fonts;
+        // pre-sizing avoids the realloc ladder on every text operator.
+        let mut text = String::with_capacity(bytes.len());
         let mut advance = 0.0f64; // text-space units (pre-scale)
 
         // Per-code work, streamed — no per-operator Vec of codes. Only
@@ -748,43 +759,42 @@ impl<'a> Interp<'a> {
     }
 
     fn flush_path(&mut self, paint: PathPaint) {
+        // Segment ids are diagnostic-only (nothing reads them in the
+        // pipeline): construct them empty rather than format!-ing one
+        // String per path operator.
         let effective_stroke_width = self.stroke_width * self.ctm.x_scale().max(self.ctm.y_scale());
         let paints_thin_stroke = paint.strokes() && effective_stroke_width <= 3.0;
         for (x, y, w, h) in std::mem::take(&mut self.path_rects) {
             let filled_rule = if paint.fills() {
-                let id = format!("p{}-fr{}", self.page_number, self.seg_counter);
-                super::shared::thin_rect_to_segment_pub(id, x, y, w, h)
+                super::shared::thin_rect_to_segment_pub(x, y, w, h)
             } else {
                 None
             };
             if let Some(segment) = filled_rule {
-                self.seg_counter += 1;
                 self.segments.push(segment);
             } else if paints_thin_stroke {
-                let id = format!("p{}-r{}", self.page_number, self.seg_counter);
-                self.seg_counter += 1;
-                super::shared::push_stroked_rect_edges_pub(&mut self.segments, &id, x, y, w, h);
+                super::shared::push_stroked_rect_edges_pub(&mut self.segments, x, y, w, h);
             }
         }
         if paints_thin_stroke {
             for (x1, y1, x2, y2) in std::mem::take(&mut self.path_segments) {
                 // Only axis-aligned-ish lines matter for table grids.
                 if (x1 - x2).abs() < 0.8 || (y1 - y2).abs() < 0.8 {
-                    let id = format!("p{}-l{}", self.page_number, self.seg_counter);
-                    self.seg_counter += 1;
-                    self.segments.push(Segment { id, x1, y1, x2, y2 });
+                    self.segments.push(Segment {
+                        id: String::new(),
+                        x1,
+                        y1,
+                        x2,
+                        y2,
+                    });
                 }
             }
         }
         self.clear_path();
     }
 
-    fn do_xobject(&mut self, name: &[u8], resources: Option<&Dict<'a>>) {
-        let Some(res) = resources else { return };
-        let Ok(Some(Val::Dict(xobjects))) = self.pdf.dict_get(res, b"XObject") else {
-            return;
-        };
-        let Some(obj) = dget(&xobjects, name) else {
+    fn do_xobject(&mut self, name: &[u8], xobjects: &Dict<'a>, resources: Option<&Dict<'a>>) {
+        let Some(obj) = dget(xobjects, name) else {
             return;
         };
         let Ok(Val::Stream(sdict, raw)) = self.pdf.resolve(obj) else {
@@ -878,9 +888,20 @@ fn intersects((x0, y0, x1, y1): ClipRect, (cx0, cy0, cx1, cy1): ClipRect) -> boo
     x1 > cx0 && x0 < cx1 && y1 > cy0 && y0 < cy1
 }
 
+/// In-place retain over `v[start..]`: no split_off/extend allocation.
+fn retain_tail<T>(v: &mut Vec<T>, start: usize, mut keep: impl FnMut(&mut T) -> bool) {
+    let mut write = start;
+    for read in start..v.len() {
+        if keep(&mut v[read]) {
+            v.swap(read, write);
+            write += 1;
+        }
+    }
+    v.truncate(write);
+}
+
 fn clip_items(items: &mut Vec<RawItem>, start: usize, clip: ClipRect) {
-    let mut suffix = items.split_off(start);
-    suffix.retain_mut(|item| {
+    retain_tail(items, start, |item| {
         let bounds = (item.x, item.y, item.x + item.width, item.y + item.height);
         if !intersects(bounds, clip) {
             return false;
@@ -895,12 +916,10 @@ fn clip_items(items: &mut Vec<RawItem>, start: usize, clip: ClipRect) {
         item.height = y1 - y0;
         true
     });
-    items.extend(suffix);
 }
 
 fn clip_segments(segments: &mut Vec<Segment>, start: usize, clip: ClipRect) {
-    let mut suffix = segments.split_off(start);
-    suffix.retain_mut(|segment| {
+    retain_tail(segments, start, |segment| {
         let bounds = (
             segment.x1.min(segment.x2),
             segment.y1.min(segment.y2),
@@ -927,12 +946,10 @@ fn clip_segments(segments: &mut Vec<Segment>, start: usize, clip: ClipRect) {
         segment.y2 = segment.y2.clamp(clip.1, clip.3);
         true
     });
-    segments.extend(suffix);
 }
 
 fn clip_images(images: &mut Vec<ImagePlacement<'_>>, start: usize, clip: ClipRect) {
-    let mut suffix = images.split_off(start);
-    suffix.retain_mut(|image| {
+    retain_tail(images, start, |image| {
         if !intersects(image.bbox, clip) {
             return false;
         }
@@ -944,7 +961,6 @@ fn clip_images(images: &mut Vec<ImagePlacement<'_>>, start: usize, clip: ClipRec
         );
         true
     });
-    images.extend(suffix);
 }
 
 /// Pull /ActualText out of a raw BDC property dict. Handles literal

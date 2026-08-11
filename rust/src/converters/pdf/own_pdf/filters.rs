@@ -261,20 +261,45 @@ pub fn inflate_pub(data: &[u8]) -> Result<Vec<u8>> {
 }
 
 fn inflate_limited(data: &[u8], limit: usize) -> Result<Vec<u8>> {
-    use std::io::Read;
-    let initial = data.len().saturating_mul(4).min(limit);
+    use flate2::{Decompress, FlushDecompress, Status};
+    // Content streams routinely inflate 5-10×; guessing low forces a
+    // realloc-doubling ladder (memmove-heavy in profiles). The raw
+    // Decompress API writes directly into the output Vec's spare
+    // capacity — no intermediate Read-adapter buffer, no extra copy.
+    let initial = data.len().saturating_mul(8).clamp(1024, limit.max(1024));
     let mut out = Vec::with_capacity(initial);
-    let read_limit = limit
-        .checked_add(1)
-        .ok_or_else(|| anyhow!("decoded stream limit overflow"))?;
-    flate2::read::ZlibDecoder::new(data)
-        .take(read_limit as u64)
-        .read_to_end(&mut out)
-        .map_err(|e| anyhow!("inflate: {e}"))?;
-    if out.len() > limit {
-        bail!("decoded stream exceeds {limit} bytes");
+    let mut d = Decompress::new(true);
+    loop {
+        if out.len() == out.capacity() {
+            if out.len() >= limit {
+                bail!("decoded stream exceeds {limit} bytes");
+            }
+            out.reserve(out.capacity().max(4096));
+        }
+        let consumed = d.total_in() as usize;
+        let before_out = d.total_out();
+        let status = d
+            .decompress_vec(
+                &data[consumed.min(data.len())..],
+                &mut out,
+                FlushDecompress::None,
+            )
+            .map_err(|e| anyhow!("inflate: {e}"))?;
+        if out.len() > limit {
+            bail!("decoded stream exceeds {limit} bytes");
+        }
+        match status {
+            Status::StreamEnd => return Ok(out),
+            Status::Ok | Status::BufError => {
+                let progressed = d.total_out() > before_out || (d.total_in() as usize) > consumed;
+                if !progressed {
+                    // Truncated or corrupt stream: match the previous
+                    // Read-based behavior and reject it.
+                    bail!("inflate: truncated or corrupt zlib stream");
+                }
+            }
+        }
     }
-    Ok(out)
 }
 
 fn png_unpredict(data: &[u8], row_len: usize) -> Result<Vec<u8>> {

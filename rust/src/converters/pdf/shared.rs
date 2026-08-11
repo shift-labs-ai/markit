@@ -275,19 +275,13 @@ pub(crate) fn image_regions_from_bboxes_pub(
     regions
 }
 
-pub(crate) fn thin_rect_to_segment_pub(
-    id: String,
-    x: f64,
-    y: f64,
-    w: f64,
-    h: f64,
-) -> Option<Segment> {
+pub(crate) fn thin_rect_to_segment_pub(x: f64, y: f64, w: f64, h: f64) -> Option<Segment> {
     let aw = w.abs();
     let ah = h.abs();
     if aw > ah * LINE_ASPECT_THRESHOLD && aw >= MIN_LENGTH && ah <= MAX_THICKNESS {
         let cy = y + ah / 2.0;
         return Some(Segment {
-            id,
+            id: String::new(),
             x1: x,
             y1: cy,
             x2: x + aw,
@@ -297,7 +291,7 @@ pub(crate) fn thin_rect_to_segment_pub(
     if ah > aw * LINE_ASPECT_THRESHOLD && ah >= MIN_LENGTH && aw <= MAX_THICKNESS {
         let cx = x + aw / 2.0;
         return Some(Segment {
-            id,
+            id: String::new(),
             x1: cx,
             y1: y,
             x2: cx,
@@ -309,7 +303,6 @@ pub(crate) fn thin_rect_to_segment_pub(
 
 pub(crate) fn push_stroked_rect_edges_pub(
     segments: &mut Vec<Segment>,
-    id: &str,
     x: f64,
     y: f64,
     w: f64,
@@ -319,14 +312,14 @@ pub(crate) fn push_stroked_rect_edges_pub(
     let ah = h.abs();
     if aw >= MIN_LENGTH {
         segments.push(Segment {
-            id: format!("{id}-b"),
+            id: String::new(),
             x1: x,
             y1: y,
             x2: x + aw,
             y2: y,
         });
         segments.push(Segment {
-            id: format!("{id}-t"),
+            id: String::new(),
             x1: x,
             y1: y + ah,
             x2: x + aw,
@@ -335,14 +328,14 @@ pub(crate) fn push_stroked_rect_edges_pub(
     }
     if ah >= MIN_LENGTH {
         segments.push(Segment {
-            id: format!("{id}-l"),
+            id: String::new(),
             x1: x,
             y1: y,
             x2: x,
             y2: y + ah,
         });
         segments.push(Segment {
-            id: format!("{id}-r"),
+            id: String::new(),
             x1: x + aw,
             y1: y,
             x2: x + aw,
@@ -357,8 +350,8 @@ mod tests {
 
     #[test]
     fn thin_rectangles_become_axis_aligned_segments() {
-        assert!(thin_rect_to_segment_pub("h".into(), 0.0, 0.0, 100.0, 1.0).is_some());
-        assert!(thin_rect_to_segment_pub("square".into(), 0.0, 0.0, 10.0, 10.0).is_none());
+        assert!(thin_rect_to_segment_pub(0.0, 0.0, 100.0, 1.0).is_some());
+        assert!(thin_rect_to_segment_pub(0.0, 0.0, 10.0, 10.0).is_none());
     }
 
     #[test]

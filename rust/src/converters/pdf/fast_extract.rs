@@ -55,7 +55,6 @@ fn interpret_page<'a>(
     pdf: &'a Pdf<'a>,
     page: &Dict<'a>,
     inherited: &Inherit<'a>,
-    page_number: u32,
     hidden_ocgs: Rc<FxHashSet<u32>>,
     font_cache: FontCache,
     content: &mut Vec<u8>,
@@ -86,7 +85,7 @@ fn interpret_page<'a>(
     let (base, page_width, page_height) =
         rotation_base(inherited.rotate, &page_box, page_box[0], page_box[1]);
     decode_page_content(pdf, page, content)?;
-    let mut interp = Interp::new(pdf, page_number, base, hidden_ocgs, font_cache);
+    let mut interp = Interp::new(pdf, base, hidden_ocgs, font_cache);
     interp.run(content, inherited.resources.as_ref())?;
     interp.clip_to_page(page_width, page_height);
     Ok((interp, page_width, page_height))
@@ -117,7 +116,6 @@ pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
             &pdf,
             page,
             inherited,
-            page_number,
             hidden_ocgs.clone(),
             font_cache.clone(),
             &mut content,
@@ -183,7 +181,6 @@ pub(crate) fn page_image_placements<'a>(
         pdf,
         page,
         inherited,
-        page_number,
         hidden_ocgs,
         FontCache::default(),
         &mut content,

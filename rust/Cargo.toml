@@ -36,6 +36,7 @@ ureq = "3.4.0"
 zip = "8.6.0"
 hayro-jbig2 = { version = "0.3", default-features = false, features = ["std", "simd"] }
 unicode-normalization = "0.1"
+mimalloc = "0.1.52"
 
 [features]
 default = ["cli"]
