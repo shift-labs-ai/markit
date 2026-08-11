@@ -2,6 +2,37 @@
 //! resolution, shared by the simple-font encodings and the embedded
 //! font-program parsers.
 
+/// Multi-character glyph-name resolution. Underscore-joined compounds
+/// are Adobe's ligature naming (`T_h`, `f_f_i`); `uniXXXXYYYY` carries
+/// several UTF-16 code units. Falls back to the single-char resolver.
+pub(crate) fn glyph_to_unicode_multi(name: &[u8]) -> Option<String> {
+    let s = std::str::from_utf8(name).ok()?;
+    // Ligature compound: every component must resolve.
+    if s.contains('_') {
+        let parts: Vec<&str> = s.split('_').collect();
+        if parts.len() >= 2 && parts.iter().all(|p| !p.is_empty()) {
+            let mut out = String::new();
+            for part in parts {
+                out.push(glyph_to_unicode(part.as_bytes())?);
+            }
+            return Some(out);
+        }
+    }
+    // uni with multiple 4-digit code units.
+    if let Some(hex) = s.strip_prefix("uni") {
+        if hex.len() > 4 && hex.len() % 4 == 0 && hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            let units: Vec<u16> = (0..hex.len() / 4)
+                .filter_map(|i| u16::from_str_radix(&hex[i * 4..i * 4 + 4], 16).ok())
+                .collect();
+            let out = String::from_utf16_lossy(&units);
+            if !out.is_empty() {
+                return Some(out);
+            }
+        }
+    }
+    glyph_to_unicode(name).map(String::from)
+}
+
 pub(crate) fn glyph_to_unicode(name: &[u8]) -> Option<char> {
     let s = std::str::from_utf8(name).ok()?;
     // uniXXXX may contain multiple four-digit code units; this
@@ -327,5 +358,22 @@ mod tests {
     fn variant_suffix_falls_back_to_base_name() {
         assert_eq!(glyph_to_unicode(b"eacute.sc"), Some('é'));
         assert_eq!(glyph_to_unicode(b"unknown"), None);
+    }
+
+    #[test]
+    fn underscore_compounds_resolve_as_ligatures() {
+        assert_eq!(glyph_to_unicode_multi(b"T_h").as_deref(), Some("Th"));
+        assert_eq!(glyph_to_unicode_multi(b"f_f_i").as_deref(), Some("ffi"));
+        assert_eq!(glyph_to_unicode_multi(b"f_i").as_deref(), Some("fi"));
+        assert_eq!(glyph_to_unicode_multi(b"f_b").as_deref(), Some("fb"));
+        // Unresolvable component: no partial output.
+        assert_eq!(glyph_to_unicode_multi(b"T_qq"), None);
+        // Multi-unit uni name.
+        assert_eq!(
+            glyph_to_unicode_multi(b"uni00540068").as_deref(),
+            Some("Th")
+        );
+        // Plain names still resolve through the single-char path.
+        assert_eq!(glyph_to_unicode_multi(b"eacute").as_deref(), Some("\u{e9}"));
     }
 }

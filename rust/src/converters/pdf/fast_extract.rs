@@ -311,6 +311,25 @@ trailer << /Root 1 0 R >>";
         assert!(text.contains("A\u{00E9}"), "got: {text}");
     }
 
+    /// Adobe underscore ligature names in /Differences (`/T_h`, `/f_i`)
+    /// must expand to their component letters — publishers like Springer
+    /// map them with no usable ToUnicode entry.
+    #[test]
+    fn underscore_ligature_names_expand() {
+        let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj
+4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Minion /Encoding << /BaseEncoding /WinAnsiEncoding /Differences [30 /T_h 31 /f_i] >> >> endobj
+5 0 obj << /Length 48 >> stream
+BT /F1 12 Tf 72 720 Td (\\036e \\037rst) Tj ET
+endstream endobj
+trailer << /Root 1 0 R >>";
+        let pages = extract_pages_fast(pdf).expect("underscore ligatures");
+        let text = text_of(&pages);
+        assert!(text.contains("The first"), "got: {text}");
+    }
+
     /// TeX Type3 fonts put f-ligatures at OT1 slots 11–15; the decode
     /// must expand them to ASCII so "first" doesn't lose its "fi".
     #[test]

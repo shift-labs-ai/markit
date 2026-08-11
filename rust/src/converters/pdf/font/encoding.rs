@@ -4,7 +4,7 @@
 //! unicode table.
 
 use super::super::own_pdf::{dget, Dict, Pdf, Val};
-use super::glyphlist::glyph_to_unicode;
+use super::glyphlist::glyph_to_unicode_multi;
 use super::{FontInfo, SymbolFont};
 
 /// MacRomanEncoding, code points 128–255 (0 = unmapped).
@@ -296,12 +296,24 @@ pub(crate) fn build_simple_encoding(pdf: &Pdf, dict: &Dict, info: &mut FontInfo)
                     Ok(Val::Num(v)) => code = v as usize,
                     Ok(Val::Name(n)) => {
                         if code < 256 {
-                            let mapped = glyph_to_unicode(n);
-                            info.to_unicode_simple[code] = if is_type3 {
-                                mapped.or(info.to_unicode_simple[code].filter(|c| !c.is_control()))
-                            } else {
-                                mapped
-                            };
+                            match glyph_to_unicode_multi(n) {
+                                // Ligature compound: the multi-char map
+                                // wins over the per-byte table at decode.
+                                Some(s) if s.chars().count() > 1 => {
+                                    info.to_unicode.insert(code as u32, s);
+                                    info.to_unicode_simple[code] = None;
+                                }
+                                Some(s) => {
+                                    info.to_unicode_simple[code] = s.chars().next();
+                                }
+                                None => {
+                                    info.to_unicode_simple[code] = if is_type3 {
+                                        info.to_unicode_simple[code].filter(|c| !c.is_control())
+                                    } else {
+                                        None
+                                    };
+                                }
+                            }
                         }
                         code += 1;
                     }
