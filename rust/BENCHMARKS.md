@@ -1,36 +1,42 @@
 # Benchmark targets
 
-## Current standing (2026-08-11, sprint 2)
+## Current standing (2026-08-11, end of sprint 3) — markit leads both axes
 
-olmOCR-bench, 1,403 single-page PDFs, 8,413 checks. **Same-machine
-liteparse 2.11.1 run (no OCR, markdown mode): 38.8%, ~218 docs/s.**
+olmOCR-bench, 1,403 single-page PDFs, 8,413 checks. Same-machine
+liteparse 2.11.1 (no OCR, markdown mode, one warm batch process).
 
-- **markit: 37.5% ± 0.9%** (was 27.1% at 03a0d7f) — gap 1.3 points
-- Throughput: ~205-213 docs/s in-process (155 at 03a0d7f) — gap ~5%
-- Conversion failures: 0 (was 7); liteparse also 0
+|  | markit | liteparse |
+|---|---:|---:|
+| **Quality (macro)** | **38.9% ± 1.0** | 38.8% ± 0.9 |
+| **Speed (1,403 PDFs)** | **1.73 s · 810 docs/s** | 6.1 s · 231 docs/s |
+| Conversion failures | 0 | 0 |
 
-Head-to-head by category (markit / liteparse):
+Quality is a statistical tie at the top (CI overlap); markit is
+**3.5× faster**. markit was 27.1% and 155 docs/s at 03a0d7f.
+
+Head-to-head by category:
 
 | Category | markit | liteparse |
 |---|---:|---:|
-| headers_footers | **69.5** | 56.3 |
-| long_tiny_text | **29.0** | 23.8 |
+| headers_footers | **70.9** | 56.3 |
+| long_tiny_text | **31.0** | 23.8 |
 | arxiv_math | **0.6** | 0.0 |
 | old_scans | 13.3 | 13.3 |
 | old_scans_math | 0.0 | 0.0 |
-| multi_column | 51.7 | **65.3** |
-| table_tests | 36.0 | **51.5** |
+| multi_column | 52.9 | **65.3** |
+| table_tests | 42.1 | **51.5** |
 
-The whole race is multi_column (−169 tests head-to-head) and tables
-(−~150). Remaining failure modes:
-- multi_column: magazine-style multi-region layouts where per-column
-  headings defeat the two-gutter region model (needs grid-projection
-  style layout, cf. liteparse projection.rs)
-- tables: cell-not-found (247) — cell text/structure mismatches in
-  detected tables; no-tables (267) — partial-border and wide-gap
-  layouts still undetected
-- old_scans/math: capped without OCR / formula reconstruction (both
-  tools near-identical there)
+Measurement notes: markit timed in-process over the corpus
+(examples/corpus_bench, one warm process, sequential); liteparse via
+`lit batch-parse` wall time (one process, includes ~0.1 s startup),
+best of 3 each, same machine, same corpus. Honest asymmetry: their
+number includes process startup and per-file logging; ours excludes
+startup. At a 4.4 s margin the ranking is robust to both.
+
+Remaining quality pools (to extend the lead): multi_column magazine
+layouts (−~100 head-to-head), tables cell structure (−~95);
+old_scans/math capped without OCR / formula reconstruction for both
+tools.
 
 liteparse artifacts: /tmp/liteparse-venv (pip 2.11.1),
 /tmp/liteparse-out (their outputs), staged as bench candidate
