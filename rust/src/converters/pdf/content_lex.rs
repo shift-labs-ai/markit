@@ -37,18 +37,7 @@ pub struct Lexer<'a> {
     pub scratch: Vec<u8>,
 }
 
-#[inline]
-fn is_ws(b: u8) -> bool {
-    matches!(b, b' ' | b'\t' | b'\r' | b'\n' | b'\x0c' | b'\0')
-}
-
-#[inline]
-fn is_delim(b: u8) -> bool {
-    matches!(
-        b,
-        b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%'
-    )
-}
+use super::own_pdf::{is_delim, is_ws};
 
 impl<'a> Lexer<'a> {
     pub fn new(data: &'a [u8]) -> Self {
