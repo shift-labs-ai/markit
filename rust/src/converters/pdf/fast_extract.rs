@@ -34,7 +34,9 @@ fn decode_page_content(pdf: &Pdf<'_>, page: &Dict<'_>, content: &mut Vec<u8>) ->
     content.clear();
     match pdf.dict_get(page, b"Contents")? {
         Some(Val::Stream(dict, raw)) => {
-            content.extend_from_slice(&decode_stream(&dict, raw, pdf)?);
+            // Single stream (the common case): move the decoded buffer
+            // instead of copying it byte-for-byte.
+            *content = decode_stream(&dict, raw, pdf)?;
         }
         Some(Val::Array(items)) => {
             for item in items {

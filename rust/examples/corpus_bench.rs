@@ -19,18 +19,52 @@ fn main() {
         let d = std::fs::read(f).unwrap();
         let _ = PdfConverter.convert(&d, &info);
     }
+    let threads: usize = std::env::var("CORPUS_BENCH_THREADS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
     let t = Instant::now();
-    let (mut ok, mut fail) = (0u32, 0u32);
-    for f in &files {
-        let d = std::fs::read(f).unwrap();
-        match PdfConverter.convert(&d, &info) {
-            Ok(_) => ok += 1,
-            Err(_) => fail += 1,
+    let (ok, fail) = if threads <= 1 {
+        let (mut ok, mut fail) = (0u32, 0u32);
+        for f in &files {
+            let d = std::fs::read(f).unwrap();
+            match PdfConverter.convert(&d, &info) {
+                Ok(_) => ok += 1,
+                Err(_) => fail += 1,
+            }
         }
-    }
+        (ok, fail)
+    } else {
+        // Conversion is stateless per document: a shared work queue
+        // over N threads measures fleet throughput.
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let ok = std::sync::atomic::AtomicU32::new(0);
+        let fail = std::sync::atomic::AtomicU32::new(0);
+        std::thread::scope(|s| {
+            for _ in 0..threads {
+                s.spawn(|| {
+                    let info = StreamInfo {
+                        extension: Some(".pdf".into()),
+                        ..Default::default()
+                    };
+                    loop {
+                        let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(f) = files.get(i) else { break };
+                        let d = std::fs::read(f).unwrap();
+                        let slot = match PdfConverter.convert(&d, &info) {
+                            Ok(_) => &ok,
+                            Err(_) => &fail,
+                        };
+                        slot.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                });
+            }
+        });
+        (ok.into_inner(), fail.into_inner())
+    };
     let secs = t.elapsed().as_secs_f64();
     println!(
-        "{} files, ok={ok} fail={fail}, {:.2}s, {:.1} docs/s",
+        "{} files, ok={ok} fail={fail}, {threads} thread(s), {:.2}s, {:.1} docs/s",
         files.len(),
         secs,
         files.len() as f64 / secs
