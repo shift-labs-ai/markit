@@ -514,17 +514,22 @@ pub fn resolve_table_grids(
 
         // A one-column ruled grid is usually a framed box whose interior
         // structure is drawn with whitespace, not rules (outer border
-        // only). Reconstruct the interior from text alignment; prefer it
-        // when it recovers real columns for most of the content.
+        // only) — and fee-schedule layouts frame ONLY the value column,
+        // leaving the label column outside the rules entirely.
+        // Reconstruct from text alignment over every unconsumed box in
+        // the group's y-range; prefer it when it recovers real columns
+        // for most of the framed content.
         if grid.cols <= 1 && !cids.is_empty() {
-            let cid_set: HashSet<&str> = cids.iter().map(|s| s.as_str()).collect();
-            let consumed_boxes: Vec<TextBox> = text_boxes
+            let candidate_boxes: Vec<TextBox> = text_boxes
                 .iter()
-                .filter(|tb| cid_set.contains(tb.id.as_str()))
+                .filter(|tb| {
+                    let cy = (tb.bounds.top + tb.bounds.bottom) / 2.0;
+                    cy >= y_min - 5.0 && cy <= y_max + 5.0 && !all_consumed_set.contains(&tb.id)
+                })
                 .cloned()
                 .collect();
             let (bgrids, bconsumed) =
-                super::borderless::detect_borderless_tables(&consumed_boxes, page_number);
+                super::borderless::detect_borderless_tables(&candidate_boxes, page_number);
             if bgrids.iter().any(|g| g.cols >= 2) && bconsumed.len() * 10 >= cids.len() * 6 {
                 for bgrid in bgrids {
                     grids.push(bgrid);
@@ -960,6 +965,36 @@ mod tests {
     // -----------------------------------------------------------------------
     // Framed-box interior reconstruction
     // -----------------------------------------------------------------------
+
+    #[test]
+    fn frame_around_value_column_pulls_in_outside_labels() {
+        reset_ids();
+        // Fee-schedule layout: only the value column is framed; the
+        // label column sits left of the rules. The reconstruction must
+        // recover both columns, not cram the values into one cell.
+        let segs = vec![
+            h_seg(400.0, 300.0, 420.0),
+            h_seg(315.0, 300.0, 420.0),
+            v_seg(300.0, 315.0, 400.0),
+            v_seg(420.0, 315.0, 400.0),
+        ];
+        let boxes = vec![
+            wide_box("Registration: Go Higher", 72.0, 240.0, 380.0),
+            wide_box("50", 340.0, 360.0, 380.0),
+            wide_box("Examination: Higher Doctorate", 72.0, 250.0, 355.0),
+            wide_box("710", 340.0, 365.0, 355.0),
+            wide_box("Re-examination: MD", 72.0, 210.0, 330.0),
+            wide_box("485", 340.0, 365.0, 330.0),
+        ];
+        let result = resolve_table_grids(1, &boxes, &segs);
+        assert_eq!(result.grids.len(), 1);
+        let g = &result.grids[0];
+        assert!(g.is_borderless);
+        assert_eq!(g.cols, 2, "label + value columns");
+        assert_eq!(cell_text(g, 0, 0), "Registration: Go Higher");
+        assert_eq!(cell_text(g, 0, 1), "50");
+        assert_eq!(cell_text(g, 2, 1), "485");
+    }
 
     #[test]
     fn framed_box_with_aligned_interior_recovers_columns() {
