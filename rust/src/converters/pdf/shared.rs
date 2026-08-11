@@ -5,7 +5,16 @@ use anyhow::Result;
 use super::types::{Bounds, ImageRegion, Rect, Segment, TextBox};
 
 const SAME_LINE_Y_TOLERANCE: f64 = 2.0;
+/// Absolute ceiling on the horizontal merge gap (large display fonts).
 const MAX_MERGE_GAP: f64 = 14.0;
+/// Merge gap as a fraction of the font size. A word space is ~0.25em;
+/// 0.6em accommodates wide justified spacing while staying well below
+/// the narrowest two-column gutters (~10–12pt at 10pt body text),
+/// which used to fuse adjacent columns into one line.
+const MERGE_GAP_EM: f64 = 0.6;
+/// Floor on the merge gap: dvips Type3 items carry no usable size or
+/// height, and their word gaps run up to ~5.5pt.
+const MIN_MERGE_GAP: f64 = 6.0;
 const MIN_IMAGE_AREA: f64 = 5000.0;
 const LINE_ASPECT_THRESHOLD: f64 = 6.0;
 const MIN_LENGTH: f64 = 2.0;
@@ -64,7 +73,14 @@ fn merge_into_words(raws: &[RawTextItem]) -> Vec<RawTextItem> {
     for next in sorted.iter().skip(1) {
         let same_y =
             (next.y - cur.y).abs() <= SAME_LINE_Y_TOLERANCE || script_same_line(&cur, next);
-        let close = next.x <= cur.x + cur.width + MAX_MERGE_GAP;
+        // Type3/dvips fonts can carry a bogus nominal size; the glyph
+        // box height is the reliable fallback reference.
+        let ref_size = cur
+            .font_size
+            .max(next.font_size)
+            .max(cur.height.max(next.height));
+        let gap_cap = (MERGE_GAP_EM * ref_size).clamp(MIN_MERGE_GAP, MAX_MERGE_GAP);
+        let close = next.x <= cur.x + cur.width + gap_cap;
         if same_y && close {
             let sep = if next.x - (cur.x + cur.width) > 1.0 {
                 " "
@@ -268,6 +284,36 @@ mod tests {
     fn thin_rectangles_become_axis_aligned_segments() {
         assert!(thin_rect_to_segment_pub("h".into(), 0.0, 0.0, 100.0, 1.0).is_some());
         assert!(thin_rect_to_segment_pub("square".into(), 0.0, 0.0, 10.0, 10.0).is_none());
+    }
+
+    #[test]
+    fn narrow_column_gutter_does_not_merge_lines() {
+        // Two 10pt fragments separated by a 12pt gutter: distinct boxes.
+        let boxes = finish_text_boxes_pub(
+            vec![
+                RawTextItemPub {
+                    text: "left column text".into(),
+                    x: 34.0,
+                    y: 700.0,
+                    width: 244.0,
+                    height: 10.0,
+                    font_size: 10.0,
+                    is_bold: false,
+                },
+                RawTextItemPub {
+                    text: "right column text".into(),
+                    x: 290.0,
+                    y: 700.0,
+                    width: 240.0,
+                    height: 10.0,
+                    font_size: 10.0,
+                    is_bold: false,
+                },
+            ],
+            1,
+        )
+        .unwrap();
+        assert_eq!(boxes.len(), 2, "{:?}", boxes[0].text);
     }
 
     #[test]
