@@ -193,27 +193,60 @@ const MIN_BODY_FONT_SIZE: f64 = 7.0;
 fn modal_font_size(text_boxes: &[TextBox]) -> f64 {
     // JS Map iterates in INSERTION order — on count ties the size that was
     // first encountered in text-box order wins, not the smallest.
-    let mut counts: Vec<(i64, usize)> = Vec::new();
-    for tb in text_boxes {
-        let size = (tb.font_size * 10.0).round() / 10.0;
-        if size < MIN_BODY_FONT_SIZE {
-            continue;
+    let modal_of = |min_size: f64| -> f64 {
+        let mut counts: Vec<(i64, usize)> = Vec::new();
+        for tb in text_boxes {
+            let size = (tb.font_size * 10.0).round() / 10.0;
+            if size < min_size || size <= 0.0 {
+                continue;
+            }
+            let key = (size * 10.0).round() as i64;
+            match counts.iter_mut().find(|(k, _)| *k == key) {
+                Some((_, c)) => *c += 1,
+                None => counts.push((key, 1)),
+            }
         }
-        let key = (size * 10.0).round() as i64;
-        match counts.iter_mut().find(|(k, _)| *k == key) {
-            Some((_, c)) => *c += 1,
-            None => counts.push((key, 1)),
+        let mut modal = 0.0;
+        let mut max_count = 0;
+        for &(key, count) in &counts {
+            if count > max_count {
+                max_count = count;
+                modal = key as f64 / 10.0;
+            }
+        }
+        modal
+    };
+    let modal = modal_of(MIN_BODY_FONT_SIZE);
+    if modal > 0.0 {
+        return modal;
+    }
+    // Nothing at body size: the page is set in a tiny font (dense
+    // dictionaries, dvips Type3 output). Fall back to the modal over all
+    // positive sizes so paragraph merging and heading detection still work.
+    modal_of(0.1)
+}
+
+/// Join a wrapped line onto its paragraph, resolving end-of-line
+/// hyphenation: `tech-` + `niques` → `techniques`. A hyphen after a word
+/// that itself contains a hyphen is a compound (`state-of-the-` +
+/// `art`) and is kept. Only joins without a space when the continuation
+/// starts with a lowercase letter — anything else keeps the hyphen and
+/// a space separator.
+fn join_wrapped_line(cur: &str, next: &str) -> String {
+    let c = cur.trim_end();
+    let n = next.trim_start();
+    if let Some(stripped) = c.strip_suffix('-') {
+        let last_char_alpha = stripped.chars().last().is_some_and(|ch| ch.is_alphabetic());
+        let next_lower = n.chars().next().is_some_and(|ch| ch.is_lowercase());
+        if last_char_alpha && next_lower {
+            let last_word = stripped.split_whitespace().last().unwrap_or("");
+            if last_word.contains('-') {
+                return format!("{c}{n}");
+            }
+            return format!("{stripped}{n}");
         }
     }
-    let mut modal = 0.0;
-    let mut max_count = 0;
-    for &(key, count) in &counts {
-        if count > max_count {
-            max_count = count;
-            modal = key as f64 / 10.0;
-        }
-    }
-    modal
+    format!("{c} {n}")
 }
 
 /// Group free text boxes into horizontal lines, sorted top-to-bottom.
@@ -431,7 +464,7 @@ fn merge_paragraph_wraps(blocks: Vec<ContentBlock>, body_fs: f64) -> Vec<Content
             cur = Cur {
                 top_y: cur.top_y,
                 last_top_y: next.top_y,
-                content: format!("{} {}", cur.content.trim_end(), next.content.trim_start()),
+                content: join_wrapped_line(&cur.content, &next.content),
                 is_tabular: false,
             };
         } else {
@@ -1052,6 +1085,61 @@ mod tests {
         }];
         let result = render_page_content(&[], &[], &image_blocks, None);
         assert!(result.contains("<!-- image: p5-img0"));
+    }
+
+    // -----------------------------------------------------------------------
+    // renderPageContent: paragraph wrap merging
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn dehyphenates_wrapped_lines() {
+        reset_id();
+        let boxes = vec![
+            bx_y("several knowledge-based processing tech-", 520.0),
+            bx_y("niques were combined into one system.", 508.0),
+        ];
+        let result = render_page_content(&boxes, &[], &[], None);
+        assert!(result.contains("techniques"), "{result}");
+    }
+
+    #[test]
+    fn keeps_hyphen_when_joining_a_compound_word() {
+        reset_id();
+        let boxes = vec![
+            bx_y("we evaluated the new state-of-the-", 520.0),
+            bx_y("art system on every benchmark corpus.", 508.0),
+        ];
+        let result = render_page_content(&boxes, &[], &[], None);
+        assert!(result.contains("state-of-the-art"), "{result}");
+    }
+
+    #[test]
+    fn tiny_font_pages_still_merge_paragraph_wraps() {
+        reset_id();
+        // All boxes below MIN_BODY_FONT_SIZE: the modal fallback must
+        // still produce a body size so wraps merge (gap 6 <= 2*5).
+        let boxes = vec![
+            make_box(
+                "a very small line of dictionary tex-",
+                100.0,
+                520.0,
+                100.0,
+                5.0,
+                5.0,
+                false,
+            ),
+            make_box(
+                "tual content continues here",
+                100.0,
+                514.0,
+                100.0,
+                5.0,
+                5.0,
+                false,
+            ),
+        ];
+        let result = render_page_content(&boxes, &[], &[], None);
+        assert!(result.contains("textual"), "{result}");
     }
 
     // -----------------------------------------------------------------------

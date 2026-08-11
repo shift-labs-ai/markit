@@ -333,6 +333,43 @@ describe("renderPageContent: image blocks", () => {
 });
 
 // ---------------------------------------------------------------------------
+// renderPageContent: paragraph wrap merging
+// ---------------------------------------------------------------------------
+
+describe("renderPageContent: paragraph wraps", () => {
+  it("dehyphenates wrapped lines", () => {
+    const boxes = [
+      box("several knowledge-based processing tech-", { y: 520 }),
+      box("niques were combined into one system.", { y: 508 }),
+    ];
+    const result = renderPageContent(boxes, []);
+    expect(result).toContain("techniques");
+  });
+
+  it("keeps the hyphen when joining a compound word", () => {
+    const boxes = [
+      box("we evaluated the new state-of-the-", { y: 520 }),
+      box("art system on every benchmark corpus.", { y: 508 }),
+    ];
+    const result = renderPageContent(boxes, []);
+    expect(result).toContain("state-of-the-art");
+  });
+
+  it("merges wraps on tiny-font pages via the modal fallback", () => {
+    const boxes = [
+      box("a very small line of dictionary tex-", {
+        y: 520,
+        h: 5,
+        fontSize: 5,
+      }),
+      box("tual content continues here", { y: 514, h: 5, fontSize: 5 }),
+    ];
+    const result = renderPageContent(boxes, []);
+    expect(result).toContain("textual");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // renderPageContent: page number removal
 // ---------------------------------------------------------------------------
 

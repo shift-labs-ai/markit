@@ -310,6 +310,30 @@ pub(crate) fn build_simple_encoding(pdf: &Pdf, dict: &Dict, info: &mut FontInfo)
             }
         }
     }
+
+    // TeX text fonts (dvips Type3 output) place the f-ligatures at the
+    // OT1/T1 slots 11–15, which are control characters in every Latin
+    // base encoding. A control character there is never intentional:
+    // recover the ligature so "first" doesn't extract as "\x0Crst".
+    // Expanded to ASCII (not U+FB01 etc.) — the multi-char map wins over
+    // the per-byte table during decode.
+    if is_type3 {
+        const TEX_F_LIGATURES: [(u32, &str); 5] = [
+            (0x0B, "ff"),
+            (0x0C, "fi"),
+            (0x0D, "fl"),
+            (0x0E, "ffi"),
+            (0x0F, "ffl"),
+        ];
+        for (code, expansion) in TEX_F_LIGATURES {
+            let simple = info.to_unicode_simple[code as usize];
+            if simple.is_none_or(|c| c.is_control() || c.is_whitespace())
+                && !info.to_unicode.contains_key(&code)
+            {
+                info.to_unicode.insert(code, expansion.to_string());
+            }
+        }
+    }
 }
 
 #[cfg(test)]

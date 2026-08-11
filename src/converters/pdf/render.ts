@@ -159,21 +159,56 @@ const MIN_BODY_FONT_SIZE = 7;
  * text that likely comes from diagrams, footnotes, or superscripts.
  */
 function modalFontSize(textBoxes: TextBox[]): number {
-  const counts = new Map<number, number>();
-  for (const tb of textBoxes) {
-    const size = Math.round((tb.fontSize ?? 0) * 10) / 10;
-    if (size < MIN_BODY_FONT_SIZE) continue;
-    counts.set(size, (counts.get(size) ?? 0) + 1);
-  }
-  let modal = 0;
-  let maxCount = 0;
-  for (const [size, count] of counts) {
-    if (count > maxCount) {
-      maxCount = count;
-      modal = size;
+  const modalOf = (minSize: number): number => {
+    const counts = new Map<number, number>();
+    for (const tb of textBoxes) {
+      const size = Math.round((tb.fontSize ?? 0) * 10) / 10;
+      if (size < minSize || size <= 0) continue;
+      counts.set(size, (counts.get(size) ?? 0) + 1);
+    }
+    let modal = 0;
+    let maxCount = 0;
+    for (const [size, count] of counts) {
+      if (count > maxCount) {
+        maxCount = count;
+        modal = size;
+      }
+    }
+    return modal;
+  };
+  const modal = modalOf(MIN_BODY_FONT_SIZE);
+  if (modal > 0) return modal;
+  // Nothing at body size: the page is set in a tiny font (dense
+  // dictionaries, dvips Type3 output). Fall back to the modal over all
+  // positive sizes so paragraph merging and heading detection still work.
+  return modalOf(0.1);
+}
+
+/**
+ * Join a wrapped line onto its paragraph, resolving end-of-line
+ * hyphenation: `tech-` + `niques` → `techniques`. A hyphen after a word
+ * that itself contains a hyphen is a compound (`state-of-the-` +
+ * `art`) and is kept. Only joins without a space when the continuation
+ * starts with a lowercase letter — anything else keeps the hyphen and
+ * a space separator.
+ */
+function joinWrappedLine(cur: string, next: string): string {
+  const c = cur.trimEnd();
+  const n = next.trimStart();
+  if (c.endsWith("-") && n.length > 0) {
+    const stripped = c.slice(0, -1);
+    const lastChar = stripped[stripped.length - 1] ?? "";
+    const nextChar = n[0];
+    if (
+      /[a-z\u00e0-\u00ff]/i.test(lastChar) &&
+      /[a-z\u00e0-\u00ff]/.test(nextChar)
+    ) {
+      const lastWord = stripped.split(/\s+/).pop() ?? "";
+      if (lastWord.includes("-")) return `${c}${n}`;
+      return `${stripped}${n}`;
     }
   }
-  return modal;
+  return `${c} ${n}`;
 }
 
 /** Group free text boxes into horizontal lines, sorted top-to-bottom. */
@@ -339,7 +374,7 @@ function mergeParagraphWraps(
       cur = {
         topY: cur.topY,
         lastTopY: next.topY,
-        content: `${cur.content.trimEnd()} ${next.content.trimStart()}`,
+        content: joinWrappedLine(cur.content, next.content),
         isTabular: false,
       };
     } else {

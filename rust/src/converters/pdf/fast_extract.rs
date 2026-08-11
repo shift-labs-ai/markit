@@ -311,6 +311,24 @@ trailer << /Root 1 0 R >>";
         assert!(text.contains("A\u{00E9}"), "got: {text}");
     }
 
+    /// TeX Type3 fonts put f-ligatures at OT1 slots 11–15; the decode
+    /// must expand them to ASCII so "first" doesn't lose its "fi".
+    #[test]
+    fn type3_tex_ligature_slots_expand_to_ascii() {
+        let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj
+4 0 obj << /Type /Font /Subtype /Type3 /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << >> /Encoding << /Differences [65 /BQ] >> /FirstChar 11 /LastChar 65 /Widths [500] >> endobj
+5 0 obj << /Length 46 >> stream
+BT /F1 12 Tf 72 720 Td (\\014rst) Tj ET
+endstream endobj
+trailer << /Root 1 0 R >>";
+        let pages = extract_pages_fast(pdf).expect("tex ligature");
+        let text = text_of(&pages);
+        assert!(text.contains("first"), "got: {text}");
+    }
+
     /// Content inside an /OC span whose OCG is OFF in the default
     /// configuration is invisible and must be suppressed.
     #[test]
