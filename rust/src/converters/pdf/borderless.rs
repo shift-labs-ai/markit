@@ -315,7 +315,10 @@ pub fn detect_borderless_tables(
             let cur = &rows[j];
             let gap = prev.bottom - cur.top;
             let row_height = (prev.top - prev.bottom).max(cur.top - cur.bottom).max(1.0);
-            if gap < 0.0 || gap > MAX_ROW_GAP_RATIO * row_height {
+            // Single-spaced rows overlap slightly (leading tighter than
+            // the 1.2em box model); only a substantial overlap means
+            // the rows are not vertically stacked.
+            if gap < -0.35 * row_height || gap > MAX_ROW_GAP_RATIO * row_height {
                 break;
             }
             j += 1;
