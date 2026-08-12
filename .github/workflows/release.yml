@@ -2,86 +2,56 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    tags: ["v*"]
 
 permissions:
   contents: write
 
-# ── Overview ─────────────────────────────────────────────────────────────────
-# Job graph:
-#
-#   check-version ──┬─► build-native-mac   (aarch64 + x86_64 apple-darwin)
-#                   └─► build-native-linux  (4 linux targets, napi-rs Docker)
-#                               │
-#                               └─► publish-native ──► publish-npm (TS package)
-#
-#   test ──────────────────────────────────────────────► release (GH release)
-#
-# Assumptions (items marked A–E are owned by the napi-setup / platform-pkg agent):
-#  A. root package.json has a "napi" block naming all 6 triples and binary "markit".
-#  B. npm/{platform}/package.json stubs exist: markit-ai-{darwin-arm64,…}.
-#  C. @napi-rs/cli is in devDependencies of root package.json.
-#  D. Rust crate lives in rust/. All napi build commands use --cargo-cwd rust
-#     so cargo runs from that subdir while napi reads config from root package.json.
-#  E. Output *.node lands in the repo root (napi default when CWD = repo root).
-#     If napi places it in rust/ instead, add --output-dir .. or mv step.
-#     # NOTE: verify output path on first release run
-
 jobs:
-  # ── Verify tag == package.json version ────────────────────────────────────
   check-version:
-    name: tag matches package version
+    name: tag matches package versions
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Verify tag
+      - name: Verify versions
         run: |
           tag="${GITHUB_REF_NAME#v}"
-          version=$(node -p "require('./package.json').version")
-          if [ "$tag" != "$version" ]; then
-            echo "Tag v$tag does not match package.json version $version" >&2
+          root=$(node -p "require('./package.json').version")
+          rust=$(sed -n 's/^version = "\([^"]*\)"/\1/p' rust/Cargo.toml | head -1)
+          if [ "$tag" != "$root" ] || [ "$tag" != "$rust" ]; then
+            echo "Tag v$tag, package.json $root, rust/Cargo.toml $rust must match" >&2
             exit 1
           fi
+          for manifest in npm/*/package.json legacy/markit-ai/package.json; do
+            published=$(node -p "require('./$manifest').version")
+            if [ "$published" != "$tag" ]; then
+              echo "$manifest version $published does not match tag v$tag" >&2
+              exit 1
+            fi
+          done
 
-  # ── TS checks (existing job, unchanged) ────────────────────────────────────
-  test:
+  verify:
+    name: verify source
+    needs: check-version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
-
-      - run: bun install
-
-      - name: Install Biome
-        run: npm install --no-save @biomejs/cli-linux-x64
-
-      - name: Lint & format
-        run: npx @biomejs/biome check src/
-
-      - name: Type check
-        run: bunx tsc --noEmit
-
-      - name: Run tests
-        run: bun test
-
-  # ── GitHub Release (existing job, unchanged) ─────────────────────────────
-  release:
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          generate_release_notes: true
+          components: rustfmt, clippy
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust -> rust/target
+      - run: bun install --frozen-lockfile
+      - run: bun run check
+      - run: npm run build
+      - run: npm run check:rust
+      - run: cd rust && cargo test
 
-  # ── Build: macOS (native macos-14 runners) ──────────────────────────────
-  # Both targets run on the M2 ARM runner (macos-14).
-  # x86_64-apple-darwin is cross-compiled from arm64 with the Apple SDK.
-  build-native-mac:
+  build:
     name: build ${{ matrix.target }}
     needs: check-version
     runs-on: ${{ matrix.os }}
@@ -89,199 +59,96 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: aarch64-apple-darwin
-            os: macos-14
-          - target: x86_64-apple-darwin
-            os: macos-14
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: macos-14
+            target: x86_64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            musl: true
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            musl: true
     steps:
       - uses: actions/checkout@v4
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-
       - uses: oven-sh/setup-bun@v2
-
-      # Per-target cache keeps cross-compiled artefacts isolated.
-      # Cargo.lock is part of the cache key automatically.
+        with:
+          bun-version: 1.3.14
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust -> rust/target
           key: ${{ matrix.target }}
-          cache-on-failure: true
-
+      - uses: mlugg/setup-zig@v2
+        if: matrix.musl
+        with:
+          version: 0.13.0
       - run: bun install --frozen-lockfile
-
-      # --cargo-cwd rust → cargo operates in rust/ (assumption D).
-      # napi reads the "napi" config from root package.json (assumption A).
-      # *.node output goes to CWD = repo root (assumption E).
-      # # NOTE: verify --cargo-cwd flag on first release run.
       - name: Build native addon
-        run: |
-          bunx napi build --release --strip --platform \
-            --target ${{ matrix.target }} \
-            --features napi --cargo-flags=--no-default-features \
-            --cargo-cwd rust
-
+        run: >-
+          bunx napi build --release --strip --platform
+          --target ${{ matrix.target }}
+          --features napi --cargo-flags=--no-default-features
+          --cargo-cwd rust
+          ${{ matrix.musl && '--zig' || '' }}
       - uses: actions/upload-artifact@v4
         with:
           name: bindings-${{ matrix.target }}
           path: "*.node"
           if-no-files-found: error
 
-  # ── Build: Linux (napi-rs Docker images on same-arch runners) ───────────
-  # Uses napi-rs prebuilt Docker images instead of zig cross-compilation
-  # (ferrosearch's musl approach).
-  #
-  # Arch pairing — each target runs on a same-architecture GitHub runner:
-  #   x64  targets → ubuntu-latest      (x86_64)
-  #   arm64 targets → ubuntu-24.04-arm  (aarch64)
-  # This means gcc always compiles natively; no cross-toolchain required.
-  #
-  # napi-rs images include Node.js, npm, Rust stable, cargo, and napi-cli.
-  build-native-linux:
-    name: build ${{ matrix.target }}
-    needs: check-version
-    runs-on: ${{ matrix.os }}
-    container: ${{ matrix.container }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            container: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-debian
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-24.04-arm
-            container: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-debian
-          - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
-            container: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-alpine
-          - target: aarch64-unknown-linux-musl
-            os: ubuntu-24.04-arm
-            container: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-alpine
-    steps:
-      - uses: actions/checkout@v4
-
-
-      # napi-rs images have Rust/cargo pre-installed — no dtolnay action needed.
-      # rust-cache reads/writes through the bind-mounted workspace; works in Docker.
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: rust -> rust/target
-          key: ${{ matrix.target }}
-          cache-on-failure: true
-
-      # Install project devDeps (includes @napi-rs/cli — assumption C).
-      # Use npm: bun is not pre-installed in napi-rs containers.
-      - name: Install node dependencies
-        run: npm install
-
-      # --cargo-cwd rust → cargo operates in rust/ (assumption D).
-      # *.node output goes to CWD = repo root (assumption E).
-      # # NOTE: verify --cargo-cwd flag and output path on first release run.
-      - name: Build native addon
-        run: |
-          npx napi build --release --strip --platform \
-            --target ${{ matrix.target }} \
-            --features napi --cargo-flags=--no-default-features \
-            --cargo-cwd rust
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: bindings-${{ matrix.target }}
-          path: "*.node"
-          if-no-files-found: error
-
-  # ── Publish: native platform packages ───────────────────────────────────
-  # Downloads all 6 *.node artefacts, routes each into its npm/{platform}/
-  # stub dir via `napi artifacts`, then publishes each platform package.
-  # Platform packages (markit-ai-darwin-arm64 etc.) are published BEFORE the
-  # main markit-ai package so npm can resolve optionalDependencies immediately.
-  publish-native:
-    name: publish platform packages
-    needs: [build-native-mac, build-native-linux]
+  publish:
+    name: publish npm packages
+    needs: [verify, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
-
       - uses: oven-sh/setup-bun@v2
-
+        with:
+          bun-version: 1.3.14
       - run: bun install --frozen-lockfile
-
-      # Download all bindings-* artefacts into ./artifacts/
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-          pattern: bindings-*
-          merge-multiple: false
-
-      # napi artifacts reads "napi.triples" from root package.json (assumption A)
-      # and moves each *.node from artifacts/bindings-{target}/ into npm/{platform}/.
-      # Assumption B: npm/ stub dirs with package.json already exist in the repo.
-      # # NOTE: verify napi artifacts routing matches npm/ dir names on first release run.
-      - name: Distribute binaries into platform packages
+      - name: Move binaries into platform packages
         run: bunx napi artifacts -d artifacts
-
       - name: Determine npm tag
         id: npm-tag
         run: |
-          VERSION="${GITHUB_REF#refs/tags/v}"
-          if [[ "$VERSION" == *-* ]]; then
-            PRE="${VERSION#*-}"
-            echo "tag=${PRE%%.*}" >> $GITHUB_OUTPUT
+          version="${GITHUB_REF_NAME#v}"
+          if [[ "$version" == *-* ]]; then
+            prerelease="${version#*-}"
+            echo "tag=${prerelease%%.*}" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=latest" >> $GITHUB_OUTPUT
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
           fi
-
-      # Publish each platform stub (markit-ai-darwin-arm64, markit-ai-linux-x64-gnu, …).
-      # These are unscoped packages; --access public is a no-op but explicit.
-      # # NOTE: verify npm/ directory names match artefact output on first release run.
-      - name: Publish platform packages
-        run: |
-          for dir in npm/*/; do
-            echo "Publishing ${dir} ..."
-            cd "${dir}"
-            npm publish --tag ${{ steps.npm-tag.outputs.tag }} --access public
-            cd ../..
-          done
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-  # ── Publish: main TS package ─────────────────────────────────────────────
-  # Structurally identical to the original publish-npm job.
-  # One change: needs publish-native (was: needs test) so the 6 platform
-  # packages exist before markit-ai is indexed by the npm registry.
-  publish-npm:
-    needs: publish-native
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
-
-      - name: Determine npm tag
-        id: npm-tag
-        run: |
-          VERSION="${GITHUB_REF#refs/tags/v}"
-          if [[ "$VERSION" == *-* ]]; then
-            PRE="${VERSION#*-}"
-            echo "tag=${PRE%%.*}" >> $GITHUB_OUTPUT
-          else
-            echo "tag=latest" >> $GITHUB_OUTPUT
-          fi
-
-      - run: npm install
-
-      - name: Publish to npm
+      - name: Publish platform packages and @shift-labs/markit
         run: npm publish --tag ${{ steps.npm-tag.outputs.tag }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish and deprecate markit-ai compatibility shim
+        run: |
+          npm publish ./legacy/markit-ai --tag ${{ steps.npm-tag.outputs.tag }} --access public
+          npm deprecate "markit-ai@*" "Moved to @shift-labs/markit. Install @shift-labs/markit instead."
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  github-release:
+    name: create GitHub release
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true

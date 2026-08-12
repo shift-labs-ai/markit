@@ -25,9 +25,7 @@ use crate::converters::zip::ZipConverter;
 use crate::discover_markdown_source::discover_markdown_source;
 use crate::types::{ConversionResult, Converter, StreamInfo};
 
-// Mirrors the TS constant in src/markit.ts, which has lagged the package
-// version since 0.1.0 — kept identical for request-fingerprint parity.
-const USER_AGENT: &str = "markit/0.1.0";
+const USER_AGENT: &str = concat!("markit/", env!("CARGO_PKG_VERSION"));
 
 // ── Injectable HTTP trait ────────────────────────────────────────────
 
@@ -93,8 +91,7 @@ pub struct Markit {
     http: Box<dyn HttpFetch>,
 }
 
-/// Built-in converters in registry order: specific formats first, generic
-/// last. Mirrors the ordering in src/markit.ts.
+/// Built-in converters in registry order: specific formats first, generic last.
 pub fn builtin_specific() -> Vec<Box<dyn Converter>> {
     vec![
         Box::new(PdfConverter),
@@ -132,9 +129,8 @@ impl Markit {
 
     /// Constructor with injectable HTTP for testing.
     pub fn with_http(http: Box<dyn HttpFetch>) -> Self {
-        // ZIP gets its own fresh instances of every non-zip converter for
-        // recursive extraction (TS shares the array; boxed trait objects
-        // cannot be shared, so we construct twice).
+        // ZIP gets its own fresh instances of every non-zip converter because
+        // boxed trait objects cannot be shared.
         #[allow(clippy::arc_with_non_send_sync)] // single-threaded; Arc only for shared ownership
         let zip_parent_converters: Arc<Vec<Box<dyn Converter>>> = Arc::new(
             builtin_specific()
@@ -162,13 +158,12 @@ impl Markit {
     }
 
     /// Convert a local file to markdown.
-    #[allow(dead_code)] // Library-API parity with TS Markit.convertFile(path)
+    #[allow(dead_code)] // Public Rust SDK convenience API.
     pub fn convert_file(&self, path: &str) -> Result<ConversionResult> {
         self.convert_file_with(path, StreamInfo::default())
     }
 
-    /// Convert a local file to markdown with extra StreamInfo fields
-    /// (TS: convertFile(path, extra) — e.g. imageDir).
+    /// Convert a local file to markdown with extra StreamInfo fields.
     pub fn convert_file_with(&self, path: &str, extra: StreamInfo) -> Result<ConversionResult> {
         let buffer = std::fs::read(path)?;
         let p = Path::new(path);

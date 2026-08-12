@@ -28,6 +28,6 @@ export interface Converter {
    */
   convertUrl?(url: string): Promise<ConversionResult>;
 
-  /** Convert the source to markdown */
-  convert(input: Buffer, streamInfo: StreamInfo): Promise<ConversionResult>;
+  /** Convert the source to markdown. */
+  convert(input: Buffer, streamInfo?: StreamInfo): Promise<ConversionResult>;
 }

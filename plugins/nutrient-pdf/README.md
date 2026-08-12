@@ -1,6 +1,6 @@
 # nutrient-pdf
 
-A [markit](https://github.com/Michaelliv/markit) plugin that uses [Nutrient's pdf-to-markdown](https://github.com/PSPDFKit/pdf-to-markdown) CLI for PDF conversion.
+A [markit](https://github.com/shift-labs-ai/markit) plugin that uses [Nutrient's pdf-to-markdown](https://github.com/PSPDFKit/pdf-to-markdown) CLI for PDF conversion.
 
 ## Prerequisites
 
@@ -13,7 +13,7 @@ curl -fsSL https://raw.githubusercontent.com/PSPDFKit/pdf-to-markdown/main/insta
 ## Install
 
 ```bash
-markit plugin install git:github.com/Michaelliv/markit#plugins/nutrient-pdf
+markit plugin install git:github.com/shift-labs-ai/markit#plugins/nutrient-pdf
 ```
 
 ## What it does

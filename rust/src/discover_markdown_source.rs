@@ -1,6 +1,4 @@
-//! Port of `discoverMarkdownSource` from src/markit.ts.
-//!
-//! Discovers a raw markdown source URL from an HTML page by inspecting:
+//! Discover a raw markdown source URL from an HTML page by inspecting:
 //! 1. `<link rel="alternate" type="text/markdown" href="...">` tags
 //! 2. VitePress markers (`__VP_HASH_MAP__`, `VPContent`, `"vitepress"`) — only when ext is empty
 
@@ -86,8 +84,6 @@ fn append_md_extension(url: &str) -> String {
 ///
 /// Returns the resolved absolute URL of the markdown source, or `None` if
 /// no discoverable source is found.
-///
-/// Mirrors `discoverMarkdownSource` exported from src/markit.ts.
 pub fn discover_markdown_source(html: &str, url: &str, ext: &str) -> Option<String> {
     // 1. Look for <link rel="alternate" type="text/markdown" href="...">
     //    Two regex forms handle attribute order variations.

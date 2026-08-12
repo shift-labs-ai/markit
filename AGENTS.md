@@ -1,37 +1,39 @@
 # markit
 
-Convert anything to markdown. PDF, DOCX, PPTX, XLSX, HTML, EPUB, Jupyter notebooks, RSS, images, audio, URLs, Wikipedia, GitHub, iWork, XML, YAML, CSV, JSON, ZIP — everything gets milled.
+Convert anything to markdown. PDF, DOCX, PPTX, XLSX, HTML, EPUB, Jupyter notebooks, RSS, images, audio, URLs, Wikipedia, GitHub, iWork, XML, YAML, CSV, JSON, ZIP — everything gets milled. Rust is the sole conversion engine; TypeScript is only the thin Node SDK and CLI shell.
 
 ## Commands
 
 ```bash
-bun run dev -- <file-or-url>           # Dev — convert something
+bun run build:native                   # Build the Rust N-API addon
+bun run dev -- <file-or-url>           # Dev — convert through native Rust
 bun run dev -- convert <file-or-url>   # Explicit convert command
 bun run dev -- formats                 # List supported formats
-bun test                               # Tests (TS)
-bun run check                          # Biome lint + format (TS)
-cd rust && cargo test                  # Tests (Rust port)
+bun test                               # Node SDK contract tests
+bun run check                          # Biome lint + format (thin TS shell)
+cd rust && cargo test                  # Engine tests
 bun run check:rust                     # rustfmt --check + clippy -D warnings
 bun run check:all                      # Both sides
 ```
 
-The Rust port lives in `rust/` and mirrors the TS pipeline byte-for-byte;
-run both test suites when touching conversion logic. Lint policy is in
-`rust/Cargo.toml` `[lints.clippy]` (index loops in ported algorithm code
-are intentionally allowed to keep the ports auditable against their sources).
+The sole conversion implementation lives in `rust/`; `src/` is only the typed
+N-API loader and npm CLI shell. Run Rust tests for conversion changes and both
+suites for binding/public API changes. Lint policy is in `rust/Cargo.toml`
+`[lints.clippy]`.
 
 ## Architecture
 
-- `src/main.ts` — Commander entry point, global --json/--quiet flags
-- `src/markit.ts` — `Markit` class: converter registry. Tries converters in priority order.
-- `src/types.ts` — StreamInfo, ConversionResult, Converter, MarkitOptions interfaces
-- `src/converters/` — One file per format (20 converters: pdf, docx, pptx, xlsx, html, epub, ipynb, rss, image, audio, csv, json, xml, yaml, zip, github, wikipedia, iwork, plain-text)
-- `src/commands/` — CLI commands (convert, formats, onboard)
-- `src/utils/output.ts` — Chalk output helpers, triple output (json/quiet/human)
+- `rust/src/markit.rs` — sole converter registry and URL/file/buffer SDK
+- `rust/src/converters/` — one Rust implementation per format
+- `rust/src/bindings.rs` — async N-API surface
+- `src/native-markit.ts` — thin typed wrappers over the native addon
+- `src/main.ts` / `src/commands/` — npm CLI shell
+- `src/types.ts` — public Node SDK interfaces
+- `native.cjs` — platform-native addon loader
 
 ## Key Patterns
 
-- **Converter interface**: Each converter implements `name`, `accepts(streamInfo)`, and `convert(buffer, streamInfo, options)`. Optional `convertUrl()` hook for URL-first converters (e.g. GitHub, Wikipedia).
+- **Converter interface**: Each Rust converter implements `name`, `accepts(info)`, and `convert(input, info)`. Optional `convert_url()` handles URL-first converters.
 - **Priority order**: Specific formats first (pdf, docx), generic last (plain-text as catch-all)
 - **Output triple**: Every command supports `--json`, `--quiet`, and human-readable output
 - **URL support**: `markit https://example.com` fetches and converts. Converters with `convertUrl()` can handle fetching themselves.
@@ -39,7 +41,8 @@ are intentionally allowed to keep the ports auditable against their sources).
 
 ## Adding a New Converter
 
-1. Create `src/converters/<format>.ts`
-2. Implement the `Converter` interface (name, accepts, convert)
-3. Import and add to the converters array in `src/markit.ts`
-4. Add to the formats list in `src/commands/formats.ts`
+1. Create `rust/src/converters/<format>.rs`
+2. Implement the Rust `Converter` trait
+3. Add it to `rust/src/markit.rs`
+4. Expose a named Node wrapper in `src/native-markit.ts` when public
+5. Add it to the CLI formats list

@@ -7,50 +7,29 @@ on:
     branches: [main]
 
 jobs:
-  # ── TypeScript: lint, types, tests ──────────────────────────────────────────
-  check:
+  verify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-      - run: bun install
-      - name: Install Biome
-        run: npm install --no-save @biomejs/cli-linux-x64
-      - name: Lint & format
-        run: npx @biomejs/biome check src/
-      - name: Type check
-        run: bunx tsc --noEmit
-      - name: Run tests
-        run: bun test
-
-  # ── Rust: fmt, clippy, tests ─────────────────────────────────────────────────
-  rust:
-    name: Rust checks
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-
-      # workspaces tells rust-cache the crate root is rust/ (not the repo root).
-      - name: Cache Rust build artefacts
-        uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust -> rust/target
-          cache-on-failure: true
-
-      - name: cargo fmt --check
-        working-directory: rust
-        run: cargo fmt --check
-
-      - name: cargo clippy
-        working-directory: rust
-        run: cargo clippy --all-targets -- -D warnings
-
-      - name: cargo test
-        working-directory: rust
-        run: cargo test
+      - run: bun install --frozen-lockfile
+      - name: Check Node shell
+        run: bun run check && npm run build
+      - name: Check Rust engine
+        run: npm run check:rust && cd rust && cargo test
+      - name: Build current-platform addon
+        run: npm run build:native
+      - name: Test native Node SDK
+        run: bun test
+      - name: Smoke packed package
+        run: |
+          npm pack --dry-run
+          node -e "import('./dist/index.js').then(async ({Markit}) => { const r = await new Markit().convert(Buffer.from('native'), {extension: '.txt'}); if (r.markdown !== 'native') process.exit(1) })"

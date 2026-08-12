@@ -1,4 +1,4 @@
-//! PDF conversion pipeline. Port of src/converters/pdf/.
+//! Native PDF extraction, layout reconstruction, and Markdown rendering.
 
 pub mod bidi;
 pub mod borderless;

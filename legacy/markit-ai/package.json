@@ -1,0 +1,36 @@
+{
+  "name": "markit-ai",
+  "version": "0.6.0",
+  "description": "Compatibility shim for @shift-labs/markit",
+  "type": "module",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js",
+      "require": "./index.js",
+      "default": "./index.js"
+    }
+  },
+  "bin": {
+    "markit": "./cli.js"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "cli.js",
+    "README.md"
+  ],
+  "dependencies": {
+    "@shift-labs/markit": "0.6.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shift-labs-ai/markit.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

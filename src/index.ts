@@ -1,5 +1,4 @@
-// Public API — routes through native addon when available, TS fallback otherwise.
-// Re-exports maintain the exact same surface as before.
+// Public Node SDK — a typed shell over the native Rust engine.
 
 export {
   AudioConverter,

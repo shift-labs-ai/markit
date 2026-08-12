@@ -1,6 +1,6 @@
 {
-  "name": "markit-ai-darwin-x64",
-  "version": "0.5.3",
+  "name": "@shift-labs/markit-darwin-x64",
+  "version": "0.6.0",
   "os": [
     "darwin"
   ],
@@ -11,11 +11,11 @@
   "files": [
     "markit.darwin-x64.node"
   ],
-  "description": "Native binary for markit-ai — convert anything to markdown",
+  "description": "Native Rust binary for @shift-labs/markit",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Michaelliv/markit.git"
+    "url": "git+https://github.com/shift-labs-ai/markit.git"
   },
   "publishConfig": {
     "access": "public"

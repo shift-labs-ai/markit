@@ -32,7 +32,7 @@ Examples:
   $ markit recording.mp3               Extract audio metadata
   $ cat file.pdf | markit -            Read from stdin
 
-Docs: https://github.com/Michaelliv/markit`,
+Docs: https://github.com/shift-labs-ai/markit`,
   );
 
 program
@@ -120,7 +120,7 @@ Commands:
   markit onboard     Add instructions to CLAUDE.md
 
 Run markit --help for all options.
-Docs: https://github.com/Michaelliv/markit`);
+Docs: https://github.com/shift-labs-ai/markit`);
   process.exit(0);
 }
 

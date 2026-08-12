@@ -9,4 +9,4 @@ Stack: a from-scratch Rust PDF engine, custom raycasting for table cell detectio
 
 Tested against Intel, NXP, Microchip, and Bitcoin whitepaper PDFs — register tables, errata tables, spec tables, two-column legal docs all convert cleanly.
 
-github.com/Michaelliv/markit
+github.com/shift-labs-ai/markit

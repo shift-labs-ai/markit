@@ -157,7 +157,6 @@ mod tests {
 
     #[test]
     fn builtin_formats_has_expected_count() {
-        // TS has 23 built-in formats
         assert_eq!(BUILTIN_FORMATS.len(), 23);
     }
 
@@ -179,7 +178,7 @@ mod tests {
     }
 
     #[test]
-    fn format_names_match_ts() {
+    fn format_names_match_public_cli() {
         let names: Vec<&str> = BUILTIN_FORMATS.iter().map(|f| f.name).collect();
         assert_eq!(
             names,

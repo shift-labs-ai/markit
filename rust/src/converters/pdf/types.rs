@@ -1,4 +1,4 @@
-//! Shared types for the PDF pipeline. Port of src/converters/pdf/types.ts.
+//! Shared types for the PDF pipeline.
 
 /// Bounding box in PDF coordinate space (origin = bottom-left).
 #[derive(Debug, Clone, Copy, PartialEq)]

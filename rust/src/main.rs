@@ -7,9 +7,8 @@ use markit::commands::formats::formats;
 use markit::commands::onboard::onboard;
 use markit::utils::output::{error, OutputOptions};
 
-// clap renders "--version" as "{name} {version}", so keep the bare semver here;
-// the CLI output is "markit 0.5.3", matching the TS `markit ${version}` string.
-const VERSION: &str = "0.5.3";
+// clap renders "--version" as "{name} {version}".
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Parser)]
 #[command(
@@ -24,7 +23,7 @@ const VERSION: &str = "0.5.3";
   $ markit recording.mp3               Extract audio metadata
   $ cat file.pdf | markit -            Read from stdin
 
-Docs: https://github.com/Michaelliv/markit"#
+Docs: https://github.com/shift-labs-ai/markit"#
 )]
 struct Cli {
     /// File path, URL, or - for stdin (default command: convert)
@@ -82,7 +81,7 @@ Commands:
   markit onboard     Add instructions to CLAUDE.md
 
 Run markit --help for all options.
-Docs: https://github.com/Michaelliv/markit";
+Docs: https://github.com/shift-labs-ai/markit";
 
 const KNOWN_COMMANDS: &[&str] = &["convert", "formats", "onboard", "help"];
 
@@ -278,11 +277,11 @@ mod tests {
         assert!(NO_ARGS_HELP.contains("markit formats"));
         assert!(NO_ARGS_HELP.contains("markit onboard"));
         assert!(NO_ARGS_HELP.contains("Run markit --help for all options."));
-        assert!(NO_ARGS_HELP.contains("Docs: https://github.com/Michaelliv/markit"));
+        assert!(NO_ARGS_HELP.contains("Docs: https://github.com/shift-labs-ai/markit"));
     }
 
     #[test]
-    fn version_string_matches_ts() {
-        assert_eq!(VERSION, "0.5.3");
+    fn version_string_matches_package() {
+        assert_eq!(VERSION, env!("CARGO_PKG_VERSION"));
     }
 }

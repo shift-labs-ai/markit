@@ -1,6 +1,6 @@
 {
-  "name": "markit-ai",
-  "version": "0.5.3",
+  "name": "@shift-labs/markit",
+  "version": "0.6.0",
   "description": "Convert anything to markdown. PDF, DOCX, PPTX, XLSX, HTML, EPUB, Jupyter, RSS, images, audio, URLs, and more. Works as a CLI and as a library.",
   "type": "module",
   "main": "dist/index.js",
@@ -11,7 +11,8 @@
       "import": "./dist/index.js",
       "require": "./dist/index.js",
       "default": "./dist/index.js"
-    }
+    },
+    "./cli": "./dist/main.js"
   },
   "bin": {
     "markit": "./dist/main.js"
@@ -21,7 +22,7 @@
     "native.cjs"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc",
     "prepublishOnly": "npm run build && napi prepublish -t npm --skip-gh-release",
     "dev": "bun run src/main.ts",
     "test": "bun test",
@@ -33,15 +34,19 @@
     "check:rust": "cd rust && cargo fmt --check && cargo clippy --all-targets -- -D warnings",
     "check:all": "npm run check && npm run check:rust",
     "build:native": "napi build --release --strip --platform --features napi --cargo-flags=--no-default-features --cargo-cwd rust",
-    "artifacts": "napi artifacts"
+    "artifacts": "napi artifacts",
+    "verify": "npm run check:all && cd rust && cargo test && cd .. && npm run build:native && bun test && npm run build"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Michaelliv/markit.git"
+    "url": "git+https://github.com/shift-labs-ai/markit.git"
   },
-  "homepage": "https://github.com/Michaelliv/markit#readme",
+  "homepage": "https://github.com/shift-labs-ai/markit#readme",
   "bugs": {
-    "url": "https://github.com/Michaelliv/markit/issues"
+    "url": "https://github.com/shift-labs-ai/markit/issues"
   },
   "keywords": [
     "markdown",
@@ -56,22 +61,12 @@
   "devDependencies": {
     "@biomejs/biome": "^2.3.14",
     "@napi-rs/cli": "2.18.4",
-    "@types/jszip": "^3.4.1",
     "@types/node": "^25.5.0",
-    "@types/turndown": "^5.0.5",
     "typescript": "^5.8.0"
   },
   "dependencies": {
     "chalk": "^5.6.2",
-    "commander": "^14.0.3",
-    "exifr": "^7.1.3",
-    "fast-xml-parser": "^5.5.9",
-    "jszip": "^3.10.1",
-    "mammoth": "^1.9.0",
-    "music-metadata": "^11.12.3",
-    "rss-parser": "^3.13.0",
-    "turndown": "^7.2.0",
-    "turndown-plugin-gfm": "^1.0.2"
+    "commander": "^14.0.3"
   },
   "napi": {
     "name": "markit",
@@ -88,11 +83,11 @@
     }
   },
   "optionalDependencies": {
-    "markit-ai-darwin-arm64": "0.5.3",
-    "markit-ai-darwin-x64": "0.5.3",
-    "markit-ai-linux-x64-gnu": "0.5.3",
-    "markit-ai-linux-arm64-gnu": "0.5.3",
-    "markit-ai-linux-x64-musl": "0.5.3",
-    "markit-ai-linux-arm64-musl": "0.5.3"
+    "@shift-labs/markit-darwin-arm64": "0.6.0",
+    "@shift-labs/markit-darwin-x64": "0.6.0",
+    "@shift-labs/markit-linux-x64-gnu": "0.6.0",
+    "@shift-labs/markit-linux-arm64-gnu": "0.6.0",
+    "@shift-labs/markit-linux-x64-musl": "0.6.0",
+    "@shift-labs/markit-linux-arm64-musl": "0.6.0"
   }
 }

@@ -75,6 +75,6 @@ all reproducible: `./benchmark/setup-corpus.sh && ./benchmark/run.sh`
 
 5-10x faster than markitdown. same output. better tables.
 
-github.com/Michaelliv/markit
+github.com/shift-labs-ai/markit
 
 📎 thread_benchmark_speedup.png

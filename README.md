@@ -3,7 +3,7 @@
 Convert anything to markdown. PDF, DOCX, PPTX, XLSX, HTML, EPUB, Jupyter, RSS, images, audio, URLs, and more. Works as a CLI and as a library.
 
 ```bash
-npm install -g markit-ai
+npm install -g @shift-labs/markit
 ```
 
 ---
@@ -43,25 +43,25 @@ markit data.xlsx -q | napkin create "Imported Data"
 
 | Format | Extensions | How |
 |--------|-----------|-----|
-| PDF | `.pdf` | Markit's built-in Rust PDF engine |
-| Word | `.docx` | mammoth → turndown, preserves headings/tables |
-| PowerPoint | `.pptx` | XML parsing, slides + notes + tables |
-| Excel | `.xlsx` | Each sheet → markdown table |
-| HTML | `.html` `.htm` | turndown, scripts/styles stripped |
-| EPUB | `.epub` | Spine-ordered chapters, metadata header |
-| Jupyter | `.ipynb` | Markdown cells + code + outputs |
-| RSS/Atom | `.rss` `.atom` `.xml` | Feed items with dates and content |
-| CSV/TSV | `.csv` `.tsv` | Markdown tables |
-| JSON | `.json` | Pretty-printed code block |
-| YAML | `.yaml` `.yml` | Code block |
-| XML/SVG | `.xml` `.svg` | Code block |
-| Images | `.jpg` `.png` `.gif` `.webp` | EXIF metadata |
-| Audio | `.mp3` `.wav` `.m4a` `.flac` | Metadata |
-| ZIP | `.zip` | Recursive. converts each file inside |
-| URLs | `http://` `https://` | Fetches with `Accept: text/markdown` |
-| Wikipedia | `*.wikipedia.org` | Main content extraction |
-| Code | `.py` `.ts` `.go` `.rs` ... | Fenced code block |
-| Plain text | `.txt` `.md` `.rst` `.log` | Pass-through |
+| PDF | `.pdf` | Built-in Rust engine |
+| Word | `.docx` | Built-in Rust engine; headings, images, and tables |
+| PowerPoint | `.pptx` | Built-in Rust engine; slides, notes, and tables |
+| Excel | `.xlsx` | Built-in Rust engine; sheets become markdown tables |
+| HTML | `.html` `.htm` | Built-in Rust engine; scripts/styles stripped |
+| EPUB | `.epub` | Built-in Rust engine; spine-ordered chapters |
+| Jupyter | `.ipynb` | Built-in Rust engine; cells and outputs |
+| RSS/Atom | `.rss` `.atom` `.xml` | Built-in Rust engine; dated feed items |
+| CSV/TSV | `.csv` `.tsv` | Built-in Rust engine; markdown tables |
+| JSON | `.json` | Built-in Rust engine; formatted code block |
+| YAML | `.yaml` `.yml` | Built-in Rust engine; code block |
+| XML/SVG | `.xml` `.svg` | Built-in Rust engine; code block |
+| Images | `.jpg` `.png` `.gif` `.webp` | Built-in Rust metadata extraction |
+| Audio | `.mp3` `.wav` `.m4a` `.flac` | Built-in Rust metadata extraction |
+| ZIP | `.zip` | Built-in Rust recursive conversion |
+| URLs | `http://` `https://` | Rust fetcher with markdown negotiation |
+| Wikipedia | `*.wikipedia.org` | Built-in Rust main-content extraction |
+| Code | `.py` `.ts` `.go` `.rs` ... | Built-in Rust fenced code block |
+| Plain text | `.txt` `.md` `.rst` `.log` | Built-in Rust pass-through |
 
 
 ---
@@ -80,10 +80,10 @@ markit onboard                 # Add instructions to CLAUDE.md
 
 ## SDK
 
-markit is also a library. PDF conversion uses the bundled native binary on supported macOS and Linux platforms; the dependency-free TypeScript fallback does not include a PDF engine:
+markit is also a Node library. Every format uses the same bundled Rust engine as the CLI on supported macOS and Linux platforms—there is no second fallback implementation:
 
 ```typescript
-import { Markit } from "markit-ai";
+import { Markit } from "@shift-labs/markit";
 
 const markit = new Markit();
 const { markdown } = await markit.convertFile("report.pdf");
@@ -111,10 +111,35 @@ markit onboard                           # Add to CLAUDE.md
 
 ```bash
 bun install
+bun run build:native
 bun run dev -- report.pdf
 bun test
 bun run check
+cd rust && cargo test
 ```
+
+## Distribution
+
+Releases publish `@shift-labs/markit` plus six scoped native binary packages
+for macOS and Linux (x64/ARM64, glibc/musl). npm selects the matching binary
+through `optionalDependencies`. The former `markit-ai` package is a deprecated
+compatibility shim that re-exports this SDK.
+
+```bash
+# 1. Update the same version in package.json, rust/Cargo.toml,
+#    and npm/*/package.json.
+# 2. Verify locally.
+bun run verify
+
+# 3. Tag and push. GitHub Actions builds and publishes all seven packages.
+git tag v0.6.0
+git push origin v0.6.0
+```
+
+The release workflow requires an npm automation token in the repository secret
+`NPM_TOKEN`. It publishes platform packages first through `napi prepublish`,
+then `@shift-labs/markit`, then the deprecated `markit-ai` shim, and finally
+creates the GitHub release.
 
 ## License
 

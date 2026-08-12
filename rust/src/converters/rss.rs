@@ -1,9 +1,8 @@
 //! RSS/Atom feed → Markdown converter.
 //!
-//! Port of src/converters/rss.ts (158 lines).  Uses the same regex-based
-//! XML extraction strategy as the TS original so output is byte-for-byte
-//! compatible.  We intentionally avoid a full XML parser so CDATA, namespace
-//! prefixes (\`content:encoded\`), and malformed feeds all behave identically.
+//! Uses a deliberately tolerant regex-based extraction strategy. A full XML
+//! parser would reject malformed feeds and complicate CDATA and namespaced
+//! `content:encoded` handling.
 
 use std::sync::LazyLock;
 

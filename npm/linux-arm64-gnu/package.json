@@ -1,6 +1,6 @@
 {
-  "name": "markit-ai-linux-arm64-gnu",
-  "version": "0.5.3",
+  "name": "@shift-labs/markit-linux-arm64-gnu",
+  "version": "0.6.0",
   "os": [
     "linux"
   ],
@@ -11,11 +11,11 @@
   "files": [
     "markit.linux-arm64-gnu.node"
   ],
-  "description": "Native binary for markit-ai — convert anything to markdown",
+  "description": "Native Rust binary for @shift-labs/markit",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Michaelliv/markit.git"
+    "url": "git+https://github.com/shift-labs-ai/markit.git"
   },
   "publishConfig": {
     "access": "public"

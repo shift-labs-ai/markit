@@ -2,7 +2,7 @@
 # Downloads test fixtures from GitHub release if not already present.
 set -euo pipefail
 
-REPO="Michaelliv/markit"
+REPO="shift-labs-ai/markit"
 TAG="test-fixtures-v1"
 ASSET="markit-test-fixtures.tar.gz"
 URL="https://github.com/${REPO}/releases/download/${TAG}/${ASSET}"

@@ -1,5 +1,5 @@
 /* eslint-disable */
-// Native addon loader for markit. Exports the binding object or null.
+// Native addon loader for markit. Rust is the sole conversion engine.
 
 const { existsSync, readFileSync } = require('fs');
 const { join } = require('path');
@@ -41,10 +41,10 @@ try {
     case 'darwin':
       switch (arch) {
         case 'x64':
-          nativeBinding = tryLoad('markit.darwin-x64.node', 'markit-ai-darwin-x64');
+          nativeBinding = tryLoad('markit.darwin-x64.node', '@shift-labs/markit-darwin-x64');
           break;
         case 'arm64':
-          nativeBinding = tryLoad('markit.darwin-arm64.node', 'markit-ai-darwin-arm64');
+          nativeBinding = tryLoad('markit.darwin-arm64.node', '@shift-labs/markit-darwin-arm64');
           break;
         default:
           throw new Error(`Unsupported architecture on macOS: ${arch}`);
@@ -54,16 +54,16 @@ try {
       switch (arch) {
         case 'x64':
           if (isMusl()) {
-            nativeBinding = tryLoad('markit.linux-x64-musl.node', 'markit-ai-linux-x64-musl');
+            nativeBinding = tryLoad('markit.linux-x64-musl.node', '@shift-labs/markit-linux-x64-musl');
           } else {
-            nativeBinding = tryLoad('markit.linux-x64-gnu.node', 'markit-ai-linux-x64-gnu');
+            nativeBinding = tryLoad('markit.linux-x64-gnu.node', '@shift-labs/markit-linux-x64-gnu');
           }
           break;
         case 'arm64':
           if (isMusl()) {
-            nativeBinding = tryLoad('markit.linux-arm64-musl.node', 'markit-ai-linux-arm64-musl');
+            nativeBinding = tryLoad('markit.linux-arm64-musl.node', '@shift-labs/markit-linux-arm64-musl');
           } else {
-            nativeBinding = tryLoad('markit.linux-arm64-gnu.node', 'markit-ai-linux-arm64-gnu');
+            nativeBinding = tryLoad('markit.linux-arm64-gnu.node', '@shift-labs/markit-linux-arm64-gnu');
           }
           break;
         default:
@@ -71,16 +71,19 @@ try {
       }
       break;
     default:
-      // Unsupported platform — fall through to null
-      break;
+      throw new Error(`Unsupported platform: ${platform}-${arch}`);
   }
 } catch (e) {
   loadError = e;
   nativeBinding = null;
 }
 
-if (loadError && process.env.MARKIT_DEBUG) {
-  console.error('[markit] native addon unavailable, using TS fallback:', loadError.message);
+if (!nativeBinding) {
+  const detail = loadError instanceof Error ? loadError.message : String(loadError || 'unknown error');
+  throw new Error(
+    `Markit's native Rust engine could not be loaded for ${platform}-${arch}. ` +
+    `Reinstall @shift-labs/markit and ensure optional dependencies are enabled. ${detail}`
+  );
 }
 
 module.exports = nativeBinding;

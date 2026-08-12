@@ -11,24 +11,24 @@ Convert anything to Markdown.
 
 ```bash
 # Convert a file
-npx markit-ai report.pdf -q
+npx @shift-labs/markit report.pdf -q
 
 # Convert a URL
-npx markit-ai https://en.wikipedia.org/wiki/Markdown -q
+npx @shift-labs/markit https://en.wikipedia.org/wiki/Markdown -q
 
 # GitHub URLs (repos, files, gists, issues, PRs)
-npx markit-ai https://github.com/owner/repo -q
-npx markit-ai https://github.com/owner/repo/issues/42 -q
-npx markit-ai https://gist.github.com/user/id -q
+npx @shift-labs/markit https://github.com/owner/repo -q
+npx @shift-labs/markit https://github.com/owner/repo/issues/42 -q
+npx @shift-labs/markit https://gist.github.com/user/id -q
 
 # Write to file
-npx markit-ai document.docx -q -o output.md
+npx @shift-labs/markit document.docx -q -o output.md
 
 # See all options
-npx markit-ai --help
+npx @shift-labs/markit --help
 
 # See supported formats
-npx markit-ai formats
+npx @shift-labs/markit formats
 ```
 
 `-q` gives raw markdown. `--json` gives `{ markdown, title }`.
@@ -36,7 +36,7 @@ npx markit-ai formats
 ## SDK
 
 ```typescript
-import { Markit } from "markit-ai";
+import { Markit } from "@shift-labs/markit";
 
 const markit = new Markit();
 const { markdown } = await markit.convertFile("report.pdf");
