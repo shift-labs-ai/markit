@@ -275,15 +275,30 @@ fn is_diagram(grid: &TableGrid) -> bool {
 
     // Compute duplicate text ratio among non-trivial cells.
     // Exclude short values (≤3 chars) like "—", "V", "YES", "NO" which
-    // naturally repeat in real data tables.
+    // naturally repeat in real data tables — and exclude repeats
+    // confined to a single column: a categorical column repeating
+    // "Improvement" forty times is table data. Diagram label repetition
+    // scatters ACROSS columns ("Hash" in every box of a flow chart).
     let substantive: Vec<&TableCell> = filled
         .iter()
         .filter(|c| c.text.trim().len() > 3)
         .copied()
         .collect();
+    let mut text_cols: HashMap<&str, HashSet<usize>> = HashMap::new();
+    for cell in &substantive {
+        text_cols
+            .entry(cell.text.trim())
+            .or_default()
+            .insert(cell.col);
+    }
+    let cross_column_dups: usize = substantive
+        .iter()
+        .filter(|c| text_cols[c.text.trim()].len() > 1)
+        .count();
     let unique_texts: HashSet<&str> = substantive.iter().map(|c| c.text.trim()).collect();
     let dup_ratio = if substantive.len() > 2 {
-        1.0 - unique_texts.len() as f64 / substantive.len() as f64
+        let dups = substantive.len() - unique_texts.len();
+        dups.min(cross_column_dups) as f64 / substantive.len() as f64
     } else {
         0.0
     };
