@@ -552,18 +552,23 @@ trailer << /Root 1 0 R >>";
         assert!(!text_of(&pages).contains('A'));
     }
 
+    /// MacExpertEncoding decodes through the real expert-set table
+    /// (normalized for text recovery), instead of refusing the whole
+    /// document: 0x21 is exclamsmall, 0x32 an oldstyle two, 0x57 the
+    /// fi ligature.
     #[test]
-    fn unsupported_mac_expert_encoding_refuses_silent_winansi_garbage() {
+    fn mac_expert_encoding_decodes_expert_glyphs() {
         let pdf = br"%PDF-1.4
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj
 4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Custom /Encoding /MacExpertEncoding >> endobj
-5 0 obj << /Length 38 >> stream
-BT /F1 12 Tf 72 720 Td (\200) Tj ET
+5 0 obj << /Length 40 >> stream
+BT /F1 12 Tf 72 720 Td (\041\062\127) Tj ET
 endstream endobj
 trailer << /Root 1 0 R >>";
-        assert!(extract_pages_fast(pdf).is_err());
+        let pages = extract_pages_fast(pdf).expect("mac expert");
+        assert_eq!(text_of(&pages), "!2fi");
     }
 
     #[test]
