@@ -79,6 +79,34 @@ fn is_weak_math_word(s: &str) -> bool {
     if alpha_run > 2 {
         return false;
     }
+    // Short English words are prose, not identifiers.
+    if matches!(
+        s.trim_end_matches([',', '.', ';', ':']),
+        "as" | "at"
+            | "be"
+            | "by"
+            | "do"
+            | "he"
+            | "if"
+            | "in"
+            | "is"
+            | "it"
+            | "no"
+            | "of"
+            | "on"
+            | "or"
+            | "so"
+            | "to"
+            | "up"
+            | "we"
+            | "an"
+            | "my"
+            | "me"
+            | "us"
+            | "go"
+    ) {
+        return false;
+    }
     s.chars().all(|c| {
         c.is_ascii_alphanumeric()
             || matches!(
@@ -377,21 +405,20 @@ pub(crate) fn render_line_with_math(text: &str, escape_plain: impl Fn(&str) -> S
     let mut out_parts: Vec<String> = Vec::new();
     let mut i = 0usize;
     while i < words.len() {
-        if kinds[i] != Kind::Strong {
+        if kinds[i] == Kind::Plain {
             out_parts.push(escape_plain(&strip_sentinels(words[i])));
             i += 1;
             continue;
         }
-        // Extend a math run over strong words and interior weak words.
+        // A maximal non-plain segment, leading and trailing weak words
+        // included ("0 ≤ n ≤ 2N": the 0 and the 2N belong inside).
         let mut j = i;
-        let mut last_strong = i;
+        let mut any_strong = false;
         while j < words.len() && kinds[j] != Kind::Plain {
-            if kinds[j] == Kind::Strong {
-                last_strong = j;
-            }
+            any_strong |= kinds[j] == Kind::Strong;
             j += 1;
         }
-        let run = words[i..=last_strong].join(" ");
+        let run = words[i..j].join(" ");
         // A single stray math character in prose (α-helix, 500 × 300)
         // is not an equation: demand two pieces of strong evidence, or
         // one plus script structure.
@@ -399,15 +426,12 @@ pub(crate) fn render_line_with_math(text: &str, escape_plain: impl Fn(&str) -> S
         let has_scripts = run
             .chars()
             .any(|c| matches!(c, SUP_OPEN | SUP_CLOSE | SUB_OPEN | SUB_CLOSE));
-        if strong_chars >= 2 || (strong_chars >= 1 && has_scripts) {
+        if any_strong && (strong_chars >= 2 || (strong_chars >= 1 && has_scripts)) {
             out_parts.push(format!("${}$", to_latex(&run)));
         } else {
-            for w in &words[i..=last_strong] {
+            for w in &words[i..j] {
                 out_parts.push(escape_plain(&strip_sentinels(w)));
             }
-        }
-        for w in &words[last_strong + 1..j] {
-            out_parts.push(escape_plain(&strip_sentinels(w)));
         }
         i = j;
     }
