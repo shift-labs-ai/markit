@@ -512,7 +512,7 @@ trailer << /Root 1 0 R >>";
 
     #[test]
     fn full_pipeline_with_fixture() {
-        let fixture = "../test/fixtures/pdfs/intel-743621-007.pdf";
+        let fixture = "testdata/pdf/regression/09f90a8fad0997f7cf454cbcbe79cab3bc0f_page_1_pg1.pdf";
         assert!(Path::new(fixture).exists(), "committed fixture missing");
 
         let buf = std::fs::read(fixture).unwrap();
@@ -526,8 +526,9 @@ trailer << /Root 1 0 R >>";
 
         assert!(!result.markdown.is_empty());
         assert!(
-            result.markdown.contains("700 Series")
-                || result.markdown.contains("Platform Controller Hub"),
+            result
+                .markdown
+                .contains("Open-Domain Textual Question Answering"),
             "Output should contain key text from the PDF"
         );
     }
