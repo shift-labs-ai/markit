@@ -148,6 +148,18 @@ const SP_MAX_GROUP_LINES: usize = 4;
 /// lines (year + page range, short). False positives on body prose are
 /// the main risk — every branch here must be unambiguous.
 pub(crate) fn matches_chrome_pattern(text: &str) -> bool {
+    // Script sentinels (see shared.rs) ride along in extracted text
+    // until render; they must not defeat the signatures.
+    let owned: String;
+    let text = if text.chars().any(|c| ('\u{E000}'..='\u{E003}').contains(&c)) {
+        owned = text
+            .chars()
+            .filter(|c| !('\u{E000}'..='\u{E003}').contains(c))
+            .collect();
+        owned.as_str()
+    } else {
+        text
+    };
     // Strip decorative rules and bullets before matching: banner lines
     // like "||WWW.EXAMPLE.COM" or "- 8 -" carry ornaments that would
     // defeat every prefix/whole-line signature.
