@@ -121,6 +121,46 @@ fn mac_glyph_char(idx: u16) -> Option<char> {
     MAC.chars().nth(i)
 }
 
+/// Glyph advance widths in glyph-space /1000 units, indexed by glyph
+/// id: head.unitsPerEm + hhea.numberOfHMetrics + hmtx. Glyphs past
+/// numberOfHMetrics repeat the last advance (monospace tail), per spec.
+pub fn gid_advances(font: &[u8]) -> Option<Vec<f64>> {
+    let font = if font.get(..4) == Some(b"ttcf") {
+        let off = u32be(font, 12)? as usize;
+        font.get(off..)?
+    } else {
+        font
+    };
+    if !matches!(
+        font.get(..4),
+        Some([0, 1, 0, 0]) | Some(b"true") | Some(b"OTTO")
+    ) {
+        return None;
+    }
+    let head = find_table(font, b"head")?;
+    let upem = u16be(head, 18)? as f64;
+    if upem <= 0.0 {
+        return None;
+    }
+    let hhea = find_table(font, b"hhea")?;
+    let num_metrics = u16be(hhea, 34)? as usize;
+    let maxp = find_table(font, b"maxp")?;
+    let num_glyphs = (u16be(maxp, 4)? as usize).min(65_536);
+    if num_metrics == 0 || num_glyphs == 0 {
+        return None;
+    }
+    let hmtx = find_table(font, b"hmtx")?;
+    let mut out = Vec::with_capacity(num_glyphs);
+    let mut last = 0f64;
+    for gid in 0..num_glyphs {
+        if gid < num_metrics {
+            last = u16be(hmtx, gid * 4)? as f64 / upem * 1000.0;
+        }
+        out.push(last);
+    }
+    Some(out)
+}
+
 /// Invert the font's unicode cmap: glyph id -> unicode. The recovery
 /// chain for composite (CIDFontType2) fonts, where the PDF code is a
 /// CID that maps to a glyph id via CIDToGIDMap.

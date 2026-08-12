@@ -86,6 +86,59 @@ fn compose(base: char, combining: char) -> Option<char> {
     }
 }
 
+/// Space threshold for a line of per-glyph-positioned items whose
+/// producer tracked the text tighter than the font's nominal advances
+/// (Qt): every inter-glyph gap is then negative, but word gaps remain
+/// a distinct upper mode. Split the sorted gap distribution at its
+/// largest jump. None when the line is not per-glyph or not bimodal.
+fn adaptive_space_threshold(line: &[RawTextItem]) -> Option<f64> {
+    if line.len() < 12 {
+        return None;
+    }
+    // The signature must be unambiguous: virtually every item a single
+    // glyph (one Tj per glyph). Mixed lines (table cells, labels) keep
+    // the absolute rule.
+    let glyphy = line
+        .iter()
+        .filter(|item| item.text.trim().chars().count() <= 1)
+        .count();
+    if glyphy * 10 < line.len() * 9 {
+        return None;
+    }
+    let mut gaps: Vec<f64> = line
+        .windows(2)
+        .map(|pair| pair[1].x - (pair[0].x + pair[0].width))
+        .filter(|gap| gap.abs() < 6.0)
+        .collect();
+    if gaps.len() < 6 {
+        return None;
+    }
+    gaps.sort_by(|a, b| a.total_cmp(b));
+    // Only splits below the default threshold matter: gaps beyond
+    // 1.0pt already read as spaces. The intra/word boundary of tracked
+    // text lives in the negative range.
+    let mut best_jump = 0.0;
+    let mut split = None;
+    for pair in gaps.windows(2) {
+        let jump = pair[1] - pair[0];
+        let mid = (pair[0] + pair[1]) / 2.0;
+        if jump > best_jump && mid < 1.0 {
+            best_jump = jump;
+            split = Some(mid);
+        }
+    }
+    // Both modes must exist and be clearly separated; and the default
+    // absolute rule must have failed to see the upper mode (otherwise
+    // leave the proven 1.0pt behavior alone).
+    // Word gaps are the minority mode: most inter-glyph gaps sit
+    // inside words. A "space" mode covering half the line is noise.
+    let spaces_above = |t: f64| gaps.iter().filter(|g| **g > t).count();
+    match split {
+        Some(t) if best_jump >= 0.7 && t < 0.5 && spaces_above(t) * 3 <= gaps.len() => Some(t),
+        _ => None,
+    }
+}
+
 fn merge_into_words(raws: &[RawTextItem]) -> Vec<RawTextItem> {
     if raws.is_empty() {
         return Vec::new();
@@ -100,9 +153,33 @@ fn merge_into_words(raws: &[RawTextItem]) -> Vec<RawTextItem> {
     };
     let mut sorted = raws.to_vec();
     super::js_stable_sort(&mut sorted, cmp);
+
+    // Per-line space thresholds, computed on the sorted stream before
+    // any merging: entry i covers sorted[i]'s line.
+    let mut space_thresholds: Vec<f64> = vec![1.0; sorted.len()];
+    {
+        let mut line_start = 0usize;
+        for i in 1..=sorted.len() {
+            let line_ends = i == sorted.len() || {
+                let a = &sorted[i - 1];
+                let b = &sorted[i];
+                (b.y - a.y).abs() > SAME_LINE_Y_TOLERANCE && !script_same_line(a, b)
+            };
+            if line_ends {
+                if let Some(t) = adaptive_space_threshold(&sorted[line_start..i]) {
+                    for slot in space_thresholds[line_start..i].iter_mut() {
+                        *slot = t;
+                    }
+                }
+                line_start = i;
+            }
+        }
+    }
+
     let mut merged = Vec::new();
     let mut cur = sorted[0].clone();
-    for next in sorted.iter().skip(1) {
+    let mut cur_threshold = space_thresholds[0];
+    for (next_index, next) in sorted.iter().enumerate().skip(1) {
         let same_y =
             (next.y - cur.y).abs() <= SAME_LINE_Y_TOLERANCE || script_same_line(&cur, next);
         // Type3/dvips fonts can carry a bogus nominal size; the glyph
@@ -157,7 +234,7 @@ fn merge_into_words(raws: &[RawTextItem]) -> Vec<RawTextItem> {
         }
 
         if same_y && close {
-            let sep = if next.x - (cur.x + cur.width) > 1.0 {
+            let sep = if next.x - (cur.x + cur.width) > cur_threshold {
                 " "
             } else {
                 ""
@@ -170,6 +247,7 @@ fn merge_into_words(raws: &[RawTextItem]) -> Vec<RawTextItem> {
         } else {
             merged.push(cur);
             cur = next.clone();
+            cur_threshold = space_thresholds[next_index];
         }
     }
     merged.push(cur);
@@ -451,6 +529,76 @@ mod tests {
         )
         .unwrap();
         assert_eq!(boxes[0].text, "figure flow efficient");
+    }
+
+    /// Qt PDFs draw one glyph per Tj and track the text tighter than
+    /// the font's nominal advances: every inter-glyph gap is negative,
+    /// but word gaps remain a distinct upper mode. The adaptive
+    /// per-line threshold must recover the spaces.
+    #[test]
+    fn tracked_per_glyph_text_recovers_word_spaces() {
+        let word_gap = -0.4;
+        let letter_gap = -3.0;
+        let mut items = Vec::new();
+        let mut x = 0.0;
+        for word in ["For", "comparability", "to", "our"] {
+            for c in word.chars() {
+                items.push(RawTextItemPub {
+                    text: c.to_string(),
+                    x,
+                    y: 100.0,
+                    width: 9.0,
+                    height: 10.0,
+                    font_size: 8.0,
+                    is_bold: false,
+                });
+                x += 9.0 + letter_gap;
+            }
+            x += -letter_gap + word_gap; // undo last letter gap, add word gap
+        }
+        let boxes = finish_text_boxes_pub(items, 1).unwrap();
+        assert_eq!(boxes.len(), 1);
+        assert_eq!(boxes[0].text, "For comparability to our");
+    }
+
+    /// Ordinary multi-char items keep the absolute 1pt rule — the
+    /// adaptive threshold must not fire on mixed lines.
+    #[test]
+    fn mixed_line_keeps_absolute_space_rule() {
+        let mut items = Vec::new();
+        let mut x = 0.0;
+        for (text, w) in [
+            ("Q3", 12.0),
+            ("0.74", 18.0),
+            ("0.71", 18.0),
+            ("13%", 16.0),
+            ("4%", 12.0),
+            ("x", 5.0),
+            ("y", 5.0),
+            ("z", 5.0),
+            ("w", 5.0),
+            ("v", 5.0),
+            ("u", 5.0),
+            ("t", 5.0),
+        ] {
+            items.push(RawTextItemPub {
+                text: text.into(),
+                x,
+                y: 100.0,
+                width: w,
+                height: 10.0,
+                font_size: 10.0,
+                is_bold: false,
+            });
+            x += w + 0.5; // sub-threshold gaps: no spaces, one box
+        }
+        let boxes = finish_text_boxes_pub(items, 1).unwrap();
+        assert_eq!(boxes.len(), 1);
+        assert!(
+            !boxes[0].text.contains(' '),
+            "absolute rule changed: {:?}",
+            boxes[0].text
+        );
     }
 
     #[test]

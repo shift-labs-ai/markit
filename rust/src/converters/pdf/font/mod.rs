@@ -140,6 +140,31 @@ pub(crate) fn build_font(pdf: &Pdf, dict: &Dict) -> FontInfo {
                     if let Some(Val::Array(w)) = cg(b"W") {
                         parse_cid_widths(pdf, &w, &mut info.cid_widths);
                     }
+                    // CIDs missing from /W default to DW (1000 when
+                    // absent), which overestimates most glyphs; with an
+                    // Identity CIDToGIDMap the embedded program's hmtx
+                    // table fills the gaps with the real advances.
+                    let identity_gid =
+                        matches!(cg(b"CIDToGIDMap"), Some(Val::Name(b"Identity")) | None);
+                    if identity_gid {
+                        let program = pdf
+                            .dict_get(&cid_font, b"FontDescriptor")
+                            .ok()
+                            .flatten()
+                            .and_then(|v| match v {
+                                Val::Dict(fd) => pdf.dict_get(&fd, b"FontFile2").ok().flatten(),
+                                _ => None,
+                            });
+                        if let Some(Val::Stream(sd, raw)) = program {
+                            if let Ok(bytes) = decode_stream(&sd, raw, pdf) {
+                                if let Some(advances) = truetype::gid_advances(&bytes) {
+                                    for (gid, w) in advances.iter().enumerate() {
+                                        info.cid_widths.entry(gid as u32).or_insert(*w);
+                                    }
+                                }
+                            }
+                        }
+                    }
                     if !info.is_bold {
                         info.is_bold = descriptor_bold(pdf, &cid_font);
                     }
