@@ -322,7 +322,10 @@ fn to_latex(run: &str) -> String {
             '#' => r"\# ",
             '~' => r"\sim ",
             other => {
-                if let Some((letter, bold)) = mathematical_latin(other) {
+                if let Some(greek) = mathematical_greek(other) {
+                    out.push_str(greek);
+                    out.push(' ');
+                } else if let Some((letter, bold)) = mathematical_latin(other) {
                     if bold {
                         out.push_str(r"\mathbf{");
                         out.push(letter);
@@ -330,6 +333,8 @@ fn to_latex(run: &str) -> String {
                     } else {
                         out.push(letter);
                     }
+                } else if let Some(digit) = mathematical_digit(other) {
+                    out.push(digit);
                 } else if let Some(bb) = blackboard(other) {
                     out.push_str(r"\mathbb{");
                     out.push(bb);
@@ -370,6 +375,96 @@ fn to_latex(run: &str) -> String {
         }
     }
     tidy
+}
+
+/// Mathematical Greek ranges repeat the same 58-codepoint layout for
+/// bold, italic, bold-italic, sans-bold, and sans-bold-italic styles.
+/// Style is secondary to preserving the symbol's KaTeX identity.
+fn mathematical_greek(c: char) -> Option<&'static str> {
+    const COMMANDS: [&str; 58] = [
+        r"\Alpha",
+        r"\Beta",
+        r"\Gamma",
+        r"\Delta",
+        r"\Epsilon",
+        r"\Zeta",
+        r"\Eta",
+        r"\Theta",
+        r"\Iota",
+        r"\Kappa",
+        r"\Lambda",
+        r"\Mu",
+        r"\Nu",
+        r"\Xi",
+        r"\Omicron",
+        r"\Pi",
+        r"\Rho",
+        r"\varTheta",
+        r"\Sigma",
+        r"\Tau",
+        r"\Upsilon",
+        r"\Phi",
+        r"\Chi",
+        r"\Psi",
+        r"\Omega",
+        r"\nabla",
+        r"\alpha",
+        r"\beta",
+        r"\gamma",
+        r"\delta",
+        r"\varepsilon",
+        r"\zeta",
+        r"\eta",
+        r"\theta",
+        r"\iota",
+        r"\kappa",
+        r"\lambda",
+        r"\mu",
+        r"\nu",
+        r"\xi",
+        r"\omicron",
+        r"\pi",
+        r"\rho",
+        r"\varsigma",
+        r"\sigma",
+        r"\tau",
+        r"\upsilon",
+        r"\varphi",
+        r"\chi",
+        r"\psi",
+        r"\omega",
+        r"\partial",
+        r"\epsilon",
+        r"\vartheta",
+        r"\varkappa",
+        r"\phi",
+        r"\varrho",
+        r"\varpi",
+    ];
+    for start in [0x1D6A8, 0x1D6E2, 0x1D71C, 0x1D756, 0x1D790] {
+        let Some(offset) = (c as u32).checked_sub(start) else {
+            continue;
+        };
+        if let Some(command) = usize::try_from(offset)
+            .ok()
+            .and_then(|index| COMMANDS.get(index))
+        {
+            return Some(command);
+        }
+    }
+    None
+}
+
+fn mathematical_digit(c: char) -> Option<char> {
+    for start in [0x1D7CE, 0x1D7D8, 0x1D7E2, 0x1D7EC, 0x1D7F6] {
+        let Some(offset) = (c as u32).checked_sub(start) else {
+            continue;
+        };
+        if offset < 10 {
+            return char::from_u32('0' as u32 + offset);
+        }
+    }
+    None
 }
 
 /// Common contiguous Latin ranges in Mathematical Alphanumeric Symbols.
@@ -549,8 +644,8 @@ mod tests {
 
     #[test]
     fn mathematical_alphanumeric_letters_become_latex_styles() {
-        let out = render_line_with_math("𝐀 ∈ 𝑉", ident);
-        assert_eq!(out, r"$\mathbf{A} \in V$");
+        let out = render_line_with_math("𝐀 ∈ 𝑉, 𝛼 ≥ 𝟐", ident);
+        assert_eq!(out, r"$\mathbf{A} \in V, \alpha \ge 2$");
     }
 
     #[test]
