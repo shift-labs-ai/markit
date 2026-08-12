@@ -126,28 +126,52 @@ fn find_gutters(text_boxes: &[TextBox]) -> Vec<f64> {
     let median_size = sizes.get(sizes.len() / 2).copied().unwrap_or(10.0);
     let min_gutter = (MIN_GUTTER_PTS * median_size / 10.0).clamp(6.0, MIN_GUTTER_PTS);
 
-    // Crossing histogram via a difference array: O(boxes + width)
-    // instead of a per-bin scan over every box.
+    // Two crossing histograms via difference arrays. The strict one
+    // counts only box EDGES (a line poking a few points across a
+    // gutter is evidence against it); centered titles and author
+    // blocks extending far beyond both sides are band candidates that
+    // the partitioning below handles, so their interiors are exempt
+    // from the strict count — but a looser FULL-span cap still
+    // disqualifies bins inside ordinary body text.
+    let band_exempt = 2.5 * min_gutter;
     let bins = (hi - lo + 1) as usize;
-    let mut diff = vec![0i32; bins + 1];
-    for tb in text_boxes {
-        // Box crosses bin x when left + 2 < x < right - 2.
-        let from = ((tb.bounds.left + 2.0).floor() as i64 + 1).max(lo);
-        let to = ((tb.bounds.right - 2.0).ceil() as i64 - 1).min(hi);
-        if from <= to {
-            diff[(from - lo) as usize] += 1;
-            diff[(to - lo + 1) as usize] -= 1;
+    let mut poke_diff = vec![0i32; bins + 1];
+    let mut full_diff = vec![0i32; bins + 1];
+    {
+        let mut add = |diff: &mut Vec<i32>, from: f64, to: f64| {
+            let from = (from.floor() as i64 + 1).max(lo);
+            let to = (to.ceil() as i64 - 1).min(hi);
+            if from <= to {
+                diff[(from - lo) as usize] += 1;
+                diff[(to - lo + 1) as usize] -= 1;
+            }
+        };
+        for tb in text_boxes {
+            // Box crosses bin x when left + 2 < x < right - 2.
+            let l = tb.bounds.left + 2.0;
+            let r = tb.bounds.right - 2.0;
+            add(&mut full_diff, l, r);
+            if r - l <= 2.0 * band_exempt {
+                add(&mut poke_diff, l, r);
+            } else {
+                add(&mut poke_diff, l, l + band_exempt);
+                add(&mut poke_diff, r - band_exempt, r);
+            }
         }
     }
+    let max_full = 1.max((lines as f64 * 0.25) as usize) as i32;
 
-    // Runs of bins crossed by at most max_crossing boxes.
+    // Runs of bins where pokes stay under the strict allowance and
+    // full crossings under the loose cap.
     let mut runs: Vec<(i64, i64)> = Vec::new();
     let mut run_start: Option<i64> = None;
-    let mut crossing = 0i32;
-    for (bin, delta) in diff.iter().take(bins).enumerate() {
-        crossing += delta;
+    let mut poke = 0i32;
+    let mut full = 0i32;
+    for bin in 0..bins {
+        poke += poke_diff[bin];
+        full += full_diff[bin];
         let x = lo + bin as i64;
-        if crossing <= max_crossing as i32 {
+        if poke <= max_crossing as i32 && full <= max_full {
             if run_start.is_none() {
                 run_start = Some(x);
             }
@@ -180,42 +204,71 @@ fn find_gutters(text_boxes: &[TextBox]) -> Vec<f64> {
         if left_count < MIN_BOXES_PER_COLUMN || right_count < MIN_BOXES_PER_COLUMN {
             continue;
         }
-        centers.push((center, run_width));
+        // Rank candidates by balance: a real column gutter has
+        // substantial text fully on BOTH sides, while clear zones
+        // inside figures are lopsided. (Run width misleads: figure
+        // whitespace is often wider than a tight column gutter.)
+        centers.push((center, left_count.min(right_count) as i64));
     }
 
-    // Many parallel qualifying gutters mean the whitespace comes from
-    // TABLE columns — leave the region whole so table detection can
-    // have it.
-    if centers.len() > MAX_GUTTERS {
-        return vec![];
+    // A single qualifying gutter is the classic two-column case: the
+    // side counts above already validated it.
+    if centers.len() <= 1 {
+        return centers.into_iter().map(|(c, _)| c).collect();
     }
 
-    if centers.len() >= 2 {
-        // Multiple gutters carry a stricter burden of proof: every
-        // interior interval must hold a real column of text — wide
-        // line boxes filling the interval. Table cells sit narrow
-        // inside table whitespace and fail it. Reject outright on
-        // failure; splitting by a subset would carve up the table.
-        let mut xs: Vec<f64> = centers.iter().map(|(c, _)| *c).collect();
-        xs.sort_by(|a, b| a.total_cmp(b));
-        let interval_ok = xs.windows(2).all(|pair| {
-            let mut widths: Vec<f64> = text_boxes
+    // Multiple candidates include phantoms (clear zones inside
+    // figures, table whitespace). Every admitted gutter set must pass
+    // the prose-interval proof over ALL its intervals including the
+    // outer flanks: real columns are filled by wide line boxes; table
+    // cells and figure labels sit narrow. Prefer the largest passing
+    // subset, trying wider gutters first.
+    centers.sort_by_key(|c| std::cmp::Reverse(c.1));
+    centers.truncate(MAX_GUTTERS);
+    let prose_intervals = |xs: &[f64]| -> bool {
+        let mut pts = Vec::with_capacity(xs.len() + 2);
+        pts.push(x_min - 1.0);
+        pts.extend_from_slice(xs);
+        pts.push(x_max + 1.0);
+        pts.windows(2).all(|pair| {
+            // The interval must hold real column lines: boxes filling
+            // at least half its width. Narrow noise (figure labels,
+            // axis numbers) doesn't disqualify — but table cells never
+            // fill their interval, so table whitespace still fails.
+            let span = pair[1] - pair[0];
+            text_boxes
                 .iter()
-                .filter(|tb| tb.bounds.left >= pair[0] && tb.bounds.right <= pair[1])
-                .map(|tb| tb.bounds.right - tb.bounds.left)
-                .collect();
-            if widths.len() < MIN_BOXES_PER_COLUMN {
-                return false;
-            }
-            widths.sort_by(|a, b| a.total_cmp(b));
-            widths[widths.len() / 2] >= 0.5 * (pair[1] - pair[0])
-        });
-        return if interval_ok { xs } else { vec![] };
+                .filter(|tb| {
+                    tb.bounds.left >= pair[0]
+                        && tb.bounds.right <= pair[1]
+                        && tb.bounds.right - tb.bounds.left >= 0.5 * span
+                })
+                .count()
+                >= MIN_BOXES_PER_COLUMN
+        })
+    };
+    let candidates: Vec<f64> = centers.iter().map(|(c, _)| c).copied().collect();
+    let subsets: Vec<Vec<usize>> = match candidates.len() {
+        3 => vec![
+            vec![0, 1, 2],
+            vec![0, 1],
+            vec![0, 2],
+            vec![1, 2],
+            vec![0],
+            vec![1],
+            vec![2],
+        ],
+        2 => vec![vec![0, 1], vec![0], vec![1]],
+        _ => vec![vec![0]],
+    };
+    for subset in subsets {
+        let mut xs: Vec<f64> = subset.iter().map(|&i| candidates[i]).collect();
+        xs.sort_by(|a, b| a.total_cmp(b));
+        if prose_intervals(&xs) {
+            return xs;
+        }
     }
-
-    let mut gutters: Vec<f64> = centers.into_iter().map(|(c, _)| c).collect();
-    gutters.sort_by(|a, b| a.total_cmp(b));
-    gutters
+    vec![]
 }
 
 /// Does a ruled grid (≥2 vertical and ≥2 horizontal segments) cover
