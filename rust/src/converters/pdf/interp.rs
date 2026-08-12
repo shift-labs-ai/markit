@@ -600,6 +600,16 @@ impl<'a> Interp<'a> {
         let mut text = String::with_capacity(bytes.len());
         let mut advance = 0.0f64; // text-space units (pre-scale)
 
+        // Typewriter-style tables draw a whole row as ONE string with
+        // runs of spaces as column separators; the intra-string
+        // geometry would be lost in a single item. Track runs of ≥2
+        // space glyphs as split marks:
+        // (part_end_len, part_end_adv, next_start_len, next_start_adv).
+        let mut split_marks: Vec<(usize, f64, usize, f64)> = Vec::new();
+        let mut space_run = 0usize;
+        let mut run_start_len = 0usize;
+        let mut run_start_adv = 0.0f64;
+
         // Per-code work, streamed — no per-operator Vec of codes. Only
         // the CJK path materializes (variable-length decode).
         let mut per_code = |code: u32, is_space_byte: bool, uni_override: Option<char>| {
@@ -615,6 +625,8 @@ impl<'a> Interp<'a> {
                     500.0
                 }
             };
+            let pre_adv = advance;
+            let pre_len = text.len();
             advance += (w / 1000.0 * self.ts.size
                 + self.ts.char_spacing
                 + if is_space_byte {
@@ -651,6 +663,32 @@ impl<'a> Interp<'a> {
                 text.push_str(s);
             } else if let Some(c) = font.to_unicode_simple[code as usize & 0xff] {
                 text.push(c);
+            }
+
+            // Space-run tracking for the column splitter: a run of ≥2
+            // spaces, or a single space stretched past 0.75em by
+            // word-spacing (the tabular-Tw trick), separates columns.
+            if text.len() != pre_len {
+                let piece = &text.as_bytes()[pre_len..];
+                if piece == b" " {
+                    if advance - pre_adv > 0.75 * self.ts.size {
+                        if pre_len > 0 {
+                            split_marks.push((pre_len, pre_adv, text.len(), advance));
+                        }
+                        space_run = 0;
+                    } else {
+                        if space_run == 0 {
+                            run_start_len = pre_len;
+                            run_start_adv = pre_adv;
+                        }
+                        space_run += 1;
+                    }
+                } else {
+                    if space_run >= 2 && run_start_len > 0 {
+                        split_marks.push((run_start_len, run_start_adv, pre_len, pre_adv));
+                    }
+                    space_run = 0;
+                }
             }
         };
 
@@ -726,17 +764,47 @@ impl<'a> Interp<'a> {
             return;
         }
 
-        self.items.push(RawItem {
-            text,
-            x: box_x0,
-            y: box_y0,
-            width: (box_x1 - box_x0).max(0.01),
-            height: (box_y1 - box_y0).max(0.01),
-            // Preserve the established integer-size normalization; heading detection
-            // clusters by size, so match that quantization.
-            font_size: (size_dev as i32) as f64,
-            is_bold: font.is_bold,
-        });
+        if split_marks.is_empty() || font.vertical {
+            self.items.push(RawItem {
+                text,
+                x: box_x0,
+                y: box_y0,
+                width: (box_x1 - box_x0).max(0.01),
+                height: (box_y1 - box_y0).max(0.01),
+                // Preserve the established integer-size normalization; heading detection
+                // clusters by size, so match that quantization.
+                font_size: (size_dev as i32) as f64,
+                is_bold: font.is_bold,
+            });
+            return;
+        }
+
+        // Emit one item per multi-space-separated part, each with its
+        // own advance-range geometry.
+        let size = self.ts.size.max(1e-9);
+        let mut seg_len = 0usize;
+        let mut seg_adv = 0.0f64;
+        let emit = |items: &mut Vec<RawItem>, t: &str, a0: f64, a1: f64| {
+            if t.trim().is_empty() {
+                return;
+            }
+            let (x0, y0, x1, y1) = trm.rect_bbox(a0 / size, -0.20, a1 / size, 1.0);
+            items.push(RawItem {
+                text: t.to_string(),
+                x: x0,
+                y: y0,
+                width: (x1 - x0).max(0.01),
+                height: (y1 - y0).max(0.01),
+                font_size: (size_dev as i32) as f64,
+                is_bold: font.is_bold,
+            });
+        };
+        for &(end_len, end_adv, next_len, next_adv) in &split_marks {
+            emit(&mut self.items, &text[seg_len..end_len], seg_adv, end_adv);
+            seg_len = next_len;
+            seg_adv = next_adv;
+        }
+        emit(&mut self.items, &text[seg_len..], seg_adv, advance);
     }
 
     fn clear_path(&mut self) {

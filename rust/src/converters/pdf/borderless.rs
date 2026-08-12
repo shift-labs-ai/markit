@@ -189,6 +189,196 @@ fn cluster_columns(rows: &[&Row]) -> Option<Vec<(f64, f64)>> {
     Some(columns)
 }
 
+/// Tolerance for edge clustering across rows.
+const EDGE_CLUSTER_TOLERANCE: f64 = 3.0;
+
+/// Column reconstruction for aligned tables the projection profile
+/// cannot split: right-aligned numeric columns whose entries sit
+/// closer than a cell gap. Box EDGES still align tightly across rows
+/// — right edges for numeric columns, left edges for labels. Cluster
+/// both, keep anchors hit by most rows, deduplicate anchors that
+/// describe the same boxes, and assign each box to its matched anchor
+/// (unmatched boxes, e.g. the second word of a label, join the
+/// previous box's column).
+/// One raw box of the run: (row index, left, right, text).
+type EdgeBox = (usize, f64, f64, String);
+
+fn edge_aligned_body(rows: &[&Row]) -> Option<BuiltBody> {
+    // Per raw box, in row order.
+    let mut boxes: Vec<EdgeBox> = Vec::new();
+    let mut voting_rows = 0usize;
+    for (ri, row) in rows.iter().enumerate() {
+        if row.boxes.len() >= 2 {
+            voting_rows += 1;
+        }
+        for tb in &row.boxes {
+            boxes.push((ri, tb.bounds.left, tb.bounds.right, tb.text.clone()));
+        }
+    }
+    if voting_rows < 3 {
+        return None;
+    }
+
+    // Cluster one edge kind; return (anchor, member box indices).
+    let cluster = |edge_of: &dyn Fn(&EdgeBox) -> f64| -> Vec<(f64, Vec<usize>)> {
+        let mut order: Vec<usize> = (0..boxes.len()).collect();
+        order.sort_by(|&a, &b| edge_of(&boxes[a]).total_cmp(&edge_of(&boxes[b])));
+        let mut out: Vec<(f64, Vec<usize>)> = Vec::new();
+        for i in order {
+            let e = edge_of(&boxes[i]);
+            match out.last_mut() {
+                Some((anchor, members)) if (e - *anchor).abs() <= EDGE_CLUSTER_TOLERANCE => {
+                    // Running mean keeps the anchor centered.
+                    *anchor = (*anchor * members.len() as f64 + e) / (members.len() + 1) as f64;
+                    members.push(i);
+                }
+                _ => out.push((e, vec![i])),
+            }
+        }
+        out
+    };
+
+    let min_hits = (voting_rows * 6).div_ceil(10);
+    let mut anchors: Vec<(f64, Vec<usize>)> = Vec::new();
+    for (anchor, members) in cluster(&|b| b.2).into_iter().chain(cluster(&|b| b.1)) {
+        let distinct_rows: std::collections::HashSet<usize> =
+            members.iter().map(|&i| boxes[i].0).collect();
+        if distinct_rows.len() >= min_hits {
+            anchors.push((anchor, members));
+        }
+    }
+    // Deduplicate anchors describing the same boxes (a fixed-width
+    // numeric column clusters on BOTH edges): larger membership wins.
+    anchors.sort_by_key(|a| std::cmp::Reverse(a.1.len()));
+    let mut kept: Vec<(f64, Vec<usize>)> = Vec::new();
+    for (anchor, members) in anchors {
+        let mset: std::collections::HashSet<usize> = members.iter().copied().collect();
+        let overlaps = kept.iter().any(|(_, km)| {
+            let shared = km.iter().filter(|i| mset.contains(i)).count();
+            shared * 2 > mset.len().min(km.len())
+        });
+        if !overlaps {
+            kept.push((anchor, members));
+        }
+    }
+    if kept.len() < MIN_COLS || kept.len() > MAX_COLS {
+        return None;
+    }
+    kept.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+    // Repeated multi-word cells ("TAM 107" every row) align on every
+    // word edge and would split into phantom columns. Their tell: the
+    // gap between the word boxes is CONSTANT across rows (identical
+    // strings), while real column gaps vary with entry width. Merge
+    // adjacent anchors joined by tight constant gaps.
+    loop {
+        let mut merged_any = false;
+        for ci in 0..kept.len().saturating_sub(1) {
+            let left_members: std::collections::HashMap<usize, usize> =
+                kept[ci].1.iter().map(|&i| (boxes[i].0, i)).collect();
+            let mut gaps: Vec<f64> = Vec::new();
+            for &ri in &kept[ci + 1].1 {
+                if let Some(&li) = left_members.get(&boxes[ri].0) {
+                    gaps.push(boxes[ri].1 - boxes[li].2);
+                }
+            }
+            if gaps.len() >= 3 {
+                let lo = gaps.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+                let hi = gaps.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+                if hi - lo <= 1.0 && hi < 8.0 {
+                    let right = kept.remove(ci + 1);
+                    kept[ci].1.extend(right.1);
+                    merged_any = true;
+                    break;
+                }
+            }
+        }
+        if !merged_any {
+            break;
+        }
+    }
+    if kept.len() < MIN_COLS {
+        return None;
+    }
+
+    // Box -> column: matched anchor, else inherit the previous box's
+    // column in the row (multi-word cells), else nearest anchor.
+    let mut column_of_box: Vec<Option<usize>> = vec![None; boxes.len()];
+    for (ci, (_, members)) in kept.iter().enumerate() {
+        for &i in members {
+            column_of_box[i] = Some(ci);
+        }
+    }
+    let mut cells_grid: Vec<Vec<Option<String>>> = vec![vec![None; kept.len()]; rows.len()];
+    let mut prev_row = usize::MAX;
+    let mut prev_col = 0usize;
+    for (i, b) in boxes.iter().enumerate() {
+        let column = match column_of_box[i] {
+            Some(c) => c,
+            None if b.0 == prev_row => prev_col,
+            None => {
+                let mut best = 0usize;
+                let mut best_d = f64::INFINITY;
+                for (ci, (anchor, _)) in kept.iter().enumerate() {
+                    let d = (b.2 - anchor).abs().min((b.1 - anchor).abs());
+                    if d < best_d {
+                        best_d = d;
+                        best = ci;
+                    }
+                }
+                best
+            }
+        };
+        prev_row = b.0;
+        prev_col = column;
+        match &mut cells_grid[b.0][column] {
+            Some(existing) => {
+                existing.push(' ');
+                existing.push_str(&b.3);
+            }
+            slot @ None => *slot = Some(b.3.clone()),
+        }
+    }
+
+    // Synthetic non-overlapping extents, clipped at midpoints between
+    // adjacent anchors (header absorption keys on centers).
+    let mut extents: Vec<(f64, f64)> = kept
+        .iter()
+        .map(|(_, members)| {
+            let lo = members
+                .iter()
+                .map(|&i| boxes[i].1)
+                .fold(f64::INFINITY, f64::min);
+            let hi = members
+                .iter()
+                .map(|&i| boxes[i].2)
+                .fold(f64::NEG_INFINITY, f64::max);
+            (lo, hi)
+        })
+        .collect();
+    for i in 0..extents.len() - 1 {
+        if extents[i].1 > extents[i + 1].0 {
+            let mid = (kept[i].0 + kept[i + 1].0) / 2.0;
+            extents[i].1 = extents[i].1.min(mid);
+            extents[i + 1].0 = extents[i + 1].0.max(mid);
+        }
+    }
+
+    let mut cells: Vec<TableCell> = Vec::new();
+    for (row_index, row_cells) in cells_grid.into_iter().enumerate() {
+        for (column, text) in row_cells.into_iter().enumerate() {
+            cells.push(TableCell {
+                row: row_index,
+                col: column,
+                text: text.unwrap_or_default(),
+                row_span: 1,
+                col_span: 1,
+            });
+        }
+    }
+    Some((extents, cells))
+}
+
 fn column_of(columns: &[(f64, f64)], left: f64, right: f64) -> Option<usize> {
     let center = (left + right) / 2.0;
     columns
@@ -350,6 +540,23 @@ pub fn detect_borderless_tables(
                     if finer.len() > columns.len() {
                         start += 1;
                         continue;
+                    }
+                }
+            }
+            // Right-aligned numeric tables defeat the projection when
+            // entries sit closer than a cell gap; box-edge alignment
+            // across rows recovers the true columns. Prefer it only
+            // when it finds strictly finer structure.
+            if let Some((ecols, ecells)) = edge_aligned_body(&run) {
+                if ecols.len() > columns.len() {
+                    let efilled = ecells.iter().filter(|c| !c.text.is_empty()).count();
+                    let rows_in_run = j - start;
+                    let enough_rows =
+                        rows_in_run >= MIN_ROWS_NARROW || ecols.len() >= MIN_COLS_FOR_SHORT_RUN;
+                    let total = rows_in_run * ecols.len();
+                    if enough_rows && (efilled as f64) >= MIN_FILL_RATIO * total as f64 {
+                        built = Some((ecols, ecells));
+                        break;
                     }
                 }
             }
