@@ -7,12 +7,12 @@ liteparse 2.11.1 (no OCR, markdown mode, one warm batch process).
 
 |  | markit | liteparse |
 |---|---:|---:|
-| **Quality (macro)** | **40.8% ± 0.9** | 38.8% ± 0.9 |
+| **Quality (macro)** | **42.8% ± 1.0** | 38.8% ± 0.9 |
 | **Speed (1,403 PDFs, 1 core)** | **1.08 s · 1,300 docs/s** | 5.9 s · 237 docs/s |
 | **Speed (8 threads)** | **0.26 s · 5,470 docs/s** | n/a (single-threaded CLI) |
 | Conversion failures | 0 | 0 |
 
-markit leads quality by **+2.0 points, outside the confidence
+markit leads quality by **+4.0 points, far outside the confidence
 interval**, and is **5.5× faster per core** (both tools measured
 single-threaded: liteparse `batch-parse` runs 5.42s user / 5.93s
 real, ~1 core). Conversion is stateless per document, so markit
@@ -24,13 +24,13 @@ Head-to-head by category:
 
 | Category | markit | liteparse |
 |---|---:|---:|
-| headers_footers | **73.6** | 56.3 |
-| long_tiny_text | **36.9** | 23.8 |
-| arxiv_math | **0.6** | 0.0 |
+| headers_footers | **76.1** | 56.3 |
+| long_tiny_text | **37.1** | 23.8 |
+| arxiv_math | **5.9** | 0.0 |
 | old_scans | 13.3 | 13.3 |
 | old_scans_math | 0.0 | 0.0 |
-| multi_column | 58.1 | **65.3** |
-| table_tests | 43.8 | **51.5** |
+| multi_column | 58.9 | **65.3** |
+| table_tests | **51.1** | 51.5 |
 
 Measurement notes: markit timed in-process over the corpus
 (examples/corpus_bench, one warm process, sequential); liteparse via
