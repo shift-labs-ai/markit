@@ -6,6 +6,8 @@
 //! inside a line, converts them to LaTeX, and wraps them in `$…$`;
 //! the sentinels are stripped from everything else.
 
+use unicode_normalization::UnicodeNormalization;
+
 use super::shared::{SUB_CLOSE, SUB_OPEN, SUP_CLOSE, SUP_OPEN};
 
 /// Is this character strong evidence of mathematics?
@@ -22,7 +24,7 @@ fn is_strong_math(c: char) -> bool {
         | '\u{2032}' | '\u{2033}' // primes
         | '\u{2016}'              // double bar
         | '\u{00B1}' | '\u{00D7}' | '\u{00F7}' | '\u{00AC}'
-        | '\u{0338}'              // negation slash
+        | '\u{0300}'..='\u{036F}' // combining mathematical accents
     )
     // Script sentinels are NOT strong on their own: footnote markers
     // in prose carry them too. They only convert inside a run that
@@ -135,10 +137,41 @@ fn is_weak_math_word(s: &str) -> bool {
 }
 
 /// Convert one math run (already known mathematical) to LaTeX.
+fn accent_command(c: char) -> Option<&'static str> {
+    Some(match c {
+        '\u{0300}' => "grave",
+        '\u{0301}' => "acute",
+        '\u{0302}' => "hat",
+        '\u{0303}' => "tilde",
+        '\u{0304}' => "bar",
+        '\u{0306}' => "breve",
+        '\u{0307}' => "dot",
+        '\u{0308}' => "ddot",
+        '\u{030A}' => "mathring",
+        '\u{030C}' => "check",
+        _ => return None,
+    })
+}
+
 fn to_latex(run: &str) -> String {
-    let mut out = String::with_capacity(run.len() * 2);
+    let normalized: String = run.nfd().collect();
+    let mut out = String::with_capacity(normalized.len() * 2);
     let mut pending_not = false;
-    for c in run.chars() {
+    let mut chars = normalized.chars().peekable();
+    while let Some(c) = chars.next() {
+        // PDF accent glyphs become combining marks during extraction.
+        // Fold base+mark into one structural TeX atom.
+        if let Some(&mark) = chars.peek() {
+            if let Some(command) = accent_command(mark) {
+                chars.next();
+                out.push('\\');
+                out.push_str(command);
+                out.push('{');
+                out.push(c);
+                out.push('}');
+                continue;
+            }
+        }
         if c == '\u{0338}' {
             pending_not = true;
             continue;
@@ -479,6 +512,12 @@ mod tests {
         let out = render_line_with_math("x ̸= y ∈ Z", ident);
         assert!(out.contains(r"\not"), "{out}");
         assert!(out.contains(r"\in"), "{out}");
+    }
+
+    #[test]
+    fn accented_variables_become_latex_accents_inside_math() {
+        let out = render_line_with_math("K̃ ∩ P̃", ident);
+        assert_eq!(out, r"$\tilde{K} \cap \tilde{P}$");
     }
 
     #[test]
