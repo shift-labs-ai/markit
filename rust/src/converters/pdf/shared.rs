@@ -41,6 +41,15 @@ pub(crate) struct RawTextItemPub {
     pub is_bold: bool,
 }
 
+/// Private-use sentinels wrapping super/subscript runs, attached at
+/// merge time (the only point where per-item baseline geometry still
+/// exists) and consumed by the math emitter in render. Render strips
+/// them from any non-math context.
+pub(crate) const SUP_OPEN: char = '\u{E000}';
+pub(crate) const SUP_CLOSE: char = '\u{E001}';
+pub(crate) const SUB_OPEN: char = '\u{E002}';
+pub(crate) const SUB_CLOSE: char = '\u{E003}';
+
 fn script_same_line(a: &RawTextItem, b: &RawTextItem) -> bool {
     let (small, large) = if a.font_size <= b.font_size {
         (a, b)
@@ -239,7 +248,37 @@ fn merge_into_words(raws: &[RawTextItem]) -> Vec<RawTextItem> {
             } else {
                 ""
             };
-            cur.text = format!("{}{}{}", cur.text, sep, next.text);
+            // A script item (smaller font, baseline shifted against the
+            // line) records its role for the math emitter: raised →
+            // superscript, lowered → subscript. Adjacent same-role
+            // runs coalesce.
+            let next_text: std::borrow::Cow<str> = if script_same_line(&cur, next)
+                && next.font_size < cur.font_size
+                && !next.text.trim().is_empty()
+            {
+                let mid = cur.y + cur.height * 0.5;
+                let (open, close_c) = if next.y >= cur.y + cur.height * 0.28 {
+                    (SUP_OPEN, SUP_CLOSE)
+                } else if next.y + next.height <= mid + cur.height * 0.12 {
+                    (SUB_OPEN, SUB_CLOSE)
+                } else {
+                    (' ', ' ')
+                };
+                if open != ' ' {
+                    if sep.is_empty() && cur.text.ends_with(close_c) {
+                        // Coalesce with the previous script run.
+                        cur.text.pop();
+                        std::borrow::Cow::Owned(format!("{}{}", next.text, close_c))
+                    } else {
+                        std::borrow::Cow::Owned(format!("{}{}{}", open, next.text, close_c))
+                    }
+                } else {
+                    std::borrow::Cow::Borrowed(next.text.as_str())
+                }
+            } else {
+                std::borrow::Cow::Borrowed(next.text.as_str())
+            };
+            cur.text = format!("{}{}{}", cur.text, sep, next_text);
             cur.width = next.x + next.width - cur.x;
             cur.height = cur.height.max(next.height);
             cur.font_size = cur.font_size.max(next.font_size);

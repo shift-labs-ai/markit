@@ -65,13 +65,13 @@ fn escape_free_text(text: &str) -> String {
 }
 
 fn escape_pipes(text: &str) -> String {
-    normalize_full_width_ascii(text)
+    normalize_full_width_ascii(&super::mathml::strip_script_sentinels(text))
         .replace('|', "\\|")
         .replace('\n', "<br>")
 }
 
 fn escape_table_html(text: &str) -> String {
-    normalize_full_width_ascii(text)
+    normalize_full_width_ascii(&super::mathml::strip_script_sentinels(text))
         .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
@@ -537,12 +537,18 @@ pub fn render_page_content(
     // so that diagram labels released as free text don't skew the body size.
     let body_fs = modal_font_size(all_text_boxes.unwrap_or(free_text_boxes));
 
-    // Free text lines
+    // Free text lines. Math runs render as $LaTeX$; headings never
+    // carry math (their sentinels are stripped inside the renderer).
     for line in group_free_text_into_lines(free_text_boxes) {
         let prefix = heading_prefix(line.font_size, body_fs, line.is_bold);
+        let content = if prefix.is_empty() {
+            super::mathml::render_line_with_math(&line.text, escape_free_text)
+        } else {
+            escape_free_text(&super::mathml::strip_script_sentinels(&line.text))
+        };
         blocks.push(ContentBlock {
             top_y: line.top_y,
-            content: format!("{}{}", prefix, escape_free_text(&line.text)),
+            content: format!("{prefix}{content}"),
             is_tabular: prefix.is_empty() && line.is_tabular,
         });
     }
