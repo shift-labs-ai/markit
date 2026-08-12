@@ -34,11 +34,46 @@ fn has_strong_math(s: &str) -> bool {
 }
 
 /// May this word sit INSIDE a math run without being evidence itself?
-/// Short identifier/operator material: single letters, numbers, and
-/// operator punctuation.
+/// Short identifier/operator material, script-carrying words, and
+/// standard function names.
 fn is_weak_math_word(s: &str) -> bool {
-    if s.is_empty() || s.len() > 8 {
+    // Script structure always joins the run it sits in.
+    if s.chars()
+        .any(|c| matches!(c, SUP_OPEN | SUP_CLOSE | SUB_OPEN | SUB_CLOSE))
+    {
+        return true;
+    }
+    let n = s.chars().count();
+    if n == 0 || n > 8 {
         return false;
+    }
+    // Standard function names, possibly glued to parens.
+    let bare = s
+        .trim_end_matches(['(', ')', ',', '.', ';', ':'])
+        .trim_start_matches('(');
+    if matches!(
+        bare,
+        "sign"
+            | "sin"
+            | "cos"
+            | "tan"
+            | "log"
+            | "ln"
+            | "exp"
+            | "min"
+            | "max"
+            | "lim"
+            | "sup"
+            | "inf"
+            | "det"
+            | "tr"
+            | "dim"
+            | "deg"
+            | "mod"
+            | "argmin"
+            | "argmax"
+    ) {
+        return true;
     }
     let alpha_run = s.chars().filter(|c| c.is_ascii_alphabetic()).count();
     if alpha_run > 2 {
