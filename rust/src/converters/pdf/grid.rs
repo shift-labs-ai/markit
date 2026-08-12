@@ -235,6 +235,189 @@ fn build_h_line_only_table(
     Some((grid, consumed_ids))
 }
 
+/// Shared state for processing one page's line groups.
+struct GroupContext<'a> {
+    page_number: u32,
+    filtered_h: &'a [Segment],
+    filtered_v: &'a [Segment],
+    filtered_segments: &'a [Segment],
+    text_boxes: &'a [TextBox],
+    grids: Vec<TableGrid>,
+    grid_consumed_ids: Vec<Vec<String>>,
+    all_consumed_ids: Vec<String>,
+    all_consumed_set: HashSet<String>,
+}
+
+/// Merge the x-intervals of a group's horizontal lines into disjoint
+/// islands. Two tables sitting side by side produce two islands; a
+/// single table (or a table with a spanning caption rule) produces one.
+fn x_connectivity_islands(group_horiz: &[&Segment]) -> Vec<(f64, f64)> {
+    const JOIN_TOLERANCE: f64 = 10.0;
+    let mut intervals: Vec<(f64, f64)> = group_horiz
+        .iter()
+        .map(|s| (s.x1.min(s.x2), s.x1.max(s.x2)))
+        .collect();
+    intervals.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut islands: Vec<(f64, f64)> = Vec::new();
+    for (lo, hi) in intervals {
+        match islands.last_mut() {
+            Some(last) if lo <= last.1 + JOIN_TOLERANCE => {
+                last.1 = last.1.max(hi);
+            }
+            _ => islands.push((lo, hi)),
+        }
+    }
+    islands
+}
+
+/// Process one line group (optionally x-bounded to an island): full
+/// H+V grid, h-line-only inference, and the framed-box borderless
+/// retry.
+fn process_line_group(ctx: &mut GroupContext, y_lines: &[f64], x_lo: f64, x_hi: f64) {
+    let from_island = x_lo.is_finite();
+    let y_min = y_lines[y_lines.len() - 1];
+    let y_max = y_lines[0];
+
+    let group_verticals: Vec<Segment> = ctx
+        .filtered_v
+        .iter()
+        .filter(|s| {
+            let seg_min = s.y1.min(s.y2);
+            let seg_max = s.y1.max(s.y2);
+            seg_min < y_max - 1.5 && seg_max > y_min + 1.5 && s.x1 >= x_lo && s.x1 <= x_hi
+        })
+        .cloned()
+        .collect();
+
+    let group_x_lines = unique_sorted(
+        &group_verticals
+            .iter()
+            .flat_map(|s| vec![s.x1, s.x2])
+            .collect::<Vec<_>>(),
+    );
+
+    let in_x = |tb: &TextBox| -> bool {
+        let cx = (tb.bounds.left + tb.bounds.right) / 2.0;
+        cx >= x_lo && cx <= x_hi
+    };
+
+    if group_x_lines.len() < 2 {
+        if y_max - y_min < MIN_TABLE_HEIGHT {
+            return;
+        }
+
+        let group_horiz: Vec<&Segment> = ctx
+            .filtered_h
+            .iter()
+            .filter(|s| {
+                s.y1 >= y_min - 1.5
+                    && s.y1 <= y_max + 1.5
+                    && s.x1.min(s.x2) >= x_lo
+                    && s.x1.max(s.x2) <= x_hi
+            })
+            .collect();
+        if group_horiz.is_empty() {
+            return;
+        }
+
+        let hx_min = group_horiz
+            .iter()
+            .map(|s| s.x1.min(s.x2))
+            .fold(f64::INFINITY, f64::min);
+        let hx_max = group_horiz
+            .iter()
+            .map(|s| s.x1.max(s.x2))
+            .fold(f64::NEG_INFINITY, f64::max);
+
+        if let Some((grid, cids)) = build_h_line_only_table(
+            ctx.page_number,
+            y_lines,
+            hx_min,
+            hx_max,
+            ctx.text_boxes,
+            &ctx.all_consumed_set,
+        ) {
+            ctx.grids.push(grid);
+            ctx.all_consumed_set.extend(cids.iter().cloned());
+            ctx.all_consumed_ids.extend(cids.iter().cloned());
+            ctx.grid_consumed_ids.push(cids);
+        }
+        return;
+    }
+
+    if y_max - y_min < MIN_TABLE_HEIGHT {
+        return;
+    }
+
+    // Only boxes near the group's y-range can land in its cells or
+    // header row; splitting and ray-casting the whole page per group
+    // is quadratic on multi-table pages.
+    let group_boxes: Vec<TextBox> = ctx
+        .text_boxes
+        .iter()
+        .filter(|tb| {
+            let cy = (tb.bounds.top + tb.bounds.bottom) / 2.0;
+            cy >= y_min - 5.0 && cy <= y_max + 25.0 && in_x(tb)
+        })
+        .cloned()
+        .collect();
+    let (grid, cids) = build_table_grid(
+        ctx.page_number,
+        y_lines,
+        &group_x_lines,
+        ctx.filtered_segments,
+        &group_boxes,
+    );
+
+    // A one-column ruled grid is usually a framed box whose interior
+    // structure is drawn with whitespace, not rules (outer border
+    // only) — and fee-schedule layouts frame ONLY the value column,
+    // leaving the label column outside the rules entirely.
+    // Reconstruct from text alignment over every unconsumed box in
+    // the group's y-range; prefer it when it recovers real columns
+    // for most of the framed content.
+    if grid.cols <= 1 && !cids.is_empty() {
+        let candidate_boxes: Vec<TextBox> = ctx
+            .text_boxes
+            .iter()
+            .filter(|tb| {
+                let cy = (tb.bounds.top + tb.bounds.bottom) / 2.0;
+                cy >= y_min - 5.0
+                    && cy <= y_max + 5.0
+                    && in_x(tb)
+                    && !ctx.all_consumed_set.contains(&tb.id)
+            })
+            .cloned()
+            .collect();
+        let (bgrids, bconsumed) =
+            super::borderless::detect_borderless_tables(&candidate_boxes, ctx.page_number);
+        if bgrids.iter().any(|g| g.cols >= 2) && bconsumed.len() * 10 >= cids.len() * 6 {
+            for bgrid in bgrids {
+                ctx.grids.push(bgrid);
+                ctx.grid_consumed_ids.push(bconsumed.clone());
+            }
+            ctx.all_consumed_set.extend(bconsumed.iter().cloned());
+            ctx.all_consumed_ids.extend(bconsumed.iter().cloned());
+            return;
+        }
+    }
+
+    // Islands may only yield borderless reconstructions (the framed
+    // retry above): a figure sitting beside a table forms its own
+    // island too, and its axis lines build plausible-looking grids
+    // from scattered labels and captions. Before island splitting,
+    // such groups built one combined grid that the diagram veto
+    // rejected -- keep that outcome for raw ruled island grids.
+    if from_island {
+        return;
+    }
+
+    ctx.grids.push(grid);
+    ctx.all_consumed_set.extend(cids.iter().cloned());
+    ctx.all_consumed_ids.extend(cids.iter().cloned());
+    ctx.grid_consumed_ids.push(cids);
+}
+
 // ---------------------------------------------------------------------------
 // Pruning
 // ---------------------------------------------------------------------------
@@ -436,131 +619,54 @@ pub fn resolve_table_grids(
 
     let y_groups = split_y_lines_into_groups(&all_y_lines, &filtered_v);
 
-    let mut grids: Vec<TableGrid> = Vec::new();
-    let mut grid_consumed_ids: Vec<Vec<String>> = Vec::new();
-    let mut all_consumed_ids: Vec<String> = Vec::new();
-    let mut all_consumed_set: HashSet<String> = HashSet::new();
+    let mut ctx = GroupContext {
+        page_number,
+        filtered_h: &filtered_h,
+        filtered_v: &filtered_v,
+        filtered_segments: &filtered_segments,
+        text_boxes,
+        grids: Vec::new(),
+        grid_consumed_ids: Vec::new(),
+        all_consumed_ids: Vec::new(),
+        all_consumed_set: HashSet::new(),
+    };
 
     for y_lines in &y_groups {
         if y_lines.len() < 2 {
             continue;
         }
-
         let y_min = y_lines[y_lines.len() - 1];
         let y_max = y_lines[0];
 
-        let group_verticals: Vec<Segment> = filtered_v
+        // Side-by-side tables share a y-band but their h-lines never
+        // span the gap between them: split the group by x-connectivity
+        // and process each island as its own table.
+        let group_horiz: Vec<&Segment> = filtered_h
             .iter()
-            .filter(|s| {
-                let seg_min = s.y1.min(s.y2);
-                let seg_max = s.y1.max(s.y2);
-                seg_min < y_max - 1.5 && seg_max > y_min + 1.5
-            })
-            .cloned()
+            .filter(|s| s.y1 >= y_min - 1.5 && s.y1 <= y_max + 1.5)
             .collect();
-
-        let group_x_lines = unique_sorted(
-            &group_verticals
-                .iter()
-                .flat_map(|s| vec![s.x1, s.x2])
-                .collect::<Vec<_>>(),
-        );
-
-        if group_x_lines.len() < 2 {
-            if y_max - y_min < MIN_TABLE_HEIGHT {
-                continue;
-            }
-
-            let group_horiz: Vec<&Segment> = filtered_h
-                .iter()
-                .filter(|s| s.y1 >= y_min - 1.5 && s.y1 <= y_max + 1.5)
-                .collect();
-            if group_horiz.is_empty() {
-                continue;
-            }
-
-            let hx_min = group_horiz
-                .iter()
-                .map(|s| s.x1.min(s.x2))
-                .fold(f64::INFINITY, f64::min);
-            let hx_max = group_horiz
-                .iter()
-                .map(|s| s.x1.max(s.x2))
-                .fold(f64::NEG_INFINITY, f64::max);
-
-            if let Some((grid, cids)) = build_h_line_only_table(
-                page_number,
-                y_lines,
-                hx_min,
-                hx_max,
-                text_boxes,
-                &all_consumed_set,
-            ) {
-                grids.push(grid);
-                all_consumed_set.extend(cids.iter().cloned());
-                all_consumed_ids.extend(cids.iter().cloned());
-                grid_consumed_ids.push(cids);
-            }
-            continue;
-        }
-
-        if y_max - y_min < MIN_TABLE_HEIGHT {
-            continue;
-        }
-
-        // Only boxes near the group's y-range can land in its cells or
-        // header row; splitting and ray-casting the whole page per group
-        // is quadratic on multi-table pages.
-        let group_boxes: Vec<TextBox> = text_boxes
-            .iter()
-            .filter(|tb| {
-                let cy = (tb.bounds.top + tb.bounds.bottom) / 2.0;
-                cy >= y_min - 5.0 && cy <= y_max + 25.0
-            })
-            .cloned()
-            .collect();
-        let (grid, cids) = build_table_grid(
-            page_number,
-            y_lines,
-            &group_x_lines,
-            &filtered_segments,
-            &group_boxes,
-        );
-
-        // A one-column ruled grid is usually a framed box whose interior
-        // structure is drawn with whitespace, not rules (outer border
-        // only) — and fee-schedule layouts frame ONLY the value column,
-        // leaving the label column outside the rules entirely.
-        // Reconstruct from text alignment over every unconsumed box in
-        // the group's y-range; prefer it when it recovers real columns
-        // for most of the framed content.
-        if grid.cols <= 1 && !cids.is_empty() {
-            let candidate_boxes: Vec<TextBox> = text_boxes
-                .iter()
-                .filter(|tb| {
-                    let cy = (tb.bounds.top + tb.bounds.bottom) / 2.0;
-                    cy >= y_min - 5.0 && cy <= y_max + 5.0 && !all_consumed_set.contains(&tb.id)
-                })
-                .cloned()
-                .collect();
-            let (bgrids, bconsumed) =
-                super::borderless::detect_borderless_tables(&candidate_boxes, page_number);
-            if bgrids.iter().any(|g| g.cols >= 2) && bconsumed.len() * 10 >= cids.len() * 6 {
-                for bgrid in bgrids {
-                    grids.push(bgrid);
-                    grid_consumed_ids.push(bconsumed.clone());
+        let islands = x_connectivity_islands(&group_horiz);
+        if islands.len() >= 2 {
+            for (x_lo, x_hi) in &islands {
+                let ys: Vec<f64> = group_horiz
+                    .iter()
+                    .filter(|s| s.x1.min(s.x2) >= x_lo - 1.5 && s.x1.max(s.x2) <= x_hi + 1.5)
+                    .flat_map(|s| [s.y1, s.y2])
+                    .collect();
+                let mut sub_y = unique_sorted(&ys);
+                sub_y.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+                if sub_y.len() >= 2 {
+                    process_line_group(&mut ctx, &sub_y, *x_lo - 2.0, *x_hi + 2.0);
                 }
-                all_consumed_set.extend(bconsumed.iter().cloned());
-                all_consumed_ids.extend(bconsumed.iter().cloned());
-                continue;
             }
+            continue;
         }
 
-        grids.push(grid);
-        all_consumed_set.extend(cids.iter().cloned());
-        all_consumed_ids.extend(cids.iter().cloned());
-        grid_consumed_ids.push(cids);
+        process_line_group(&mut ctx, y_lines, f64::NEG_INFINITY, f64::INFINITY);
     }
+
+    let grids = ctx.grids;
+    let grid_consumed_ids = ctx.grid_consumed_ids;
 
     // Filter out grids that look like vector diagrams, not data tables.
     let mut filtered_grids: Vec<TableGrid> = Vec::new();
