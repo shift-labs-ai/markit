@@ -322,7 +322,15 @@ fn to_latex(run: &str) -> String {
             '#' => r"\# ",
             '~' => r"\sim ",
             other => {
-                if let Some(bb) = blackboard(other) {
+                if let Some((letter, bold)) = mathematical_latin(other) {
+                    if bold {
+                        out.push_str(r"\mathbf{");
+                        out.push(letter);
+                        out.push('}');
+                    } else {
+                        out.push(letter);
+                    }
+                } else if let Some(bb) = blackboard(other) {
                     out.push_str(r"\mathbb{");
                     out.push(bb);
                     out.push('}');
@@ -362,6 +370,31 @@ fn to_latex(run: &str) -> String {
         }
     }
     tidy
+}
+
+/// Common contiguous Latin ranges in Mathematical Alphanumeric Symbols.
+/// Plain math letters are already italic in TeX; only bold needs a command.
+fn mathematical_latin(c: char) -> Option<(char, bool)> {
+    let v = c as u32;
+    let ranges = [
+        (0x1D400, true, true),   // bold uppercase
+        (0x1D41A, false, true),  // bold lowercase
+        (0x1D434, true, false),  // italic uppercase
+        (0x1D44E, false, false), // italic lowercase
+        (0x1D468, true, true),   // bold italic uppercase
+        (0x1D482, false, true),  // bold italic lowercase
+        (0x1D5A0, true, false),  // sans uppercase
+        (0x1D5BA, false, false), // sans lowercase
+        (0x1D5D4, true, true),   // sans bold uppercase
+        (0x1D5EE, false, true),  // sans bold lowercase
+    ];
+    for (start, uppercase, bold) in ranges {
+        if (start..start + 26).contains(&v) {
+            let base = if uppercase { 'A' } else { 'a' } as u32;
+            return char::from_u32(base + v - start).map(|letter| (letter, bold));
+        }
+    }
+    None
 }
 
 fn blackboard(c: char) -> Option<char> {
@@ -512,6 +545,12 @@ mod tests {
         let out = render_line_with_math("x ̸= y ∈ Z", ident);
         assert!(out.contains(r"\not"), "{out}");
         assert!(out.contains(r"\in"), "{out}");
+    }
+
+    #[test]
+    fn mathematical_alphanumeric_letters_become_latex_styles() {
+        let out = render_line_with_math("𝐀 ∈ 𝑉", ident);
+        assert_eq!(out, r"$\mathbf{A} \in V$");
     }
 
     #[test]
