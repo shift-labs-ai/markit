@@ -7,12 +7,12 @@ liteparse 2.11.1 (no OCR, markdown mode, one warm batch process).
 
 |  | markit | liteparse |
 |---|---:|---:|
-| **Quality (macro)** | **42.8% ± 1.0** | 38.8% ± 0.9 |
+| **Quality (macro)** | **44.5% ± 1.0** | 38.8% ± 0.9 |
 | **Speed (1,403 PDFs, 1 core)** | **1.08 s · 1,300 docs/s** | 5.9 s · 237 docs/s |
 | **Speed (8 threads)** | **0.26 s · 5,470 docs/s** | n/a (single-threaded CLI) |
 | Conversion failures | 0 | 0 |
 
-markit leads quality by **+4.0 points, far outside the confidence
+markit leads quality by **+5.7 points, far outside the confidence
 interval**, and is **5.5× faster per core** (both tools measured
 single-threaded: liteparse `batch-parse` runs 5.42s user / 5.93s
 real, ~1 core). Conversion is stateless per document, so markit
@@ -26,7 +26,7 @@ Head-to-head by category:
 |---|---:|---:|
 | headers_footers | **76.1** | 56.3 |
 | long_tiny_text | **37.1** | 23.8 |
-| arxiv_math | **5.9** | 0.0 |
+| arxiv_math | **19.9** | 0.0 |
 | old_scans | 13.3 | 13.3 |
 | old_scans_math | 0.0 | 0.0 |
 | multi_column | 58.9 | **65.3** |
@@ -39,10 +39,9 @@ best of 3 each, same machine, same corpus. Honest asymmetry: their
 number includes process startup and per-file logging; ours excludes
 startup. At a 4.4 s margin the ranking is robust to both.
 
-Remaining quality pools (to extend the lead): multi_column magazine
-layouts (−~100 head-to-head), tables cell structure (−~95);
-old_scans/math capped without OCR / formula reconstruction for both
-tools.
+Remaining quality pools (to extend the lead): arxiv_math structural
+fractions/radicals/accents, multi_column magazine layouts, and residual
+table cell structure; old_scans/math remains capped without OCR.
 
 liteparse artifacts: /tmp/liteparse-venv (pip 2.11.1),
 /tmp/liteparse-out (their outputs), staged as bench candidate
@@ -52,7 +51,8 @@ Caveats carried forward:
 - The 100% baseline is still partly comment-only outputs (image
   placeholders) passing the alphanumeric check — all 98 old-scan outputs,
   plus 21/36 old-scan-math and ~23/62 long-tiny-text.
-- Speed is not quality-adjusted (no OCR, near-zero formula reconstruction).
+- Speed is not quality-adjusted (no OCR). markit's model-free math
+  reconstruction scores 19.9%; liteparse scores 0.0%.
 
 ## Targets
 
