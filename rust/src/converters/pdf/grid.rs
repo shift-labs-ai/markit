@@ -400,6 +400,21 @@ fn process_line_group(ctx: &mut GroupContext, y_lines: &[f64], x_lo: f64, x_hi: 
             ctx.all_consumed_ids.extend(bconsumed.iter().cloned());
             return;
         }
+        // The interior may sit tighter than any cell gap (ID |
+        // description lists): the frame vouches for the region, so
+        // edge-aligned reconstruction may run without the tabular-row
+        // gate.
+        if let Some((egrid, econsumed)) =
+            super::borderless::detect_edge_aligned_table(&candidate_boxes, ctx.page_number)
+        {
+            if egrid.cols >= 2 && econsumed.len() * 10 >= cids.len() * 6 {
+                ctx.grids.push(egrid);
+                ctx.all_consumed_set.extend(econsumed.iter().cloned());
+                ctx.all_consumed_ids.extend(econsumed.iter().cloned());
+                ctx.grid_consumed_ids.push(econsumed);
+                return;
+            }
+        }
     }
 
     // Islands may only yield borderless reconstructions (the framed

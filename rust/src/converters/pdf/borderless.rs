@@ -379,6 +379,48 @@ fn edge_aligned_body(rows: &[&Row]) -> Option<BuiltBody> {
     Some((extents, cells))
 }
 
+/// Edge-aligned reconstruction for a KNOWN table region (a ruled
+/// frame whose interior columns are drawn with whitespace tighter
+/// than a cell gap — e.g. resolution-ID | description lists). The
+/// caller vouches for the region being tabular; the usual tabular-row
+/// gate is skipped, but fill and column-count gates still apply.
+pub(crate) fn detect_edge_aligned_table(
+    text_boxes: &[TextBox],
+    page_number: u32,
+) -> Option<(TableGrid, Vec<String>)> {
+    let rows = group_rows(text_boxes);
+    if rows.len() < 3 {
+        return None;
+    }
+    let run: Vec<&Row> = rows.iter().collect();
+    let (columns, cells) = edge_aligned_body(&run)?;
+    let filled = cells.iter().filter(|c| !c.text.is_empty()).count();
+    let total = rows.len() * columns.len();
+    if (filled as f64) < MIN_FILL_RATIO * total as f64 {
+        return None;
+    }
+    let top_y = text_boxes
+        .iter()
+        .map(|tb| tb.bounds.top)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let consumed: Vec<String> = rows
+        .iter()
+        .flat_map(|row| row.boxes.iter().map(|tb| tb.id.clone()))
+        .collect();
+    Some((
+        TableGrid {
+            page_number,
+            rows: rows.len(),
+            cols: columns.len(),
+            cells,
+            warnings: Vec::new(),
+            top_y,
+            is_borderless: true,
+        },
+        consumed,
+    ))
+}
+
 fn column_of(columns: &[(f64, f64)], left: f64, right: f64) -> Option<usize> {
     let center = (left + right) / 2.0;
     columns
