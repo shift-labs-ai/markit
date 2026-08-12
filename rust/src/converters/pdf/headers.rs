@@ -419,18 +419,6 @@ fn body_font_size(page: &PageContent) -> f64 {
     sizes[sizes.len() / 2]
 }
 
-/// Per-page chrome detection: position + isolation + pattern signature.
-///
-/// Complements `strip_headers_footers`: the repetition detector needs ≥5
-/// pages, so single pages (and inconsistent per-page chrome) slip
-/// through. A box is stripped when it sits fully inside the top or
-/// bottom band, matches an unambiguous chrome pattern, is short, and is
-/// separated from the nearest body-side non-chrome line by at least one
-/// body-line height. Titles and headings never match the pattern gate,
-/// so they survive regardless of position.
-///
-/// Coordinates are PDF user space: Y grows upward, `bounds.top` is the
-/// numerically larger edge.
 /// A standalone page-number line: bare digits or a roman folio.
 fn is_lone_folio(text: &str) -> bool {
     let t = text.trim();
@@ -444,6 +432,18 @@ fn is_lone_folio(text: &str) -> bool {
 /// Edge fraction of page height where extreme-most folios always strip.
 const SP_EDGE_RATIO: f64 = 0.1;
 
+/// Per-page chrome detection: position + isolation + pattern signature.
+///
+/// Complements `strip_headers_footers`: the repetition detector needs ≥5
+/// pages, so single pages (and inconsistent per-page chrome) slip
+/// through. A box is stripped when it sits fully inside the top or
+/// bottom band, matches an unambiguous chrome pattern, is short, and is
+/// separated from the nearest body-side non-chrome line by at least one
+/// body-line height. Titles and headings never match the pattern gate,
+/// so they survive regardless of position.
+///
+/// Coordinates are PDF user space: Y grows upward, `bounds.top` is the
+/// numerically larger edge.
 pub fn strip_single_page_chrome(pages: &mut [PageContent]) {
     for page in pages.iter_mut() {
         let h = page.page_height;
@@ -454,6 +454,7 @@ pub fn strip_single_page_chrome(pages: &mut [PageContent]) {
         let bottom_band_ceil = h * SP_BAND_RATIO;
         let body_size = body_font_size(page);
         let required_gap = SP_ISOLATION_GAP_RATIO * if body_size > 0.0 { body_size } else { 10.0 };
+        let page_lines = count_lines(page.text_boxes.iter());
 
         // Band boxes chained into groups: consecutive lines (by Y) whose
         // inter-line gap is below the isolation gap belong together. A
@@ -495,21 +496,15 @@ pub fn strip_single_page_chrome(pages: &mut [PageContent]) {
             groups.push(cur);
 
             for group in groups {
-                // The cap is on visual LINES, not boxes: a wide spread
-                // repeats its banner side by side on one line.
-                let mut line_count = 0usize;
-                let mut last_top = f64::INFINITY;
-                for tb in &group {
-                    if (last_top - tb.bounds.top).abs() > 3.0 {
-                        line_count += 1;
-                        last_top = tb.bounds.top;
-                    }
-                }
+                // Both caps count visual LINES, not boxes: a wide
+                // spread repeats its banner side by side, several
+                // boxes on one line.
+                let line_count = count_lines(group.iter().copied());
                 if line_count > SP_MAX_GROUP_LINES {
                     continue;
                 }
                 // A group that is most of the page is content, not chrome.
-                if group.len() * 2 > page.text_boxes.len() {
+                if line_count * 2 > page_lines {
                     continue;
                 }
                 if group.iter().any(|tb| tb.text.trim().len() > SP_MAX_CHARS) {
@@ -591,6 +586,22 @@ pub fn strip_single_page_chrome(pages: &mut [PageContent]) {
             page.text_boxes.retain(|tb| !strip.contains(&tb.id));
         }
     }
+}
+
+/// Number of distinct visual lines (y-top clusters, 3pt tolerance)
+/// among boxes sorted or not — sorts internally.
+fn count_lines<'a>(boxes: impl Iterator<Item = &'a TextBox>) -> usize {
+    let mut tops: Vec<f64> = boxes.map(|tb| tb.bounds.top).collect();
+    tops.sort_by(|a, b| b.total_cmp(a));
+    let mut lines = 0usize;
+    let mut last_top = f64::INFINITY;
+    for top in tops {
+        if (last_top - top).abs() > 3.0 {
+            lines += 1;
+            last_top = top;
+        }
+    }
+    lines
 }
 
 /// Collapse runs of whitespace to a single space.
@@ -901,6 +912,50 @@ mod tests {
         strip_single_page_chrome(&mut pages);
         let ids: Vec<&str> = pages[0].text_boxes.iter().map(|t| t.id.as_str()).collect();
         assert_eq!(ids, ["b1", "b2", "b3", "b4"]);
+    }
+
+    #[test]
+    fn chrome_pattern_sees_through_banner_ornaments() {
+        assert!(matches_chrome_pattern("||WWW.CROUZET-MOTORS.COM"));
+        assert!(matches_chrome_pattern("- 8 -"));
+        assert!(matches_chrome_pattern("\u{2014} xii \u{2014}"));
+        // Pure ornament is not chrome.
+        assert!(!matches_chrome_pattern("||\u{2014}||"));
+    }
+
+    #[test]
+    fn wide_spread_banner_on_one_line_strips_as_a_group() {
+        // A landscape double-page spread repeats its banner side by
+        // side: six boxes on ONE visual line must not blow the
+        // group-line cap.
+        fn banner(id: &str, text: &str, left: f64, right: f64) -> TextBox {
+            TextBox {
+                id: id.to_string(),
+                text: text.to_string(),
+                page_number: 1,
+                font_size: 8.0,
+                is_bold: false,
+                bounds: Bounds {
+                    left,
+                    right,
+                    top: 780.0,
+                    bottom: 772.0,
+                },
+            }
+        }
+        let mut pages = single_page(vec![
+            banner("h1", "||WWW.CROUZET-MOTORS.COM", 50.0, 170.0),
+            banner("h2", "|| 8", 200.0, 212.0),
+            banner("h3", "||DCmind MOTORS", 250.0, 440.0),
+            banner("h4", "||WWW.CROUZET-MOTORS.COM", 640.0, 760.0),
+            banner("h5", "|| 9", 790.0, 802.0),
+            banner("h6", "||DCmind MOTORS", 840.0, 1030.0),
+            chrome_box("b1", "Body prose line one.", 600.0, 590.0),
+            chrome_box("b2", "Body prose line two.", 580.0, 570.0),
+        ]);
+        strip_single_page_chrome(&mut pages);
+        let ids: Vec<&str> = pages[0].text_boxes.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, ["b1", "b2"]);
     }
 
     #[test]

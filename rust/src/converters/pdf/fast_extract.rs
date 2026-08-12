@@ -382,6 +382,31 @@ trailer << /Root 1 0 R >>";
         assert!(text.contains("first"), "got: {text}");
     }
 
+    /// Standard-14 AFM widths are keyed by glyph, not code: a font
+    /// with a custom /Differences encoding (letters remapped to high
+    /// bytes) and no /Widths must get the narrow 'i' metric for its
+    /// remapped code, not the Helvetica average — the average is wide
+    /// enough to fuse adjacent columns.
+    #[test]
+    fn standard14_widths_follow_differences_remapping() {
+        let pdf = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj
+4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding << /Differences [200 /i] >> >> endobj
+5 0 obj << /Length 46 >> stream
+BT /F1 12 Tf 72 720 Td (\\310\\310\\310) Tj ET
+endstream endobj
+trailer << /Root 1 0 R >>";
+        let pages = extract_pages_fast(pdf).expect("differences remap");
+        let tb = &pages[0].text_boxes[0];
+        assert_eq!(tb.text, "iii");
+        // Helvetica 'i' is 222/1000 em: three at 12pt ≈ 8pt. The old
+        // average-width bug produced 3 × 556/1000 × 12 ≈ 20pt.
+        let width = tb.bounds.right - tb.bounds.left;
+        assert!(width < 9.0, "width {width} suggests average metrics");
+    }
+
     /// Content inside an /OC span whose OCG is OFF in the default
     /// configuration is invisible and must be suppressed.
     #[test]

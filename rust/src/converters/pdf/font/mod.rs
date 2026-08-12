@@ -172,7 +172,7 @@ pub(crate) fn build_font(pdf: &Pdf, dict: &Dict) -> FontInfo {
     } else {
         info.default_width = 0.0;
         let first_char = g(b"FirstChar").and_then(|v| v.as_num()).unwrap_or(0.0) as usize;
-        let mut std14: Option<(&'static [u16; 95], f64)> = None;
+        let mut std14: Option<&'static [u16; 95]> = None;
         if let Some(Val::Array(w)) = g(b"Widths") {
             for (i, o) in w.iter().enumerate() {
                 if let Some(v) = pdf.resolve(o).ok().and_then(|v| v.as_num()) {
@@ -188,7 +188,11 @@ pub(crate) fn build_font(pdf: &Pdf, dict: &Dict) -> FontInfo {
         }
         // Type3 widths are expressed in glyph space: FontMatrix maps them
         // to text space (nominally /1000 units for other font types).
+        // A Type3 font is never a standard-14 font — its glyphs are
+        // arbitrary procedures — so the AFM re-key below must not
+        // overwrite the FontMatrix-scaled values.
         if matches!(g(b"Subtype"), Some(Val::Name(b"Type3"))) {
+            std14 = None;
             if let Some(Val::Array(fm)) = g(b"FontMatrix") {
                 if let Some(a) = fm.first().and_then(|v| pdf.resolve(v).ok()?.as_num()) {
                     let scale = a * 1000.0;
@@ -206,7 +210,7 @@ pub(crate) fn build_font(pdf: &Pdf, dict: &Dict) -> FontInfo {
         // custom /Differences encoding (old IRS forms remap the whole
         // alphabet to high bytes) would otherwise get the average width
         // for every letter — wide enough to fuse adjacent columns.
-        if let Some((table, _avg)) = std14 {
+        if let Some(table) = std14 {
             for code in 0..256 {
                 if let Some(c) = info.to_unicode_simple[code] {
                     let u = c as u32;
@@ -299,7 +303,7 @@ pub(crate) fn build_font(pdf: &Pdf, dict: &Dict) -> FontInfo {
 /// Returns the chosen table so callers can re-key widths by glyph once
 /// the encoding is known (custom /Differences move letters to other
 /// codes). None for the fixed-pitch Courier family.
-fn standard14_widths(base: &str, widths: &mut [f64; 256]) -> Option<(&'static [u16; 95], f64)> {
+fn standard14_widths(base: &str, widths: &mut [f64; 256]) -> Option<&'static [u16; 95]> {
     const HELV: [u16; 95] = [
         278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278, 556, 556,
         556, 556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556, 1015, 667, 667, 722,
@@ -374,7 +378,7 @@ fn standard14_widths(base: &str, widths: &mut [f64; 256]) -> Option<(&'static [u
     for (i, &w) in table.iter().enumerate() {
         widths[32 + i] = w as f64;
     }
-    Some((table, avg))
+    Some(table)
 }
 
 fn descriptor_bold(pdf: &Pdf, font_dict: &Dict) -> bool {

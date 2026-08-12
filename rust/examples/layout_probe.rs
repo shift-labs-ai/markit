@@ -7,6 +7,13 @@ fn main() {
     let data = std::fs::read(&path).unwrap();
     let pages = extract_pages_fast(&data).unwrap();
     for page in &pages {
+        println!("segments: {}", page.segments.len());
+        for seg in page.segments.iter().take(12) {
+            println!(
+                "  seg [{:.0},{:.0}]..[{:.0},{:.0}]",
+                seg.x1, seg.y1, seg.x2, seg.y2
+            );
+        }
         let layout = detect_columns(&page.text_boxes, &page.segments);
         println!(
             "page {}: {} groups, boundaries {:?}",

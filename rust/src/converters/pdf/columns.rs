@@ -54,10 +54,10 @@ const GUTTER_SEARCH_MARGIN: f64 = 0.15;
 /// box-based allowance lets phantom gutters through.
 const MAX_CROSSING_FRACTION: f64 = 0.15;
 
-/// Maximum number of gutters. Two admit unconditionally (three-column
-/// layouts); a third is admitted only when every resulting column
-/// interval holds enough fully-contained boxes (four-column magazine
-/// spreads) — table whitespace fails that proof.
+/// Maximum number of gutters (four-column magazine spreads). One
+/// gutter is admitted on the side counts alone; two or more must also
+/// pass the prose-interval proof in `find_gutters` — table whitespace
+/// fails it.
 const MAX_GUTTERS: usize = 3;
 
 /// Result of column layout detection.
@@ -82,7 +82,8 @@ fn single(text_boxes: &[TextBox]) -> ColumnLayout {
     }
 }
 
-/// Gutter centers found via the crossing histogram, best-first capped.
+/// Gutter centers found via the crossing histogram; multi-gutter
+/// results must pass the prose-interval proof.
 fn find_gutters(text_boxes: &[TextBox]) -> Vec<f64> {
     let x_min = text_boxes
         .iter()
@@ -733,6 +734,39 @@ mod tests {
         assert!(texts[0][1..].iter().all(|t| t.starts_with('L')));
         assert_eq!(texts[1][0], "NUESTRO IMPACTO");
         assert!(texts[1][1..].iter().all(|t| t.starts_with('R')));
+    }
+
+    #[test]
+    fn four_column_spread_is_admitted_with_interval_proof() {
+        // Wide landscape spread: four prose columns whose line boxes
+        // fill their intervals.
+        let boxes: Vec<TextBox> = [40.0, 300.0, 560.0, 820.0]
+            .into_iter()
+            .enumerate()
+            .flat_map(|(column, x)| {
+                (0..6)
+                    .map(move |i| tb(&format!("C{column}-{i}"), x, 700.0 - i as f64 * 15.0, 220.0))
+            })
+            .collect();
+        let result = detect_columns(&boxes, &[]);
+        assert_eq!(result.column_count, 4);
+        assert_eq!(result.boundaries.len(), 3);
+    }
+
+    #[test]
+    fn table_whitespace_with_multiple_gutters_stays_whole() {
+        // Four columns of NARROW cells (numbers) — the same gutter
+        // geometry as a spread, but the interval proof fails because
+        // the boxes do not fill their intervals.
+        let boxes: Vec<TextBox> = [40.0, 300.0, 560.0, 820.0]
+            .into_iter()
+            .enumerate()
+            .flat_map(|(column, x)| {
+                (0..6).map(move |i| tb(&format!("{column}{i}"), x, 700.0 - i as f64 * 15.0, 40.0))
+            })
+            .collect();
+        let result = detect_columns(&boxes, &[]);
+        assert_eq!(result.column_count, 1, "{:?}", result.boundaries);
     }
 
     #[test]
