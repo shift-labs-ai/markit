@@ -138,7 +138,7 @@ fn find_gutters(text_boxes: &[TextBox]) -> Vec<f64> {
     let mut poke_diff = vec![0i32; bins + 1];
     let mut full_diff = vec![0i32; bins + 1];
     {
-        let mut add = |diff: &mut Vec<i32>, from: f64, to: f64| {
+        let add = |diff: &mut Vec<i32>, from: f64, to: f64| {
             let from = (from.floor() as i64 + 1).max(lo);
             let to = (to.ceil() as i64 - 1).min(hi);
             if from <= to {

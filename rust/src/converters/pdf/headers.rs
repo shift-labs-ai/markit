@@ -500,7 +500,26 @@ pub fn strip_single_page_chrome(pages: &mut [PageContent]) {
                 // spread repeats its banner side by side, several
                 // boxes on one line.
                 let line_count = count_lines(group.iter().copied());
-                if line_count > SP_MAX_GROUP_LINES {
+                // Lines carrying at least one chrome-pattern hit.
+                let pattern_lines = {
+                    let mut hits = 0usize;
+                    let mut last_top = f64::INFINITY;
+                    let mut line_hit = false;
+                    for tb in &group {
+                        if (last_top - tb.bounds.top).abs() > 3.0 {
+                            hits += usize::from(line_hit);
+                            line_hit = false;
+                            last_top = tb.bounds.top;
+                        }
+                        line_hit |= matches_chrome_pattern(tb.text.trim());
+                    }
+                    hits + usize::from(line_hit)
+                };
+                // A short group strips on a single pattern hit; a
+                // longer one (7-line journal banners: ISSN, volume,
+                // copyright, URL…) needs a MAJORITY of chrome lines —
+                // titles and abstracts never have that.
+                if line_count > SP_MAX_GROUP_LINES && pattern_lines * 2 < line_count {
                     continue;
                 }
                 // A group that is most of the page is content, not chrome.
@@ -510,10 +529,7 @@ pub fn strip_single_page_chrome(pages: &mut [PageContent]) {
                 if group.iter().any(|tb| tb.text.trim().len() > SP_MAX_CHARS) {
                     continue;
                 }
-                if !group
-                    .iter()
-                    .any(|tb| matches_chrome_pattern(tb.text.trim()))
-                {
+                if pattern_lines == 0 {
                     continue;
                 }
 
