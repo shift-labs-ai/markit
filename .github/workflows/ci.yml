@@ -21,6 +21,9 @@ jobs:
         with:
           workspaces: rust -> rust/target
       - run: bun install --frozen-lockfile
+      # Bootstrap the first scoped release: until @shift-labs/markit-* exists,
+      # Bun may skip unrelated optional platform packages such as Biome's.
+      - run: npm install --no-save @biomejs/cli-linux-x64
       - name: Check Node shell
         run: bun run check && npm run build
       - name: Check Rust engine
