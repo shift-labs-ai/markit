@@ -24,8 +24,8 @@ fn is_strong_math(c: char) -> bool {
         | '\u{2032}' | '\u{2033}' // primes
         | '\u{2016}'              // double bar
         | '\u{00B1}' | '\u{00D7}' | '\u{00F7}' | '\u{00AC}'
-        | '\u{0300}'..='\u{036F}' // combining mathematical accents
-    )
+        | '\u{0338}'              // combining negation slash
+    ) || accent_command(c).is_some()
     // Script sentinels are NOT strong on their own: footnote markers
     // in prose carry them too. They only convert inside a run that
     // real math characters established.
@@ -44,9 +44,7 @@ fn has_intrinsic_math(s: &str) -> bool {
 /// standard function names.
 fn is_weak_math_word(s: &str) -> bool {
     // Script structure always joins the run it sits in.
-    if s.chars()
-        .any(|c| matches!(c, SUP_OPEN | SUP_CLOSE | SUB_OPEN | SUB_CLOSE))
-    {
+    if s.chars().any(super::shared::is_script_sentinel) {
         return true;
     }
     let n = s.chars().count();
@@ -140,7 +138,7 @@ fn is_weak_math_word(s: &str) -> bool {
     })
 }
 
-/// Convert one math run (already known mathematical) to LaTeX.
+/// TeX command for a supported combining mathematical accent.
 fn accent_command(c: char) -> Option<&'static str> {
     Some(match c {
         '\u{0300}' => "grave",
@@ -157,28 +155,140 @@ fn accent_command(c: char) -> Option<&'static str> {
     })
 }
 
+/// Consecutive PDF text runs can split one exponent/subscript into
+/// several same-role fragments. TeX rejects `x^{a}^{b}`; join the
+/// sentinel boundary into one script atom before emission.
+fn coalesce_adjacent_scripts(run: &str) -> String {
+    let chars: Vec<char> = run.chars().collect();
+    let mut out = String::with_capacity(run.len());
+    let mut i = 0usize;
+    while i < chars.len() {
+        let c = chars[i];
+        let matching_open = match c {
+            SUP_CLOSE => Some(SUP_OPEN),
+            SUB_CLOSE => Some(SUB_OPEN),
+            _ => None,
+        };
+        if let Some(open) = matching_open {
+            let mut next = i + 1;
+            while next < chars.len() && chars[next].is_whitespace() {
+                next += 1;
+            }
+            if next < chars.len() && chars[next] == open {
+                out.push(' ');
+                i = next + 1;
+                continue;
+            }
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
+}
+
+/// Merge adjacent same-role TeX script groups after Unicode emission.
+/// This is the second boundary where fragments meet: line grouping may
+/// concatenate independently merged text boxes after sentinel capture.
+fn coalesce_repeated_tex_scripts(tex: &str) -> String {
+    let input: Vec<char> = tex.chars().collect();
+    let mut out: Vec<char> = Vec::with_capacity(input.len());
+    let mut i = 0usize;
+    while i < input.len() {
+        let kind = input[i];
+        if !matches!(kind, '^' | '_') || input.get(i + 1) != Some(&'{') {
+            out.push(kind);
+            i += 1;
+            continue;
+        }
+
+        let mut depth = 1usize;
+        let mut end = i + 2;
+        while end < input.len() && depth > 0 {
+            match input[end] {
+                '{' => depth += 1,
+                '}' => depth -= 1,
+                _ => {}
+            }
+            end += 1;
+        }
+        if depth != 0 {
+            out.push(kind);
+            i += 1;
+            continue;
+        }
+
+        let mut previous_end = out.len();
+        while previous_end > 0 && out[previous_end - 1].is_whitespace() {
+            previous_end -= 1;
+        }
+        let mut previous_open = None;
+        if previous_end > 0 && out[previous_end - 1] == '}' {
+            let mut reverse_depth = 1usize;
+            let mut cursor = previous_end - 1;
+            while cursor > 0 {
+                cursor -= 1;
+                match out[cursor] {
+                    '}' => reverse_depth += 1,
+                    '{' => {
+                        reverse_depth -= 1;
+                        if reverse_depth == 0 {
+                            previous_open = Some(cursor);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let same_previous = previous_open.is_some_and(|open| open > 0 && out[open - 1] == kind);
+        if same_previous {
+            out.truncate(previous_end - 1); // previous closing brace
+            out.push(' ');
+            out.extend_from_slice(&input[i + 2..end - 1]);
+            out.push('}');
+        } else {
+            out.extend_from_slice(&input[i..end]);
+        }
+        i = end;
+    }
+    out.into_iter().collect()
+}
+
+/// Convert one run already classified as mathematical to valid LaTeX.
 fn to_latex(run: &str) -> String {
-    let normalized: String = run.nfd().collect();
+    let scripts_joined = coalesce_adjacent_scripts(run);
+    let normalized: String = scripts_joined.nfd().collect();
     let mut out = String::with_capacity(normalized.len() * 2);
     let mut pending_not = false;
     let mut chars = normalized.chars().peekable();
     while let Some(c) = chars.next() {
         // PDF accent glyphs become combining marks during extraction.
         // Fold base+mark into one structural TeX atom.
-        if let Some(&mark) = chars.peek() {
-            if let Some(command) = accent_command(mark) {
-                chars.next();
-                out.push('\\');
-                out.push_str(command);
-                out.push('{');
-                out.push(c);
-                out.push('}');
-                continue;
+        if !super::shared::is_script_sentinel(c) {
+            if let Some(&mark) = chars.peek() {
+                if let Some(command) = accent_command(mark) {
+                    chars.next();
+                    out.push('\\');
+                    out.push_str(command);
+                    out.push('{');
+                    out.push(c);
+                    out.push('}');
+                    continue;
+                }
             }
         }
         if c == '\u{0338}' {
             pending_not = true;
             continue;
+        }
+        // Unsupported combining marks are extraction artifacts from
+        // font overlays. Raw marks make KaTeX reject the whole run.
+        if ('\u{0300}'..='\u{036F}').contains(&c) {
+            continue;
+        }
+        if pending_not {
+            out.push_str(r"\not ");
+            pending_not = false;
         }
         let mapped: &str = match c {
             SUP_OPEN => "^{",
@@ -208,7 +318,10 @@ fn to_latex(run: &str) -> String {
             '∐' => r"\coprod ",
             '∫' => r"\int ",
             '∮' => r"\oint ",
-            '√' => r"\sqrt ",
+            // Without radical geometry we do not know the radicand.
+            // An empty group keeps the Unicode radical renderable and
+            // valid; a later structural pass can replace it.
+            '√' => r"\sqrt{} ",
             '∞' => r"\infty ",
             '±' => r"\pm ",
             '∓' => r"\mp ",
@@ -269,8 +382,8 @@ fn to_latex(run: &str) -> String {
             'ℑ' => r"\Im ",
             'ℵ' => r"\aleph ",
             '℘' => r"\wp ",
-            '′' => "'",
-            '″' => "''",
+            '\'' | '′' => r"\prime ",
+            '″' => r"\prime \prime ",
             // Greek lowercase.
             'α' => r"\alpha ",
             'β' => r"\beta ",
@@ -324,6 +437,9 @@ fn to_latex(run: &str) -> String {
             '%' => r"\% ",
             '&' => r"\& ",
             '#' => r"\# ",
+            '{' => r"\{",
+            '}' => r"\}",
+            '\\' => r"\backslash ",
             '~' => r"\sim ",
             other => {
                 if let Some(greek) = mathematical_greek(other) {
@@ -347,20 +463,12 @@ fn to_latex(run: &str) -> String {
                     out.push_str(r"\mathcal{");
                     out.push(sc);
                     out.push('}');
-                } else {
-                    if pending_not {
-                        out.push_str(r"\not ");
-                        pending_not = false;
-                    }
+                } else if !other.is_control() && !(('\u{E000}'..='\u{F8FF}').contains(&other)) {
                     out.push(other);
                 }
                 continue;
             }
         };
-        if pending_not {
-            out.push_str(r"\not ");
-            pending_not = false;
-        }
         out.push_str(mapped);
     }
     // Command mappings carry a trailing space; joining words adds
@@ -378,7 +486,7 @@ fn to_latex(run: &str) -> String {
             prev_space = false;
         }
     }
-    tidy
+    coalesce_repeated_tex_scripts(&tidy)
 }
 
 /// Mathematical Greek ranges repeat the same 58-codepoint layout for
@@ -523,12 +631,9 @@ fn script_letter(c: char) -> Option<char> {
 }
 
 /// Strip script sentinels from text destined for non-math contexts
-/// (headings, table cells).
+/// such as table cells.
 pub(crate) fn strip_script_sentinels(s: &str) -> String {
-    if !s
-        .chars()
-        .any(|c| matches!(c, SUP_OPEN | SUP_CLOSE | SUB_OPEN | SUB_CLOSE))
-    {
+    if !s.chars().any(super::shared::is_script_sentinel) {
         return s.to_string();
     }
     strip_sentinels(s)
@@ -536,7 +641,7 @@ pub(crate) fn strip_script_sentinels(s: &str) -> String {
 
 fn strip_sentinels(s: &str) -> String {
     s.chars()
-        .filter(|c| !matches!(*c, SUP_OPEN | SUP_CLOSE | SUB_OPEN | SUB_CLOSE))
+        .filter(|c| !super::shared::is_script_sentinel(*c))
         .collect()
 }
 
@@ -588,9 +693,7 @@ pub(crate) fn render_line_with_math(text: &str, escape_plain: impl Fn(&str) -> S
         // is not an equation: demand two pieces of strong evidence, or
         // one plus script structure.
         let strong_chars = run.chars().filter(|c| is_strong_math(*c)).count();
-        let has_scripts = run
-            .chars()
-            .any(|c| matches!(c, SUP_OPEN | SUP_CLOSE | SUB_OPEN | SUB_CLOSE));
+        let has_scripts = run.chars().any(super::shared::is_script_sentinel);
         if any_strong
             && (strong_chars >= 2 || (strong_chars >= 1 && has_scripts) || has_intrinsic_math(&run))
         {
@@ -653,6 +756,24 @@ mod tests {
         let out = render_line_with_math("𝐀 ∈ 𝑉, 𝛼 ≥ 𝟐", ident);
         assert_eq!(out, r"$\mathbf{A} \in V, \alpha \ge 2$");
         assert_eq!(render_line_with_math("𝑋", ident), "$X$");
+    }
+
+    #[test]
+    fn adjacent_scripts_coalesce_into_valid_tex() {
+        assert_eq!(to_latex("n\u{E000}-\u{E001} \u{E000}1\u{E001}"), "n^{- 1}");
+        assert_eq!(to_latex("x\u{E002}i\u{E003} \u{E002}j\u{E003}"), "x_{i j}");
+        assert_eq!(
+            coalesce_repeated_tex_scripts(r"\tau _{B}_{c}"),
+            r"\tau _{B c}"
+        );
+    }
+
+    #[test]
+    fn unsafe_unicode_and_literal_tex_syntax_stay_renderable() {
+        assert_eq!(to_latex("{x} \\ √"), r"\{x\} \backslash \sqrt{}");
+        assert_eq!(to_latex("f' g″"), r"f\prime g\prime \prime");
+        assert_eq!(to_latex("x\u{031F}\u{E02E}"), "x");
+        assert_eq!(to_latex("x\u{E002}\u{0304}c\u{E003}"), "x_{c}");
     }
 
     #[test]

@@ -50,6 +50,10 @@ pub(crate) const SUP_CLOSE: char = '\u{E001}';
 pub(crate) const SUB_OPEN: char = '\u{E002}';
 pub(crate) const SUB_CLOSE: char = '\u{E003}';
 
+pub(crate) fn is_script_sentinel(c: char) -> bool {
+    matches!(c, SUP_OPEN | SUP_CLOSE | SUB_OPEN | SUB_CLOSE)
+}
+
 fn script_same_line(a: &RawTextItem, b: &RawTextItem) -> bool {
     let (small, large) = if a.font_size <= b.font_size {
         (a, b)
@@ -637,6 +641,47 @@ mod tests {
             !boxes[0].text.contains(' '),
             "absolute rule changed: {:?}",
             boxes[0].text
+        );
+    }
+
+    #[test]
+    fn shifted_small_items_capture_super_and_subscripts() {
+        let boxes = finish_text_boxes_pub(
+            vec![
+                RawTextItemPub {
+                    text: "x".into(),
+                    x: 0.0,
+                    y: 10.0,
+                    width: 6.0,
+                    height: 10.0,
+                    font_size: 10.0,
+                    is_bold: false,
+                },
+                RawTextItemPub {
+                    text: "2".into(),
+                    x: 6.0,
+                    y: 15.0,
+                    width: 4.0,
+                    height: 6.0,
+                    font_size: 7.0,
+                    is_bold: false,
+                },
+                RawTextItemPub {
+                    text: "i".into(),
+                    x: 10.0,
+                    y: 8.0,
+                    width: 3.0,
+                    height: 6.0,
+                    font_size: 7.0,
+                    is_bold: false,
+                },
+            ],
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            boxes[0].text,
+            format!("x{SUP_OPEN}2{SUP_CLOSE}{SUB_OPEN}i{SUB_CLOSE}")
         );
     }
 

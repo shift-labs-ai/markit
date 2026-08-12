@@ -7,12 +7,12 @@ liteparse 2.11.1 (no OCR, markdown mode, one warm batch process).
 
 |  | markit | liteparse |
 |---|---:|---:|
-| **Quality (macro)** | **44.5% ± 1.0** | 38.8% ± 0.9 |
+| **Quality (macro)** | **44.8% ± 1.0** | 38.8% ± 0.9 |
 | **Speed (1,403 PDFs, 1 core)** | **1.08 s · 1,300 docs/s** | 5.9 s · 237 docs/s |
 | **Speed (8 threads)** | **0.26 s · 5,470 docs/s** | n/a (single-threaded CLI) |
 | Conversion failures | 0 | 0 |
 
-markit leads quality by **+5.7 points, far outside the confidence
+markit leads quality by **+6.0 points, far outside the confidence
 interval**, and is **5.5× faster per core** (both tools measured
 single-threaded: liteparse `batch-parse` runs 5.42s user / 5.93s
 real, ~1 core). Conversion is stateless per document, so markit
@@ -26,7 +26,7 @@ Head-to-head by category:
 |---|---:|---:|
 | headers_footers | **76.1** | 56.3 |
 | long_tiny_text | **37.1** | 23.8 |
-| arxiv_math | **19.9** | 0.0 |
+| arxiv_math | **22.3** | 0.0 |
 | old_scans | 13.3 | 13.3 |
 | old_scans_math | 0.0 | 0.0 |
 | multi_column | 58.9 | **65.3** |
@@ -52,7 +52,7 @@ Caveats carried forward:
   placeholders) passing the alphanumeric check — all 98 old-scan outputs,
   plus 21/36 old-scan-math and ~23/62 long-tiny-text.
 - Speed is not quality-adjusted (no OCR). markit's model-free math
-  reconstruction scores 19.9%; liteparse scores 0.0%.
+  reconstruction scores 22.3%; liteparse scores 0.0%.
 
 ## Targets
 
@@ -62,15 +62,15 @@ Caveats carried forward:
 direct competitor: open-source, model-free, PDF→markdown, OCR disabled when
 benchmarked. Published scores (v2.1):
 
-- olmOCR-bench: **0.391** ← beaten: markit 0.408 (their same-machine
+- olmOCR-bench: **0.391** ← beaten: markit 0.448 (their same-machine
   measurement is 0.388)
 - opendataloader-bench: 0.875
 - ParseBench: 0.3279
 
-The ~12-point gap maps to roadmap items 2–5 (reading order, tables,
-header/footer classification, tiny-text recovery). Math categories score
-near zero for every model-free tool, so formula reconstruction is not
-required to win — but it is the largest absolute deficit.
+The original ~12-point gap mapped to roadmap items 2–5 (reading order,
+tables, header/footer classification, tiny-text recovery). markit now leads
+the same-machine model-free baseline by 6.0 points; math reconstruction
+remains the largest pool for extending that lead.
 
 Claim to make when won: *fastest model-free PDF→markdown at the highest
 model-free olmOCR-bench score*. Requires a same-machine liteparse run for

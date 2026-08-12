@@ -151,10 +151,10 @@ pub(crate) fn matches_chrome_pattern(text: &str) -> bool {
     // Script sentinels (see shared.rs) ride along in extracted text
     // until render; they must not defeat the signatures.
     let owned: String;
-    let text = if text.chars().any(|c| ('\u{E000}'..='\u{E003}').contains(&c)) {
+    let text = if text.chars().any(super::shared::is_script_sentinel) {
         owned = text
             .chars()
-            .filter(|c| !('\u{E000}'..='\u{E003}').contains(c))
+            .filter(|c| !super::shared::is_script_sentinel(*c))
             .collect();
         owned.as_str()
     } else {

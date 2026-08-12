@@ -65,13 +65,13 @@ fn escape_free_text(text: &str) -> String {
 }
 
 fn escape_pipes(text: &str) -> String {
-    normalize_full_width_ascii(&super::mathml::strip_script_sentinels(text))
+    normalize_full_width_ascii(&super::math::strip_script_sentinels(text))
         .replace('|', "\\|")
         .replace('\n', "<br>")
 }
 
 fn escape_table_html(text: &str) -> String {
-    normalize_full_width_ascii(&super::mathml::strip_script_sentinels(text))
+    normalize_full_width_ascii(&super::math::strip_script_sentinels(text))
         .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
@@ -537,15 +537,10 @@ pub fn render_page_content(
     // so that diagram labels released as free text don't skew the body size.
     let body_fs = modal_font_size(all_text_boxes.unwrap_or(free_text_boxes));
 
-    // Free text lines. Math runs render as $LaTeX$; headings never
-    // carry math (their sentinels are stripped inside the renderer).
+    // Free text lines, including headings: math runs render as $LaTeX$.
     for line in group_free_text_into_lines(free_text_boxes) {
         let prefix = heading_prefix(line.font_size, body_fs, line.is_bold);
-        let content = if prefix.is_empty() {
-            super::mathml::render_line_with_math(&line.text, escape_free_text)
-        } else {
-            escape_free_text(&super::mathml::strip_script_sentinels(&line.text))
-        };
+        let content = super::math::render_line_with_math(&line.text, escape_free_text);
         blocks.push(ContentBlock {
             top_y: line.top_y,
             content: format!("{prefix}{content}"),
@@ -957,6 +952,19 @@ mod tests {
         ];
         let result = render_page_content(&boxes, &[], &[], None);
         assert!(result.contains("# Big Title"));
+    }
+
+    #[test]
+    fn math_in_heading_keeps_latex_and_scripts() {
+        let boxes = vec![
+            bx_font("Body text", 400.0, 9.0),
+            bx_font("Bounds ‖x‖\u{E002}2\u{E003} ≤ ‖y‖", 600.0, 20.0),
+        ];
+        let result = render_page_content(&boxes, &[], &[], None);
+        assert!(
+            result.contains(r"# Bounds $\|x\|_{2} \le \|y\|$"),
+            "{result}"
+        );
     }
 
     #[test]

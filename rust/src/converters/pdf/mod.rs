@@ -14,7 +14,7 @@ pub mod image_extract;
 pub mod index;
 pub(crate) mod interp;
 pub(crate) mod marked_content;
-pub(crate) mod mathml;
+pub(crate) mod math;
 pub mod own_pdf;
 pub(crate) mod pagetree;
 pub mod render;
