@@ -35,6 +35,10 @@ fn has_strong_math(s: &str) -> bool {
     s.chars().any(is_strong_math)
 }
 
+fn has_intrinsic_math(s: &str) -> bool {
+    s.chars().any(|c| ('\u{1D400}'..='\u{1D7FF}').contains(&c))
+}
+
 /// May this word sit INSIDE a math run without being evidence itself?
 /// Short identifier/operator material, script-carrying words, and
 /// standard function names.
@@ -587,7 +591,9 @@ pub(crate) fn render_line_with_math(text: &str, escape_plain: impl Fn(&str) -> S
         let has_scripts = run
             .chars()
             .any(|c| matches!(c, SUP_OPEN | SUP_CLOSE | SUB_OPEN | SUB_CLOSE));
-        if any_strong && (strong_chars >= 2 || (strong_chars >= 1 && has_scripts)) {
+        if any_strong
+            && (strong_chars >= 2 || (strong_chars >= 1 && has_scripts) || has_intrinsic_math(&run))
+        {
             out_parts.push(format!("${}$", to_latex(&run)));
         } else {
             for w in &words[i..j] {
@@ -646,6 +652,7 @@ mod tests {
     fn mathematical_alphanumeric_letters_become_latex_styles() {
         let out = render_line_with_math("𝐀 ∈ 𝑉, 𝛼 ≥ 𝟐", ident);
         assert_eq!(out, r"$\mathbf{A} \in V, \alpha \ge 2$");
+        assert_eq!(render_line_with_math("𝑋", ident), "$X$");
     }
 
     #[test]
