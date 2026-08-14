@@ -151,3 +151,4 @@ prs.save('$CORPUS/q4-business-review.pptx')
 echo ""
 echo "=== Corpus ready ==="
 ls -lhS "$CORPUS"
+python3 "$SCRIPT_DIR/verify_corpus.py" "$SCRIPT_DIR/office-corpus.json" "$CORPUS"

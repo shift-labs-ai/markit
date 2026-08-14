@@ -29,6 +29,7 @@ bun.lock
 # Benchmark artifacts
 benchmark/corpus/
 benchmark/results/
+benchmark/__pycache__/
 
 # Charts
 .charts/

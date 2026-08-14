@@ -1,0 +1,85 @@
+{
+  "schema": 1,
+  "description": "Format-neutral golden assertions for eight adversarial semiconductor PDFs.",
+  "documents": {
+    "infineon-aurix-tc3xx.pdf": {
+      "sha256": "ae857984adccc169367ced72650ef67ffa6da3733af936ce8519f90456a7a4b8",
+      "checks": [
+        {"type": "contains", "value": "AURIX TC3xx"},
+        {"type": "contains", "value": "System Timer (STM)"},
+        {"type": "contains", "value": "Feature List"},
+        {"type": "min_chars", "value": 1000000},
+        {"type": "min_table_rows", "value": 100}
+      ]
+    },
+    "intel-743621-007.pdf": {
+      "sha256": "f05ce720763a629170a132bd59da478b56d3f2bd16aae6985b11b5425e9dc58b",
+      "checks": [
+        {"type": "contains", "value": "Intel 700 Series Chipset Family"},
+        {"type": "contains", "value": "Platform Controller Hub"},
+        {"type": "contains", "value": "Specification Update"},
+        {"type": "contains", "value": "Document Number: 743621"},
+        {"type": "min_chars", "value": 10000}
+      ]
+    },
+    "intel-743835-004.pdf": {
+      "sha256": "907ff08f960af754eff1e15979d3f7bc17f4b9ccadec2bd3f501fc12fdbe8821",
+      "checks": [
+        {"type": "contains", "value": "Intel 700 Series Chipset Family"},
+        {"type": "contains", "value": "Platform Controller Hub Datasheet"},
+        {"type": "contains", "value": "Volume 1 of 2"},
+        {"type": "min_chars", "value": 250000},
+        {"type": "min_table_rows", "value": 50}
+      ]
+    },
+    "microchip-same70.pdf": {
+      "sha256": "a43af577ee4f40639f9db566782098fcb00357a8581ae916b453a5885624c3a1",
+      "checks": [
+        {"type": "contains", "value": "SAM E70/S70/V70/V71 Family"},
+        {"type": "contains", "value": "ARM Cortex-M7"},
+        {"type": "contains", "value": "Memory Protection Unit"},
+        {"type": "min_chars", "value": 1000000},
+        {"type": "min_table_rows", "value": 100}
+      ]
+    },
+    "nxp-imx8mm-rm.pdf": {
+      "sha256": "4375ce46e7418102f7da241921ba695ec351b4073bb5ec5faefd0ed7dbc2385e",
+      "checks": [
+        {"type": "contains", "value": "i.MX 8M Mini Applications Processor Reference Manual"},
+        {"type": "contains", "value": "Document Number: IMX8MMRM"},
+        {"type": "contains", "value": "Chapter 1 Introduction"},
+        {"type": "min_chars", "value": 10000}
+      ]
+    },
+    "nxp-imx8mp-rm.pdf": {
+      "sha256": "c5deeaa0b656393277c7e5164980be3b8f910e29caef0d43233730fdd3f983b3",
+      "checks": [
+        {"type": "contains", "value": "i.MX 8M Plus Applications Processor Reference Manual"},
+        {"type": "contains", "value": "Document Number: IMX8MPRM"},
+        {"type": "contains", "value": "Contents"},
+        {"type": "min_chars", "value": 10000}
+      ]
+    },
+    "nxp-s32k3xx.pdf": {
+      "sha256": "4355419736984b22137b2f168a3df116ee98ed1fdb910f0fcbb1113982d9a005",
+      "checks": [
+        {"type": "contains", "value": "S32K344"},
+        {"type": "contains", "value": "Arm Cortex-M7"},
+        {"type": "contains", "value": "Nested Vectored Interrupt Controller"},
+        {"type": "min_chars", "value": 100000},
+        {"type": "min_table_rows", "value": 20}
+      ]
+    },
+    "ti-am62x-trm.pdf": {
+      "sha256": "34cc2fd7e46ec00af723653e62743596d187b8cc1c3a5f28d71216d744f73af2",
+      "checks": [
+        {"type": "contains", "value": "AM62x Processors"},
+        {"type": "contains", "value": "Technical Reference Manual"},
+        {"type": "contains", "value": "Memory Map"},
+        {"type": "contains", "value": "Boot Process"},
+        {"type": "min_chars", "value": 5000000},
+        {"type": "min_table_rows", "value": 100}
+      ]
+    }
+  }
+}
