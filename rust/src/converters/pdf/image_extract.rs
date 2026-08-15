@@ -9,7 +9,6 @@ use anyhow::{anyhow, bail, Result};
 
 use super::interp::ImageSource;
 use super::own_pdf::{decode_stream, Dict, Pdf, Val};
-use super::types::ImageRegion;
 
 /// Extracted image bytes plus the file extension they should carry.
 pub struct ExtractedImage {
@@ -47,26 +46,6 @@ fn checked_layout(width: u32, height: u32, components: usize, bpc: u32) -> Resul
         .checked_mul(height as usize)
         .ok_or_else(|| anyhow!("image byte length overflow"))?;
     Ok((row_bytes, pixels))
-}
-
-/// Extract the image behind an ImageRegion. The region id encodes the
-/// per-page ordinal ("p{page}-img{i}") assigned over the same
-/// area-filtered placement order this function reproduces.
-pub fn extract_image_region_fast(input: &[u8], region: &ImageRegion) -> Result<ExtractedImage> {
-    let pdf = Pdf::parse(input)?;
-    let placements = super::fast_extract::page_image_placements(&pdf, region.page_number)?;
-
-    let idx: usize = region
-        .id
-        .rsplit("img")
-        .next()
-        .and_then(|s| s.parse().ok())
-        .ok_or_else(|| anyhow!("bad region id"))?;
-    let source = placements
-        .into_iter()
-        .nth(idx)
-        .ok_or_else(|| anyhow!("image index out of range"))?;
-    extract_image_source(&pdf, &source)
 }
 
 /// Extract one interpreter placement while its parsed document is live.

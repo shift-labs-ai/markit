@@ -21,12 +21,6 @@ pub mod render;
 pub(crate) mod shared;
 pub mod types;
 
-/// Diagnostic: resolve a glyph name through the internal glyph list
-/// (used by corpus probes in examples/).
-pub fn glyph_name_to_unicode(name: &[u8]) -> Option<char> {
-    font::glyph_to_unicode_diag(name)
-}
-
 /// JavaScriptCore-faithful Array#sort for comparators that do not implement
 /// a strict total order.
 ///

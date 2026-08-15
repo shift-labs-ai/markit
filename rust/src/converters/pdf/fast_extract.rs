@@ -10,7 +10,7 @@ use anyhow::{anyhow, bail, Result};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::geom::rotation_base;
-use super::interp::{FontCache, ImageSource, Interp};
+use super::interp::{FontCache, Interp};
 use super::own_pdf::{decode_stream, Dict, Pdf, Val};
 use super::pagetree::{collect_hidden_ocgs, walk_pages, Inherit};
 use super::types::PageContent;
@@ -193,33 +193,6 @@ pub(crate) fn extract_document_fast(
         bail!("text ops decoded to nothing (unsupported encodings)");
     }
     Ok((out, extracted_images))
-}
-
-pub(crate) fn page_image_placements<'a>(
-    pdf: &'a Pdf<'a>,
-    page_number: u32,
-) -> Result<Vec<ImageSource<'a>>> {
-    let (hidden_ocgs, pages) = page_tree(pdf)?;
-    let Some((page, inherited)) = pages.get(page_number as usize - 1) else {
-        bail!("page out of range");
-    };
-    let mut content = Vec::new();
-    let (interp, _page_width, page_height) = interpret_page(
-        pdf,
-        page,
-        inherited,
-        hidden_ocgs,
-        FontCache::default(),
-        &mut content,
-    )?;
-    Ok(interp
-        .image_placements
-        .into_iter()
-        .filter_map(|placement| {
-            let bbox = device_bbox(placement.bbox, page_height);
-            super::shared::image_bbox_is_large_pub(bbox).then_some(placement.source)
-        })
-        .collect())
 }
 
 #[cfg(test)]
@@ -612,19 +585,20 @@ endstream endobj
 0
 endstream endobj
 trailer << /Root 1 0 R >>";
-        let pages = extract_pages_fast(pdf).unwrap();
+        // The renderer indexes extracted bytes by region position, so
+        // the two vectors must stay aligned through one page pass.
+        let (pages, extracted) = extract_document_fast(pdf, true).unwrap();
         assert_eq!(pages[0].images.len(), 2);
         assert_eq!(pages[0].images[0].id, "p1-img0");
         assert_eq!(pages[0].images[1].id, "p1-img1");
 
-        let parsed = Pdf::parse(pdf).unwrap();
-        let placements = page_image_placements(&parsed, 1).unwrap();
-        assert_eq!(placements.len(), 2);
-        assert!(matches!(placements[0], ImageSource::Inline));
-        assert!(matches!(
-            placements[1],
-            ImageSource::XObject { raw: b"0", .. }
-        ));
+        let slots = &extracted[&1];
+        assert_eq!(slots.len(), pages[0].images.len());
+        assert!(
+            slots[0].is_none(),
+            "the inline image has no standalone stream and stays unextracted"
+        );
+        assert!(slots[1].is_some(), "the XObject image must extract");
     }
 
     #[test]

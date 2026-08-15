@@ -77,11 +77,6 @@ impl Default for FontInfo {
     }
 }
 
-/// Diagnostic passthrough for corpus probes.
-pub(crate) fn glyph_to_unicode_diag(name: &[u8]) -> Option<char> {
-    glyphlist::glyph_to_unicode(name)
-}
-
 pub(crate) fn build_font(pdf: &Pdf, dict: &Dict) -> FontInfo {
     let mut info = FontInfo::default();
     let g = |key: &[u8]| pdf.dict_get(dict, key).ok().flatten();

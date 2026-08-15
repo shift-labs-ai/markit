@@ -58,12 +58,6 @@ codegen-units = 1
 lto = "fat"
 strip = "symbols"
 
-[dev-dependencies]
-# Differential reference for the own PDF parser (examples/ownpdf_probe):
-# not part of the library. default-features off — rayon's per-document
-# thread fan-out is pure overhead at our sizes and the date crates are unused.
-lopdf = { version = "0.38", default-features = false }
-
 [build-dependencies]
 napi-build = { version = "2", optional = true }
 
