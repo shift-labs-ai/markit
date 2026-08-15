@@ -42,6 +42,13 @@ const H_SPLIT_GAP_LINES: f64 = 2.5;
 /// 10pt).
 const MIN_GUTTER_PTS: f64 = 12.0;
 
+/// Narrower fallback for densely set prose, admitted only with strong
+/// support in every resulting column and no vector rules on the page.
+const RELAXED_MIN_GUTTER_PTS: f64 = 10.0;
+const RELAXED_MAX_FULL_FRACTION: f64 = 0.50;
+const RELAXED_MIN_PROSE_LINES: usize = 10;
+const MAX_FULL_FRACTION: f64 = 0.25;
+
 /// Fraction of the text width excluded at each edge when searching for
 /// gutters — a gutter in the outer margins is ragged-edge whitespace,
 /// not a column separator.
@@ -82,9 +89,46 @@ fn single(text_boxes: &[TextBox]) -> ColumnLayout {
     }
 }
 
+/// Every interval defined by these gutters must contain substantial
+/// line boxes. This distinguishes prose columns from whitespace
+/// between narrow table cells.
+fn gutters_have_prose_support(
+    text_boxes: &[TextBox],
+    gutters: &[f64],
+    min_boxes_per_interval: usize,
+) -> bool {
+    if gutters.is_empty() {
+        return false;
+    }
+    let x_min = text_boxes
+        .iter()
+        .map(|tb| tb.bounds.left)
+        .fold(f64::INFINITY, f64::min);
+    let x_max = text_boxes
+        .iter()
+        .map(|tb| tb.bounds.right)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let mut points = Vec::with_capacity(gutters.len() + 2);
+    points.push(x_min - 1.0);
+    points.extend_from_slice(gutters);
+    points.push(x_max + 1.0);
+    points.windows(2).all(|pair| {
+        let span = pair[1] - pair[0];
+        text_boxes
+            .iter()
+            .filter(|tb| {
+                tb.bounds.left >= pair[0]
+                    && tb.bounds.right <= pair[1]
+                    && tb.bounds.right - tb.bounds.left >= 0.5 * span
+            })
+            .count()
+            >= min_boxes_per_interval
+    })
+}
+
 /// Gutter centers found via the crossing histogram; multi-gutter
 /// results must pass the prose-interval proof.
-fn find_gutters(text_boxes: &[TextBox]) -> Vec<f64> {
+fn find_gutters(text_boxes: &[TextBox], relaxed_prose_gutter: bool) -> Vec<f64> {
     let x_min = text_boxes
         .iter()
         .map(|tb| tb.bounds.left)
@@ -124,7 +168,12 @@ fn find_gutters(text_boxes: &[TextBox]) -> Vec<f64> {
     let mut sizes: Vec<f64> = text_boxes.iter().map(|tb| tb.font_size).collect();
     sizes.sort_by(|a, b| a.total_cmp(b));
     let median_size = sizes.get(sizes.len() / 2).copied().unwrap_or(10.0);
-    let min_gutter = (MIN_GUTTER_PTS * median_size / 10.0).clamp(6.0, MIN_GUTTER_PTS);
+    let base_gutter = if relaxed_prose_gutter {
+        RELAXED_MIN_GUTTER_PTS
+    } else {
+        MIN_GUTTER_PTS
+    };
+    let min_gutter = (base_gutter * median_size / 10.0).clamp(6.0, base_gutter);
 
     // Two crossing histograms via difference arrays. The strict one
     // counts only box EDGES (a line poking a few points across a
@@ -159,7 +208,16 @@ fn find_gutters(text_boxes: &[TextBox]) -> Vec<f64> {
             }
         }
     }
-    let max_full = 1.max((lines as f64 * 0.25) as usize) as i32;
+    // Abstracts and deck text can occupy a substantial full-width band
+    // above a two-column body. Edge pokes remain under the stricter cap;
+    // this loose span cap only prevents a mostly single-column region
+    // from manufacturing a gutter out of sparse side notes.
+    let max_full_ratio = if relaxed_prose_gutter {
+        RELAXED_MAX_FULL_FRACTION
+    } else {
+        MAX_FULL_FRACTION
+    };
+    let max_full = 1.max((lines as f64 * max_full_ratio) as usize) as i32;
 
     // Runs of bins where pokes stay under the strict allowance and
     // full crossings under the loose cap.
@@ -225,28 +283,7 @@ fn find_gutters(text_boxes: &[TextBox]) -> Vec<f64> {
     // subset, trying wider gutters first.
     centers.sort_by_key(|c| std::cmp::Reverse(c.1));
     centers.truncate(MAX_GUTTERS);
-    let prose_intervals = |xs: &[f64]| -> bool {
-        let mut pts = Vec::with_capacity(xs.len() + 2);
-        pts.push(x_min - 1.0);
-        pts.extend_from_slice(xs);
-        pts.push(x_max + 1.0);
-        pts.windows(2).all(|pair| {
-            // The interval must hold real column lines: boxes filling
-            // at least half its width. Narrow noise (figure labels,
-            // axis numbers) doesn't disqualify — but table cells never
-            // fill their interval, so table whitespace still fails.
-            let span = pair[1] - pair[0];
-            text_boxes
-                .iter()
-                .filter(|tb| {
-                    tb.bounds.left >= pair[0]
-                        && tb.bounds.right <= pair[1]
-                        && tb.bounds.right - tb.bounds.left >= 0.5 * span
-                })
-                .count()
-                >= MIN_BOXES_PER_COLUMN
-        })
-    };
+
     let candidates: Vec<f64> = centers.iter().map(|(c, _)| c).copied().collect();
     let subsets: Vec<Vec<usize>> = match candidates.len() {
         3 => vec![
@@ -264,7 +301,7 @@ fn find_gutters(text_boxes: &[TextBox]) -> Vec<f64> {
     for subset in subsets {
         let mut xs: Vec<f64> = subset.iter().map(|&i| candidates[i]).collect();
         xs.sort_by(|a, b| a.total_cmp(b));
-        if prose_intervals(&xs) {
+        if gutters_have_prose_support(text_boxes, &xs, MIN_BOXES_PER_COLUMN) {
             return xs;
         }
     }
@@ -496,14 +533,31 @@ fn layout_region(
     };
 
     // A ruled table region must not be column-split — its interior
-    // whitespace belongs to the grid, not the page layout. Neither may
-    // an unruled region whose rows read as data cells.
-    if region_has_ruled_grid(&boxes, segments) || region_is_tabular(&boxes) {
+    // whitespace belongs to the grid, not the page layout. An unruled
+    // tabular-looking region may still be fragmented prose: strong,
+    // wide line support on every side of a gutter overrides that veto.
+    if region_has_ruled_grid(&boxes, segments) {
         out.push((boxes, is_band));
         return;
     }
 
-    let gutters = find_gutters(&boxes);
+    let tabular = region_is_tabular(&boxes);
+    let mut gutters = find_gutters(&boxes, false);
+    // Compact journal columns can leave only a 10pt gutter and have many
+    // full-width abstract lines crossing above them. With no vector
+    // rules, admit that relaxed candidate only when both text intervals
+    // contain at least ten substantial prose lines. This excludes side
+    // notes and sparse figure labels.
+    if gutters.is_empty() && segments.is_empty() {
+        let relaxed = find_gutters(&boxes, true);
+        if gutters_have_prose_support(&boxes, &relaxed, RELAXED_MIN_PROSE_LINES) {
+            gutters = relaxed;
+        }
+    }
+    if tabular && !gutters_have_prose_support(&boxes, &gutters, MIN_BOXES_PER_COLUMN) {
+        out.push((boxes, is_band));
+        return;
+    }
     if gutters.is_empty() {
         out.push((boxes, is_band));
         return;

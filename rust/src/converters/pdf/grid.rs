@@ -56,6 +56,29 @@ fn infer_x_lines_from_boxes(text_boxes: &[TextBox], x_min: f64, x_max: f64) -> V
     boundaries
 }
 
+/// Decorative top/bottom rules can bracket an entire prose region. If
+/// text clustering manufactures far more rows than the vector rules
+/// define and most rows are sentence-like, this is prose—not a table.
+fn grid_is_under_ruled_prose(grid: &TableGrid, structural_rows: usize) -> bool {
+    if structural_rows == 0 || grid.rows <= structural_rows.saturating_mul(3) {
+        return false;
+    }
+    let mut alphabetic = vec![0usize; grid.rows];
+    let mut words = vec![0usize; grid.rows];
+    for cell in &grid.cells {
+        if cell.row < grid.rows {
+            alphabetic[cell.row] += cell.text.chars().filter(|ch| ch.is_alphabetic()).count();
+            words[cell.row] += cell.text.split_whitespace().count();
+        }
+    }
+    let prose_rows = alphabetic
+        .iter()
+        .zip(words)
+        .filter(|(letters, words)| **letters >= 25 && *words >= 5)
+        .count();
+    prose_rows >= 4 && prose_rows * 5 >= grid.rows * 3
+}
+
 fn build_h_line_only_table(
     page_number: u32,
     y_lines: &[f64],
@@ -232,6 +255,9 @@ fn build_h_line_only_table(
         top_y: content_top_y,
         is_borderless: false,
     });
+    if grid_is_under_ruled_prose(&grid, y_lines.len().saturating_sub(1)) {
+        return None;
+    }
     Some((grid, consumed_ids))
 }
 
@@ -368,6 +394,9 @@ fn process_line_group(ctx: &mut GroupContext, y_lines: &[f64], x_lo: f64, x_hi: 
         ctx.filtered_segments,
         &group_boxes,
     );
+    if grid_is_under_ruled_prose(&grid, y_lines.len().saturating_sub(1)) {
+        return;
+    }
 
     // A one-column ruled grid is usually a framed box whose interior
     // structure is drawn with whitespace, not rules (outer border
@@ -820,6 +849,30 @@ mod tests {
             .find(|cl| cl.row == r && cl.col == c)
             .map(|cl| cl.text.clone())
             .unwrap_or_default()
+    }
+
+    #[test]
+    fn rejects_prose_manufactured_beneath_decorative_rules() {
+        let cells = (0..10)
+            .map(|row| TableCell {
+                row,
+                col: 0,
+                text: "This is a complete sentence of ordinary paragraph prose.".into(),
+                row_span: 1,
+                col_span: 1,
+            })
+            .collect();
+        let grid = TableGrid {
+            page_number: 1,
+            rows: 10,
+            cols: 1,
+            cells,
+            warnings: Vec::new(),
+            top_y: 700.0,
+            is_borderless: false,
+        };
+        assert!(grid_is_under_ruled_prose(&grid, 2));
+        assert!(!grid_is_under_ruled_prose(&grid, 4));
     }
 
     // -----------------------------------------------------------------------

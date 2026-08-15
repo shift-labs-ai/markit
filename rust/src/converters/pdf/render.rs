@@ -28,17 +28,55 @@ fn normalize_full_width_ascii(text: &str) -> String {
         .collect()
 }
 
+/// Keep numeric citations readable while escaping every other square
+/// bracket as literal Markdown text.
+fn escape_square_brackets(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while !rest.is_empty() {
+        if let Some(after_open) = rest.strip_prefix('[') {
+            if let Some(close) = after_open.find(']') {
+                let inner = &after_open[..close];
+                let is_numeric_reference = inner.chars().any(|ch| ch.is_ascii_digit())
+                    && inner.chars().all(|ch| {
+                        ch.is_ascii_digit()
+                            || ch.is_whitespace()
+                            || matches!(ch, ',' | ';' | '-' | '\u{2013}' | '\u{2014}')
+                    });
+                if is_numeric_reference {
+                    out.push('[');
+                    out.push_str(inner);
+                    out.push(']');
+                    rest = &after_open[close + 1..];
+                    continue;
+                }
+            }
+            out.push_str("\\[");
+            rest = after_open;
+            continue;
+        }
+
+        let ch = rest.chars().next().unwrap();
+        if ch == ']' {
+            out.push_str("\\]");
+        } else {
+            out.push(ch);
+        }
+        rest = &rest[ch.len_utf8()..];
+    }
+    out
+}
+
 fn escape_free_text(text: &str) -> String {
-    let mut escaped = text
+    let escaped = text
         .replace('\\', "\\\\")
         .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('`', "\\`")
         .replace('*', "\\*")
-        .replace('_', "\\_")
-        .replace('[', "\\[")
-        .replace(']', "\\]");
+        .replace('_', "\\_");
+    let mut escaped = escape_square_brackets(&escaped);
 
     let marker_at = escaped
         .char_indices()
@@ -915,6 +953,25 @@ mod tests {
             result.contains("\\*not emphasis\\* &lt;tag&gt;"),
             "{result}"
         );
+    }
+
+    #[test]
+    fn preserves_numeric_reference_brackets_only() {
+        let result = render_page_content(
+            &[bx("See [24] and [3–5], not [Appendix A].")],
+            &[],
+            &[],
+            None,
+        );
+        assert_eq!(result, "See [24] and [3–5], not \\[Appendix A\\].");
+        assert_eq!(escape_square_brackets("] before [24]"), "\\] before [24]");
+        assert_eq!(escape_square_brackets("[[24]]"), "\\[[24]\\]");
+    }
+
+    #[test]
+    fn leading_blockquote_marker_is_escaped() {
+        let result = render_page_content(&[bx("> quoted-looking text")], &[], &[], None);
+        assert_eq!(result, "&gt; quoted-looking text");
     }
 
     #[test]

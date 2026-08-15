@@ -17,8 +17,8 @@ use anyhow::Result;
 use crate::types::{ConversionResult, Converter, StreamInfo};
 
 use super::borderless::detect_borderless_tables;
-use super::columns::detect_columns;
-use super::fast_extract::extract_pages_fast;
+use super::columns::{detect_columns, ColumnLayout};
+use super::fast_extract::extract_document_fast;
 use super::grid::resolve_table_grids;
 use super::headers::{strip_headers_footers, strip_single_page_chrome};
 use super::render::{render_page_content, ImageBlock};
@@ -128,6 +128,68 @@ fn group_extent(boxes: &[TextBox], margin: f64) -> GroupExtent {
     }
 }
 
+/// A ruled table can leave one detached value/status group on one side
+/// of an otherwise full-width page. That is not a page column. Preserve
+/// genuine ruled multi-column pages when both sides recur in at least
+/// two vertically separated groups.
+fn is_sparse_ruled_split(layout: &ColumnLayout, segments: &[Segment]) -> bool {
+    if layout.boundaries.len() != 1 {
+        return false;
+    }
+    let boundary = layout.boundaries[0];
+    const RULE_GUTTER_TOLERANCE: f64 = 24.0;
+    if !segments.iter().any(|segment| {
+        (segment.x1 - segment.x2).abs() <= 0.8
+            && ((segment.x1 + segment.x2) / 2.0 - boundary).abs() <= RULE_GUTTER_TOLERANCE
+    }) {
+        return false;
+    }
+    let page_left = layout
+        .columns
+        .iter()
+        .flatten()
+        .map(|tb| tb.bounds.left)
+        .fold(f64::INFINITY, f64::min);
+    let page_right = layout
+        .columns
+        .iter()
+        .flatten()
+        .map(|tb| tb.bounds.right)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let boundary_fraction = (boundary - page_left) / (page_right - page_left).max(1.0);
+    let total_boxes: usize = layout.columns.iter().map(Vec::len).sum();
+    let dominant_band = layout
+        .columns
+        .iter()
+        .zip(&layout.bands)
+        .filter(|(_, band)| **band)
+        .map(|(boxes, _)| boxes.len())
+        .max()
+        .is_some_and(|count| count * 5 >= total_boxes * 4);
+    // Central gutters are plausible page columns even if one vertical
+    // slice contains only one group. The exception is a page whose
+    // content is overwhelmingly one full-width band with a detached
+    // ruled footer/promo beneath it.
+    if (0.25..=0.75).contains(&boundary_fraction) && !dominant_band {
+        return false;
+    }
+
+    let mut left_groups = 0usize;
+    let mut right_groups = 0usize;
+    for (boxes, is_band) in layout.columns.iter().zip(&layout.bands) {
+        if *is_band || boxes.is_empty() {
+            continue;
+        }
+        let extent = group_extent(boxes, 0.0);
+        if extent.x_max <= boundary {
+            left_groups += 1;
+        } else if extent.x_min >= boundary {
+            right_groups += 1;
+        }
+    }
+    left_groups <= 1 || right_groups <= 1
+}
+
 /// Assign each image to exactly one group: the x-containing group with
 /// the smallest vertical distance. Unclaimed images fall to the group
 /// with the nearest vertical distance regardless of x.
@@ -186,7 +248,8 @@ impl Converter for PdfConverter {
     }
 
     fn convert(&self, input: &[u8], info: &StreamInfo) -> Result<ConversionResult> {
-        let mut pages = extract_pages_fast(input)?;
+        let image_dir = info.image_dir.as_deref();
+        let (mut pages, extracted_images) = extract_document_fast(input, image_dir.is_some())?;
 
         // Remove running headers/footers before processing. The
         // repetition detector handles multi-page documents; the per-page
@@ -195,7 +258,6 @@ impl Converter for PdfConverter {
         strip_headers_footers(&mut pages);
         strip_single_page_chrome(&mut pages);
 
-        let image_dir = info.image_dir.as_deref();
         if let Some(dir) = image_dir {
             fs::create_dir_all(dir)?;
         }
@@ -208,28 +270,30 @@ impl Converter for PdfConverter {
 
             if let Some(dir) = image_dir {
                 if !page.images.is_empty() {
-                    for img in &page.images {
-                        // Preserve the embedded image at native resolution
-                        // when its encoding is supported by the own engine.
-                        let written =
-                            match super::image_extract::extract_image_region_fast(input, img) {
-                                Ok(x) => {
-                                    let filepath =
-                                        Path::new(dir).join(format!("{}.{}", img.id, x.ext));
-                                    match fs::write(&filepath, &x.bytes) {
-                                        Ok(()) => Some(filepath),
-                                        Err(e) => {
-                                            eprintln!(
-                                                "Failed to write image {}: {}",
-                                                filepath.display(),
-                                                e
-                                            );
-                                            None
-                                        }
+                    let page_images = extracted_images.get(&page.page_number);
+                    for (idx, img) in page.images.iter().enumerate() {
+                        // Regions and extracted placements share this
+                        // area-filtered order by construction.
+                        let image = page_images
+                            .and_then(|images| images.get(idx))
+                            .and_then(|slot| slot.as_ref());
+                        let written = match image {
+                            Some(x) => {
+                                let filepath = Path::new(dir).join(format!("{}.{}", img.id, x.ext));
+                                match fs::write(&filepath, &x.bytes) {
+                                    Ok(()) => Some(filepath),
+                                    Err(e) => {
+                                        eprintln!(
+                                            "Failed to write image {}: {}",
+                                            filepath.display(),
+                                            e
+                                        );
+                                        None
                                     }
                                 }
-                                Err(_) => None,
-                            };
+                            }
+                            None => None,
+                        };
                         if let Some(filepath) = written {
                             positioned_image_blocks.push((
                                 img.bbox.x + img.bbox.w / 2.0,
@@ -261,58 +325,16 @@ impl Converter for PdfConverter {
                 .map(|(_, block)| block.clone())
                 .collect();
 
-            // Detect column layout
+            // Detect column layout. A one-off group detached by a ruled
+            // table separator is not a page column.
             let mut layout = detect_columns(&page.text_boxes, &page.segments);
-
-            // If the page has vertical segments (tables), suppress column detection
-            // when one detected column is very narrow
-            if layout.column_count > 1
-                && page.segments.iter().any(|s| (s.x1 - s.x2).abs() <= 0.8)
-                && !page.text_boxes.is_empty()
-            {
-                let page_x_min = page
-                    .text_boxes
-                    .iter()
-                    .map(|tb| tb.bounds.left)
-                    .fold(f64::INFINITY, f64::min);
-                let page_x_max = page
-                    .text_boxes
-                    .iter()
-                    .map(|tb| tb.bounds.right)
-                    .fold(f64::NEG_INFINITY, f64::max);
-                let page_width = page_x_max - page_x_min;
-                // A legitimate column spans roughly page_width/n; the
-                // 30% floor assumed two columns and vetoed every
-                // four-column spread (each column ~22%). Scale with the
-                // detected gutter count.
-                let columns_detected = (layout.boundaries.len() + 1).max(2) as f64;
-                let min_col_fraction = 0.6 / columns_detected;
-
-                // Bands (full-width titles/headings) are legitimately
-                // narrow or wide; only substantive column groups vote —
-                // a stray page number or caption is not a mis-split
-                // table column.
-                let too_narrow = layout.columns.iter().zip(&layout.bands).any(|(col, band)| {
-                    if *band || col.len() < 4 {
-                        return false;
-                    }
-                    let col_x_min = col
-                        .iter()
-                        .map(|tb| tb.bounds.left)
-                        .fold(f64::INFINITY, f64::min);
-                    let col_x_max = col
-                        .iter()
-                        .map(|tb| tb.bounds.right)
-                        .fold(f64::NEG_INFINITY, f64::max);
-                    (col_x_max - col_x_min) / page_width < min_col_fraction
-                });
-
-                if too_narrow {
-                    layout.column_count = 1;
-                    layout.columns = vec![page.text_boxes.clone()];
-                    layout.bands = vec![false];
-                    layout.boundaries = Vec::new();
-                }
+            if is_sparse_ruled_split(&layout, &page.segments) {
+                layout = ColumnLayout {
+                    column_count: 1,
+                    columns: vec![page.text_boxes.clone()],
+                    bands: vec![false],
+                    boundaries: Vec::new(),
+                };
             }
 
             if layout.column_count == 1 {
@@ -382,8 +404,25 @@ impl Converter for PdfConverter {
 
 #[cfg(test)]
 mod tests {
+    use super::super::types::Bounds;
     use super::*;
     use std::path::Path;
+
+    fn layout_box(id: &str, left: f64, right: f64) -> TextBox {
+        TextBox {
+            id: id.into(),
+            text: id.into(),
+            page_number: 1,
+            font_size: 10.0,
+            is_bold: false,
+            bounds: Bounds {
+                left,
+                right,
+                top: 700.0,
+                bottom: 690.0,
+            },
+        }
+    }
 
     fn extent(x_min: f64, x_max: f64, y_min: f64, y_max: f64) -> GroupExtent {
         GroupExtent {
@@ -392,6 +431,34 @@ mod tests {
             y_min,
             y_max,
         }
+    }
+
+    #[test]
+    fn sparse_ruled_edge_field_is_not_a_page_column() {
+        let segments = vec![Segment {
+            id: "rule".into(),
+            x1: 400.0,
+            y1: 100.0,
+            x2: 400.0,
+            y2: 300.0,
+        }];
+        let edge_field = ColumnLayout {
+            column_count: 3,
+            columns: vec![
+                vec![layout_box("left-1", 0.0, 300.0)],
+                vec![layout_box("left-2", 0.0, 300.0)],
+                vec![layout_box("status", 420.0, 500.0)],
+            ],
+            bands: vec![false, false, false],
+            boundaries: vec![400.0],
+        };
+        assert!(is_sparse_ruled_split(&edge_field, &segments));
+
+        let balanced_page = ColumnLayout {
+            boundaries: vec![250.0],
+            ..edge_field
+        };
+        assert!(!is_sparse_ruled_split(&balanced_page, &segments));
     }
 
     #[test]
@@ -510,25 +577,58 @@ trailer << /Root 1 0 R >>";
         assert!(c.convert(input, &info).is_ok());
     }
 
+    fn convert_fixture(path: &str) -> String {
+        let buf = std::fs::read(path).unwrap();
+        PdfConverter
+            .convert(
+                &buf,
+                &StreamInfo {
+                    extension: Some(".pdf".into()),
+                    local_path: Some(path.into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .markdown
+    }
+
+    fn normalized_words(text: &str) -> String {
+        text.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    #[test]
+    fn narrow_table_group_does_not_collapse_page_columns() {
+        let path = "testdata/pdf/regression/00f6c2eea6b51fb1bf637b5f8a850588d7e2_page_10_pg1.pdf";
+        let markdown = convert_fixture(path);
+        assert!(
+            normalized_words(&markdown).contains(
+                "The proposed method is implemented using the Python programming language."
+            ),
+            "column prose was interleaved:\n{markdown}"
+        );
+    }
+
+    #[test]
+    fn prose_gutter_beats_tabular_row_fragments() {
+        let path = "testdata/pdf/regression/013a3686ef75b4150c07d3ebc510ca2455d6_page_1_pg1.pdf";
+        let markdown = convert_fixture(path);
+        assert!(
+            normalized_words(&markdown)
+                .contains("This sudden surge of international students is attributed"),
+            "two-column prose was merged row-wise:\n{markdown}"
+        );
+    }
+
     #[test]
     fn full_pipeline_with_fixture() {
         let fixture = "testdata/pdf/regression/09f90a8fad0997f7cf454cbcbe79cab3bc0f_page_1_pg1.pdf";
         assert!(Path::new(fixture).exists(), "committed fixture missing");
 
-        let buf = std::fs::read(fixture).unwrap();
-        let c = PdfConverter;
-        let info = StreamInfo {
-            extension: Some(".pdf".into()),
-            local_path: Some(fixture.into()),
-            ..Default::default()
-        };
-        let result = c.convert(&buf, &info).unwrap();
+        let markdown = convert_fixture(fixture);
 
-        assert!(!result.markdown.is_empty());
+        assert!(!markdown.is_empty());
         assert!(
-            result
-                .markdown
-                .contains("Open-Domain Textual Question Answering"),
+            markdown.contains("Open-Domain Textual Question Answering"),
             "Output should contain key text from the PDF"
         );
     }
