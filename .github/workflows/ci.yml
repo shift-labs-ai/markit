@@ -28,6 +28,10 @@ jobs:
         run: bun run check && npm run build
       - name: Check Rust engine
         run: npm run check:rust && cd rust && cargo test
+      # Guards the committed benchmark manifest, its 155 blind anchors, and
+      # the tool-version provenance. Pure stdlib, so no Python setup step.
+      - name: Test benchmark harness
+        run: cd benchmark && python3 -m unittest test_benchmark.py
       - name: Build current-platform addon
         run: npm run build:native
       - name: Test native Node SDK

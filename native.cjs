@@ -1,4 +1,3 @@
-/* eslint-disable */
 // Native addon loader for markit. Rust is the sole conversion engine.
 
 const { existsSync, readFileSync } = require('fs');

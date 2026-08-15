@@ -14,9 +14,9 @@ node_modules/
 # Build output
 dist
 
-# Bun
+# Bun. bun.lock is committed: CI installs with --frozen-lockfile, which is
+# only a guarantee if the lockfile it reads is in the repository.
 bun.lockb
-bun.lock
 
 # Config (may contain API keys)
 .markit/
@@ -43,7 +43,6 @@ test/fixtures/pdfs/*
 test/fixtures/.DS_Store
 .pi/
 test/fixtures/pdfs/*.pdf
-.pi-rlm/
 *.node
 /index.js
 /index.d.ts
