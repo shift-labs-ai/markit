@@ -9,16 +9,18 @@ import os
 import subprocess
 import sys
 import time
+import shutil
 from pathlib import Path
 
-from bench import tool_bins, run_once, TOOLS
+from bench import ConversionError, TOOLS, run_once, tool_bins, version, write_json
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("root", type=Path, help="directory created by setup-olmocr.sh")
     parser.add_argument("--tools", default=",".join(TOOLS))
-    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--timeout", type=float, default=300)
     args = parser.parse_args()
 
     bench_data = args.root / "data" / "bench_data"
@@ -28,26 +30,52 @@ def main() -> int:
         parser.error("invalid root; run benchmark/setup-olmocr.sh first")
 
     tools = [tool.strip() for tool in args.tools.split(",") if tool.strip()]
-    bins = tool_bins()
+    unknown = set(tools) - set(TOOLS)
+    if unknown or not tools:
+        parser.error(f"invalid --tools selection: {sorted(unknown)}")
+    if args.timeout <= 0:
+        parser.error("--timeout must be > 0")
+    bins = tool_bins(tools)
     pdfs = sorted(pdf_root.rglob("*.pdf"))
+    if not pdfs:
+        parser.error("olmOCR dataset contains no PDFs")
     result_dir = Path(__file__).with_name("results") / "olmocr"
     result_dir.mkdir(parents=True, exist_ok=True)
     timings_path = result_dir / "timings.json"
-    previous = json.loads(timings_path.read_text()) if timings_path.exists() else []
+    previous = (
+        json.loads(timings_path.read_text())
+        if args.resume and timings_path.exists()
+        else []
+    )
     timings_by_key = {(row["tool"], row["file"]): row for row in previous}
+    pinned = (args.root / "PINNED").read_text().splitlines() if (args.root / "PINNED").exists() else []
+    provenance = {
+        "timestamp": time.time(),
+        "pinned": pinned,
+        "timeout_seconds": args.timeout,
+        "tools": {
+            tool: {"binary": bins[tool], "version": version(bins[tool])}
+            for tool in tools
+        },
+    }
+    write_json(result_dir / "provenance.json", provenance)
     failures = 0
     for tool in tools:
         candidate = bench_data / tool
+        if not args.resume:
+            shutil.rmtree(candidate, ignore_errors=True)
         started = time.perf_counter()
         converted = 0
         for index, pdf in enumerate(pdfs, 1):
             relative = pdf.relative_to(pdf_root)
             destination = candidate / relative.parent / f"{pdf.stem}_pg1_repeat1.md"
-            if destination.exists() and not args.force:
+            if destination.exists() and args.resume:
                 continue
             destination.parent.mkdir(parents=True, exist_ok=True)
             try:
-                markdown, elapsed_ms = run_once(tool, bins[tool], pdf)
+                markdown, elapsed_ms = run_once(
+                    tool, bins[tool], pdf, args.timeout
+                )
                 destination.write_text(markdown, encoding="utf-8")
                 timings_by_key[(tool, str(relative))] = {
                     "tool": tool,
@@ -66,6 +94,9 @@ def main() -> int:
                     "file": str(relative),
                     "ok": False,
                     "error": str(error),
+                    "failure_ms": round(error.elapsed_ms, 3)
+                    if isinstance(error, ConversionError)
+                    else None,
                 }
                 failures += 1
                 print(f"{tool} {relative}: ERROR {error}", file=sys.stderr)
@@ -73,8 +104,10 @@ def main() -> int:
                 print(f"{tool}: {index}/{len(pdfs)}")
         print(f"{tool}: converted {converted} files in {time.perf_counter() - started:.2f}s")
 
-    timings = sorted(timings_by_key.values(), key=lambda row: (row["tool"], row["file"]))
-    timings_path.write_text(json.dumps(timings, indent=2) + "\n")
+    timings = sorted(
+        timings_by_key.values(), key=lambda row: (row["tool"], row["file"])
+    )
+    write_json(timings_path, timings)
 
     env = dict(os.environ)
     env["PYTHONPATH"] = str(olmocr) + os.pathsep + env.get("PYTHONPATH", "")

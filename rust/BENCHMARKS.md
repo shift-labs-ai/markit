@@ -1,84 +1,109 @@
 # Benchmark targets
 
-## Current standing (2026-08-11, end of sprint 4) — markit leads both axes
+## Current standing — markit leads official quality, adversarial robustness, and speed
 
-olmOCR-bench, 1,403 single-page PDFs, 8,413 checks. Same-machine
-liteparse 2.11.1 (no OCR, markdown mode, one warm batch process).
+Every parser here is non-OCR: it reads the text layer already inside the
+PDF rather than running optical character recognition or a vision model.
+OCR is disabled for all three.
 
-|  | markit | liteparse |
+**Measured at `7e27453` on macOS 26.5 arm64, against
+`@llamaindex/liteparse@2.12.0` and `@firecrawl/anydoc@0.1.9`.** Results
+are not stored in this repository; the pinned harness below reproduces
+them. Quote this commit alongside any number on this page, because a
+rerun at a different commit legitimately produces a different one.
+
+### Official olmOCR-bench quality
+
+1,403 single-page PDFs and 8,413 official checks:
+
+| Tool | Macro score | 95% CI | Converted |
+|---|---:|---:|---:|
+| **markit** | **45.0%** | ±1.0 | 1,403/1,403 |
+| liteparse 2.12.0 | 38.8% | ±0.9 | 1,403/1,403 |
+| anydoc 0.1.9 | 31.2% | ±0.9 | 1,160/1,403 |
+
+markit leads liteparse by **6.2 points**, outside the confidence interval.
+
+| Category | markit | liteparse | anydoc |
+|---|---:|---:|---:|
+| headers_footers | **76.1** | 56.1 | 50.8 |
+| long_tiny_text | **36.2** | 23.8 | 17.2 |
+| arxiv_math | **22.4** | 0.0 | 0.0 |
+| old_scans | 13.3 | 13.3 | 13.3 |
+| old_scans_math | 0.0 | 0.0 | 0.0 |
+| multi_column | 61.2 | **66.0** | 41.6 |
+| table_tests | 50.9 | **51.8** | 43.6 |
+
+The latest reading-order work raised multi-column from **521/884 to
+541/884** with no lost multi-column checks. Numeric-reference rendering
+also raised arxiv_math from 653/2,927 to 657/2,927.
+
+### shitty-pdf-bench
+
+Our own adversarial corpus: 40 hash-pinned public PDFs, 50,884 pages,
+602.5 MB of semiconductor manuals, standards, forms, RTL and CJK
+documents, rotated vector charts, scans, tagged PDFs, and malformed
+files. Final markit validation remains **155/155 blind anchors
+(100.0%)** and **38/38 curated checks**. One encrypted password control
+fails explicitly for every parser, as intended.
+
+Blind anchor recall across all three:
+
+| Tool | Anchors | Recall |
 |---|---:|---:|
-| **Quality (macro)** | **44.8% ± 1.0** | 38.8% ± 0.9 |
-| **Speed (1,403 PDFs, 1 core)** | **1.08 s · 1,300 docs/s** | 5.9 s · 237 docs/s |
-| **Speed (8 threads)** | **0.26 s · 5,470 docs/s** | n/a (single-threaded CLI) |
-| Conversion failures | 0 | 0 |
+| **markit** | **155/155** | **100.0%** |
+| anydoc | 141/155 | 91.0% |
+| liteparse | 129/155 | 83.2% |
 
-markit leads quality by **+6.0 points, far outside the confidence
-interval**, and is **5.5× faster per core** (both tools measured
-single-threaded: liteparse `batch-parse` runs 5.42s user / 5.93s
-real, ~1 core). Conversion is stateless per document, so markit
-additionally scales with threads (`CORPUS_BENCH_THREADS=8` → 0.26s,
-23× liteparse's wall time). markit was 27.1% and 155 docs/s at
-03a0d7f.
+The 155 anchors are seven-word passages sampled from fixed page
+quantiles of the source PDFs. The generator reads only the sources and
+the manifest, never any converter output, so the anchors cannot be
+tuned to a winner.
 
-Head-to-head by category:
+Controlled end-to-end CLI timing uses one warmup and three measured
+iterations per document; each row sums the per-document medians:
 
-| Category | markit | liteparse |
-|---|---:|---:|
-| headers_footers | **76.1** | 56.3 |
-| long_tiny_text | **37.1** | 23.8 |
-| arxiv_math | **22.3** | 0.0 |
-| old_scans | 13.3 | 13.3 |
-| old_scans_math | 0.0 | 0.0 |
-| multi_column | 58.9 | **65.3** |
-| table_tests | **51.1** | 51.5 |
+| Tool | Converted | Median ms/doc | Total seconds |
+|---|---:|---:|---:|
+| **markit** | 39/40 (97.5%) | **154.67** | **25.16** |
+| liteparse | 39/40 (97.5%) | 756.73 | 56.42 |
+| anydoc | 37/40 (92.5%) | 965.81 | 341.23 |
 
-Measurement notes: markit timed in-process over the corpus
-(examples/corpus_bench, one warm process, sequential); liteparse via
-`lit batch-parse` wall time (one process, includes ~0.1 s startup),
-best of 3 each, same machine, same corpus. Honest asymmetry: their
-number includes process startup and per-file logging; ours excludes
-startup. At a 4.4 s margin the ranking is robust to both.
+markit is **2.2× faster than liteparse** and **13.6× faster than anydoc**
+on this same-machine end-to-end run.
 
-Remaining quality pools (to extend the lead): arxiv_math structural
-fractions/radicals/accents, multi_column magazine layouts, and residual
-table cell structure; old_scans/math remains capped without OCR.
-
-liteparse artifacts: /tmp/liteparse-venv (pip 2.11.1),
-/tmp/liteparse-out (their outputs), staged as bench candidate
-`liteparse`, scored in /tmp/olmOCR-liteparse-run1.out.
-
-Caveats carried forward:
-- The 100% baseline is still partly comment-only outputs (image
-  placeholders) passing the alphanumeric check — all 98 old-scan outputs,
-  plus 21/36 old-scan-math and ~23/62 long-tiny-text.
-- Speed is not quality-adjusted (no OCR). markit's model-free math
-  reconstruction scores 22.3%; liteparse scores 0.0%.
+Caveats:
+- The olmOCR baseline check is permissive: image-placeholder-only outputs
+  can pass its alphanumeric requirement.
+- Speed is not quality-adjusted; OCR is disabled for every PDF tool.
+- Old scans and old-scan math remain capped without OCR.
 
 ## Targets
 
 ### 1. olmOCR-bench — beat liteparse (primary)
 
 [liteparse](https://github.com/run-llama/liteparse) (LlamaIndex, Rust) is the
-direct competitor: open-source, model-free, PDF→markdown, OCR disabled when
+direct competitor: open-source, non-OCR, PDF to Markdown, OCR disabled when
 benchmarked. Published scores (v2.1):
 
-- olmOCR-bench: **0.391** ← beaten: markit 0.448 (their same-machine
+- olmOCR-bench: **0.391** ← beaten: markit 0.450 (their same-machine
   measurement is 0.388)
 - opendataloader-bench: 0.875
 - ParseBench: 0.3279
 
 The original ~12-point gap mapped to roadmap items 2–5 (reading order,
 tables, header/footer classification, tiny-text recovery). markit now leads
-the same-machine model-free baseline by 6.0 points; math reconstruction
+the same-machine non-OCR baseline by 6.2 points; math reconstruction
 remains the largest pool for extending that lead.
 
-Claim to make when won: *fastest model-free PDF→markdown at the highest
-model-free olmOCR-bench score*. Requires a same-machine liteparse run for
-the speed side (their "45x faster" claims are against different baselines).
+Supported claim: *fastest non-OCR PDF to Markdown parser at the highest
+non-OCR olmOCR-bench score among the parsers tested*. Quality and speed
+were both measured on the same machine; the suites remain reported
+separately.
 
 Secondary same-suite runs once the adapter exists: opendataloader-bench,
 ParseBench (charts/visual-grounding columns are ML-only noise for every
-model-free tool; report for completeness).
+non-OCR tool; report for completeness).
 
 ### 2. anydoc bench — office formats (secondary)
 
@@ -94,16 +119,18 @@ To compete: assemble our own corpus, add a markit adapter to their harness
 converters (TS + Rust), not the PDF engine. Their published quality score:
 81 overall, judged on their corpus.
 
-## Reproducibility (roadmap item 8)
+## Reproducibility
 
-Not yet committed: pinned olmOCR-bench revision, markit adapter, category
-floors, failure-rate ceilings, quality/speed Pareto report. Last run's
-artifacts live in /tmp only:
+The committed `benchmark/` harness pins:
 
-- /tmp/markit-quality-2026-08-11.{md,json}
-- /tmp/olmOCR-markit-full.out
-- /tmp/olmOCR-bench-data/bench_data/markit/
+- olmOCR evaluator commit `f7cfe4c22098b154c76b6ec950d1c0a464eecf8d`
+- olmOCR dataset revision `eaa828947384ffce68f08c223a0f5f4e2f2df624`
+- `@llamaindex/liteparse@2.12.0`
+- `@firecrawl/anydoc@0.1.9`
+- all 40 shitty-pdf-bench URLs, sizes, page counts, and SHA-256 hashes
 
-Conversion-failure fixtures (the 7 PDFs) are committed under
-`testdata/pdf/regression/` (from olmOCR-bench, ODC-BY-1.0 — attribution:
+Raw candidates, scorer logs, timings, failures, and provenance are generated
+under `benchmark/results/` for release attachment; machine-specific result
+artifacts remain gitignored. Regression PDFs derived from olmOCR-bench are
+committed under `rust/testdata/pdf/regression/` (ODC-BY-1.0; attribution:
 Allen Institute for AI, olmOCR-bench).

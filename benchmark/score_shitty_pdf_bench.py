@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Score horrible-PDF Markdown outputs against curated golden assertions."""
+"""Score shitty-pdf-bench Markdown outputs against curated golden assertions."""
 
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import re
 from pathlib import Path
 
 TOOLS = ("markit", "anydoc", "liteparse")
+WORD_PATTERN = re.compile(r"[^\W_]+(?:['’][^\W_]+)?|\d+(?:[.,]\d+)*", re.UNICODE)
 
 
 def normalized(text: str) -> str:
@@ -16,11 +18,26 @@ def normalized(text: str) -> str:
     return " ".join(text.casefold().split())
 
 
+def normalized_words(text: str) -> str:
+    text = html.unescape(text)
+    text = re.sub(r"(?<=\w)-(?:<br\s*/?>|\s)+(?=\w)", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"([A-Za-z])_\{\s*([A-Za-z]+)\s*\}", r"\1\2", text)
+    text = re.sub(r"\\(?:times|cdot)\b", " ", text)
+    text = re.sub(
+        r"\\langle\s*([A-Za-z]+)\\rangle",
+        lambda match: f"h{match.group(1)}i",
+        text,
+    )
+    return " ".join(WORD_PATTERN.findall(text.casefold()))
+
+
 def evaluate(markdown: str, check: dict) -> bool:
     kind = check["type"]
     value = check["value"]
     if kind == "contains":
         return normalized(str(value)) in normalized(markdown)
+    if kind == "contains_words":
+        return normalized_words(str(value)) in normalized_words(markdown)
     if kind == "not_contains":
         return normalized(str(value)) not in normalized(markdown)
     if kind == "regex":
@@ -39,18 +56,24 @@ def evaluate(markdown: str, check: dict) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("results", type=Path, help="benchmark/results/horrible directory")
+    parser.add_argument(
+        "results", type=Path, help="benchmark/results/shitty-pdf-bench directory"
+    )
     parser.add_argument(
         "--assertions",
         type=Path,
-        default=Path(__file__).with_name("horrible-assertions.json"),
+        default=Path(__file__).with_name("shitty-pdf-bench-assertions.json"),
     )
+    parser.add_argument("--output-stem", default="quality")
+    parser.add_argument("--label", default="shitty-pdf-bench quality")
     args = parser.parse_args()
 
     spec = json.loads(args.assertions.read_text())
     details = []
     for tool in TOOLS:
         for filename, document in spec["documents"].items():
+            if not document["checks"]:
+                continue
             output = args.results / tool / f"{filename}.md"
             if not output.exists():
                 details.append(
@@ -85,11 +108,11 @@ def main() -> int:
         }
 
     result = {"schema": 1, "summary": summary, "details": details}
-    destination = args.results / "quality.json"
+    destination = args.results / f"{args.output_stem}.json"
     destination.write_text(json.dumps(result, indent=2) + "\n")
 
     lines = [
-        "# Horrible PDF quality",
+        f"# {args.label}",
         "",
         "| Tool | Checks | Score | Documents passing every check |",
         "| --- | ---: | ---: | ---: |",
@@ -101,7 +124,7 @@ def main() -> int:
             f"{row['documents_complete']}/{row['documents']} |"
         )
     lines.append("")
-    (args.results / "quality.md").write_text("\n".join(lines))
+    (args.results / f"{args.output_stem}.md").write_text("\n".join(lines))
     print("\n".join(lines))
     return 0
 

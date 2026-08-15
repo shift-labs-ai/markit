@@ -1,0 +1,597 @@
+{
+  "schema": 1,
+  "description": "shitty-pdf-bench: forty public adversarial PDFs for non-OCR document-to-Markdown quality, robustness, and throughput evaluation. Files are downloaded from their publishers and are not redistributed.",
+  "retrieved_at": "2026-08-14",
+  "qpdf_commit": "e8adee327e4ed76f540a40fd674dfb4903e26f3a",
+  "documents": [
+    {
+      "file": "arxiv-attention.pdf",
+      "title": "Attention Is All You Need",
+      "url": "https://arxiv.org/pdf/1706.03762",
+      "sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+      "bytes": 2215244,
+      "pages": 15,
+      "categories": [
+        "born-digital-math",
+        "multi-column",
+        "figures"
+      ],
+      "rationale": "Compact two-column research paper with equations, tables, references, and vector figures."
+    },
+    {
+      "file": "arxiv-gpt3.pdf",
+      "title": "Language Models are Few-Shot Learners",
+      "url": "https://arxiv.org/pdf/2005.14165",
+      "sha256": "97fd272f1fdfc18677462d0292f5fbf26ca86b4d1b485c2dba03269b643a0e83",
+      "bytes": 6768044,
+      "pages": 75,
+      "categories": [
+        "born-digital-math",
+        "multi-column",
+        "dense-tables"
+      ],
+      "rationale": "Long two-column paper with dense benchmark tables, equations, footnotes, and appendices."
+    },
+    {
+      "file": "arxiv-sparks-agi.pdf",
+      "title": "Sparks of Artificial General Intelligence",
+      "url": "https://arxiv.org/pdf/2303.12712",
+      "sha256": "dee926384a7c107a9b51273a99fca2aecb3ed6c27ba7ace0fba67a147a63d2aa",
+      "bytes": 7370286,
+      "pages": 155,
+      "categories": [
+        "born-digital-math",
+        "multi-column",
+        "figures",
+        "long-document"
+      ],
+      "rationale": "Figure-heavy 155-page research report mixing prose, code, equations, plots, and multi-column appendices."
+    },
+    {
+      "file": "ecma-262-2024.pdf",
+      "title": "ECMAScript 2024 Language Specification",
+      "url": "https://ecma-international.org/wp-content/uploads/ECMA-262_15th_edition_june_2024.pdf",
+      "sha256": "c7558ec49d7b6ed7fdc2b375655cbfb1fb0e0f30f64a26c2f29811401fd19853",
+      "bytes": 4799672,
+      "pages": 816,
+      "categories": [
+        "long-document",
+        "algorithms",
+        "tables",
+        "cross-references"
+      ],
+      "rationale": "816-page formal standard with deeply nested algorithms, grammar productions, tables, notes, and links."
+    },
+    {
+      "file": "espressif-esp32.pdf",
+      "title": "ESP32 Technical Reference Manual",
+      "url": "https://www.espressif.com/sites/default/files/documentation/esp32_technical_reference_manual_en.pdf",
+      "sha256": "4ba58e9fa0405ec2bf80b912a29b483f6edc8c4b2b1058201913a2fe37e582f0",
+      "bytes": 10173126,
+      "pages": 784,
+      "categories": [
+        "semiconductor",
+        "register-tables",
+        "diagrams",
+        "long-document"
+      ],
+      "rationale": "784-page SoC manual with register maps, bit fields, timing diagrams, and dense tables."
+    },
+    {
+      "file": "faa-iac-rotated-airport-diagrams.pdf",
+      "title": "FAA Interagency Air Committee Charting Specifications",
+      "url": "https://www.faa.gov/air_traffic/flight_info/aeronav/iac/media/IAC4/IAC-4-30AUG2023-complete.pdf",
+      "sha256": "f3b37fa4640174aadf01dd250bea9a4c9ff3274e17021b05c2605edde1a94028",
+      "bytes": 17214624,
+      "pages": 200,
+      "categories": [
+        "rotated-pages",
+        "vector-cad",
+        "dense-labels",
+        "tables"
+      ],
+      "rationale": "Charting specification containing congested and rotated airport diagrams, symbols, tiny labels, and technical tables."
+    },
+    {
+      "file": "infineon-aurix-tc3xx-part2.pdf",
+      "title": "AURIX TC3xx User’s Manual Part 2",
+      "url": "https://www.infineon.com/assets/row/public/documents/10/44/infineon-aurix-tc3xx-part2-usermanual-en.pdf",
+      "sha256": "7e377d6c393df8c95ea81d8867b043f165eb8cffaeffe19d7ad18b2d0f74dcf3",
+      "bytes": 55233274,
+      "pages": 3561,
+      "categories": [
+        "semiconductor",
+        "extreme-length",
+        "register-tables",
+        "broken-fonts"
+      ],
+      "rationale": "3,561-page manual that previously exposed MacExpertEncoding and font-recovery failures."
+    },
+    {
+      "file": "infineon-aurix-tc3xx.pdf",
+      "title": "AURIX TC3xx User’s Manual Part 1",
+      "url": "https://www.infineon.com/assets/row/public/documents/10/44/infineon-aurix-tc3xx-part1-usermanual-en.pdf",
+      "sha256": "07653ac9f688d6884705c969ad3e3ba7a47e0688e7bdb19432ea6ca81e086c56",
+      "bytes": 17987598,
+      "pages": 2080,
+      "categories": [
+        "semiconductor",
+        "extreme-length",
+        "register-tables",
+        "diagrams"
+      ],
+      "rationale": "2,080-page manual with dense register descriptions, framed fields, diagrams, and repeated chrome."
+    },
+    {
+      "file": "intel-743621-007.pdf",
+      "title": "Intel 700 Series Chipset Family Specification Update",
+      "url": "https://cdrdv2-public.intel.com/743621/743621-007.pdf",
+      "sha256": "f05ce720763a629170a132bd59da478b56d3f2bd16aae6985b11b5425e9dc58b",
+      "bytes": 309065,
+      "pages": 17,
+      "categories": [
+        "semiconductor",
+        "errata-tables",
+        "headers-footers"
+      ],
+      "rationale": "Short errata document with structured issue tables and strong repeated page chrome."
+    },
+    {
+      "file": "intel-743835-004.pdf",
+      "title": "Intel 700 Series Chipset Family PCH Datasheet Volume 1",
+      "url": "https://cdrdv2-public.intel.com/743835/743835-004.pdf",
+      "sha256": "907ff08f960af754eff1e15979d3f7bc17f4b9ccadec2bd3f501fc12fdbe8821",
+      "bytes": 2832749,
+      "pages": 224,
+      "categories": [
+        "semiconductor",
+        "register-tables",
+        "multi-column",
+        "diagrams"
+      ],
+      "rationale": "PCH datasheet with compact electrical tables, register fields, callouts, and side-by-side content."
+    },
+    {
+      "file": "irs-form-1040-2024.pdf",
+      "title": "IRS Form 1040 (2024)",
+      "url": "https://www.irs.gov/pub/irs-prior/f1040--2024.pdf",
+      "sha256": "0a7a54354283044cb41373c6faabfa50955d44bdf91b4b76fa1ca2bf13f6d718",
+      "bytes": 163287,
+      "pages": 2,
+      "categories": [
+        "interactive-form",
+        "positioned-text",
+        "rules"
+      ],
+      "rationale": "Two-page fillable tax form dominated by positioned labels, ruled cells, checkboxes, and form widgets."
+    },
+    {
+      "file": "irs-instructions-1040-2024.pdf",
+      "title": "IRS Form 1040 Instructions (2024)",
+      "url": "https://www.irs.gov/pub/irs-prior/i1040gi--2024.pdf",
+      "sha256": "0ae53ed5020d69e6571d40cd7955b7735f44a28df483626d128628d2810e93d4",
+      "bytes": 4375877,
+      "pages": 113,
+      "categories": [
+        "multi-column",
+        "dense-tables",
+        "long-document",
+        "forms"
+      ],
+      "rationale": "113-page multi-column government instructions with worksheets, tables, callouts, and repeated headers."
+    },
+    {
+      "file": "israel-public-service-hebrew.pdf",
+      "title": "Israel State Comptroller Public Service Report",
+      "url": "https://library.mevaker.gov.il/sites/DigitalLibrary/Documents/2024/2024-Public-Service.pdf",
+      "sha256": "eadaaec7b5b52ab4d76f5655708b90c634ff25b60616ce8fe4d617e9c452b0e2",
+      "bytes": 6439521,
+      "pages": 268,
+      "categories": [
+        "rtl-hebrew",
+        "dense-tables",
+        "long-document"
+      ],
+      "rationale": "268-page right-to-left Hebrew report with charts, long tables, page furniture, and mixed numerals."
+    },
+    {
+      "file": "japan-statistical-yearbook-2024.pdf",
+      "title": "Japan Statistical Yearbook 2024",
+      "url": "https://www.stat.go.jp/english/data/nenkan/73nenkan/zenbun/en73/book/book.pdf",
+      "sha256": "f7408d6480a7dc2b7a6afb5f06cac4ffb4e8eb419f47440197a323be4455b204",
+      "bytes": 13959263,
+      "pages": 795,
+      "categories": [
+        "cjk-japanese",
+        "extreme-tables",
+        "bilingual",
+        "long-document"
+      ],
+      "rationale": "795-page bilingual Japanese/English statistical yearbook dominated by wide, dense numeric tables."
+    },
+    {
+      "file": "microchip-same70.pdf",
+      "title": "SAM E70/S70/V70/V71 Family Data Sheet",
+      "url": "https://ww1.microchip.com/downloads/aemDocuments/documents/MCU32/ProductDocuments/DataSheets/SAM-E70-S70-V70-V71-Family-Data-Sheet-DS60001527.pdf",
+      "sha256": "860df612db3b658f45b99c17be88f9d975bd8b6a8f7f34fc151bc55fff129584",
+      "bytes": 18499667,
+      "pages": 2007,
+      "categories": [
+        "semiconductor",
+        "extreme-length",
+        "register-tables",
+        "diagrams"
+      ],
+      "rationale": "2,007-page MCU datasheet with pinouts, register maps, framed value columns, and timing tables."
+    },
+    {
+      "file": "nasa-systems-engineering-handbook.pdf",
+      "title": "NASA Systems Engineering Handbook Rev. 2",
+      "url": "https://www.nasa.gov/wp-content/uploads/2018/09/nasa_systems_engineering_handbook_0.pdf",
+      "sha256": "8eeb4887a4dc57a23049da7dd2ed556833cf98e214b240468d987873164ff688",
+      "bytes": 3773440,
+      "pages": 297,
+      "categories": [
+        "multi-column",
+        "figures",
+        "tables",
+        "callout-boxes"
+      ],
+      "rationale": "297-page handbook with process diagrams, callout boxes, tables, equations, and mixed layouts."
+    },
+    {
+      "file": "nxp-imx8mm-rm.pdf",
+      "title": "i.MX 8M Mini Applications Processor Reference Manual",
+      "url": "https://www.nxp.com/docs/en/reference-manual/IMX8MMRM.pdf",
+      "sha256": "a21135c79743c35cc55ab791f353fcb7e591a84960085c0e0f857548bf1e41ef",
+      "bytes": 50863063,
+      "pages": 5319,
+      "categories": [
+        "semiconductor",
+        "extreme-length",
+        "register-tables",
+        "diagrams"
+      ],
+      "rationale": "5,319-page processor reference manual stressing page trees, repeated chrome, and register extraction."
+    },
+    {
+      "file": "nxp-imx8mp-rm.pdf",
+      "title": "i.MX 8M Plus Applications Processor Reference Manual",
+      "url": "https://www.nxp.com/docs/en/reference-manual/IMX8MPRM.pdf",
+      "sha256": "372b93437cf0b815fb033d929a35611eb4d63cd80262b2e90005561f3d0eda39",
+      "bytes": 42565907,
+      "pages": 7429,
+      "categories": [
+        "semiconductor",
+        "extreme-length",
+        "register-tables",
+        "diagrams"
+      ],
+      "rationale": "7,429-page processor manual stressing memory, layout recursion, register tables, and throughput."
+    },
+    {
+      "file": "nxp-s32k3xx.pdf",
+      "title": "S32K3xx Data Sheet",
+      "url": "https://www.nxp.com/docs/en/data-sheet/S32K3xx.pdf",
+      "sha256": "671598c1f699b14ac1b707d245bd209e913a7a1a6b4c78129abb9acff848ca8d",
+      "bytes": 2552939,
+      "pages": 170,
+      "categories": [
+        "semiconductor",
+        "electrical-tables",
+        "tagged-pdf",
+        "javascript"
+      ],
+      "rationale": "Tagged automotive MCU datasheet with JavaScript, dense electrical tables, footnotes, and diagrams."
+    },
+    {
+      "file": "pdf-32000-1-2008.pdf",
+      "title": "PDF 1.7 / ISO 32000-1:2008 Specification",
+      "url": "https://opensource.adobe.com/dc-acrobat-sdk-docs/standards/pdfstandards/pdf/PDF32000_2008.pdf",
+      "sha256": "9de0ca9e8570d6209e8bd48a355be8eb6ec376acfc3fc3ae97cd8730351417ff",
+      "bytes": 22491828,
+      "pages": 756,
+      "categories": [
+        "formal-standard",
+        "long-document",
+        "tables",
+        "cross-references"
+      ],
+      "rationale": "756-page PDF specification with syntax examples, nested tables, diagrams, and extensive cross-references."
+    },
+    {
+      "file": "pgf-tikz-manual.pdf",
+      "title": "PGF/TikZ Manual",
+      "url": "https://texdoc.org/serve/pgfmanual/0",
+      "sha256": "f679b859a0f05f5d9eaf92918de895aebfe5f3bc7d52724b278b2c4ec4fb9704",
+      "bytes": 9444626,
+      "pages": 1323,
+      "categories": [
+        "born-digital-math",
+        "vector-graphics",
+        "code",
+        "long-document"
+      ],
+      "rationale": "1,323-page graphics manual mixing TeX math, source code, vector illustrations, syntax blocks, and indexes."
+    },
+    {
+      "file": "qpdf-bad-xref.pdf",
+      "title": "qpdf bad cross-reference fixture",
+      "url": "https://raw.githubusercontent.com/qpdf/qpdf/e8adee327e4ed76f540a40fd674dfb4903e26f3a/qpdf/qtest/qpdf/bad-xref.pdf",
+      "sha256": "5895dfedf978f600b12e29643617dbb111869b60526d957878e349571e1467d1",
+      "bytes": 819,
+      "pages": 1,
+      "categories": [
+        "malformed-pdf",
+        "xref-recovery",
+        "expected-repair"
+      ],
+      "rationale": "Minimal intentionally malformed PDF requiring cross-reference recovery."
+    },
+    {
+      "file": "qpdf-damaged-inline-image.pdf",
+      "title": "qpdf damaged inline-image fixture",
+      "url": "https://raw.githubusercontent.com/qpdf/qpdf/e8adee327e4ed76f540a40fd674dfb4903e26f3a/qpdf/qtest/qpdf/damaged-inline-image.pdf",
+      "sha256": "18dae3c4253d30e262da786e7d238305dc2046f1c94d2b566d5589336106084c",
+      "bytes": 5558,
+      "pages": 1,
+      "categories": [
+        "malformed-pdf",
+        "inline-image",
+        "expected-repair"
+      ],
+      "rationale": "Intentionally damaged inline-image stream testing parser recovery without hangs or crashes."
+    },
+    {
+      "file": "qpdf-encrypted-password.pdf",
+      "title": "qpdf password-protected fixture",
+      "url": "https://raw.githubusercontent.com/qpdf/qpdf/e8adee327e4ed76f540a40fd674dfb4903e26f3a/qpdf/qtest/qpdf/encrypted-40-bit-R3.pdf",
+      "sha256": "221b17165d2c807500165c7890f6f8f355b6cf62ecdb430d9bae71cec17b8369",
+      "bytes": 1041,
+      "pages": 1,
+      "categories": [
+        "encrypted-pdf",
+        "password-required",
+        "expected-failure"
+      ],
+      "rationale": "Password-protected PDF control used to verify explicit, deterministic failure semantics."
+    },
+    {
+      "file": "qpdf-rotated.pdf",
+      "title": "qpdf rotated-page fixture",
+      "url": "https://raw.githubusercontent.com/qpdf/qpdf/e8adee327e4ed76f540a40fd674dfb4903e26f3a/qpdf/qtest/qpdf/rotated.pdf",
+      "sha256": "698f6e15b2ac77e17a9677977ac1b4d657d1c7c29fde69cd46f4702ecf19c911",
+      "bytes": 7319,
+      "pages": 20,
+      "categories": [
+        "rotated-pages",
+        "page-tree",
+        "positioned-text"
+      ],
+      "rationale": "Twenty-page atomic fixture covering page rotation and inherited page geometry."
+    },
+    {
+      "file": "raspberry-pi-rp2040.pdf",
+      "title": "RP2040 Data Sheet",
+      "url": "https://pip-assets.raspberrypi.com/categories/814-rp2040/documents/RP-008371-DS-1-rp2040-datasheet.pdf",
+      "sha256": "be56fbb75ba0ae9e26558a73c93ac3e75c2ad4e6878d3b6703de2a76d886ea8c",
+      "bytes": 5301205,
+      "pages": 642,
+      "categories": [
+        "semiconductor",
+        "register-tables",
+        "diagrams",
+        "code"
+      ],
+      "rationale": "642-page MCU datasheet with register fields, code snippets, timing diagrams, and tables."
+    },
+    {
+      "file": "renesas-ra6m2.pdf",
+      "title": "Renesas RA6M2 Group User’s Manual: Hardware",
+      "url": "https://www.renesas.com/en/document/mah/renesas-ra6m2-group-users-manual-hardware",
+      "sha256": "a7a18f1cafe7c34a30bfccfb799f97b05d14ee9bfef9f210dcb34258a3707a9a",
+      "bytes": 25768741,
+      "pages": 1738,
+      "categories": [
+        "semiconductor",
+        "long-document",
+        "register-tables",
+        "diagrams"
+      ],
+      "rationale": "1,738-page hardware manual with register descriptions, block diagrams, bit fields, and dense tables."
+    },
+    {
+      "file": "riscv-unprivileged-20250508.pdf",
+      "title": "RISC-V Unprivileged ISA Specification",
+      "url": "https://docs.riscv.org/reference/isa/v20250508/_attachments/riscv-unprivileged.pdf",
+      "sha256": "cef2e63c08c6f82cf7acc9056a589954f5b1adf6f7dccaa38cd75278b093e984",
+      "bytes": 4643378,
+      "pages": 727,
+      "categories": [
+        "formal-standard",
+        "born-digital-math",
+        "instruction-tables",
+        "long-document"
+      ],
+      "rationale": "727-page ISA standard with instruction encodings, equations, pseudocode, and dense tables."
+    },
+    {
+      "file": "scan-american-bible.pdf",
+      "title": "The American Bible (public-domain scan)",
+      "url": "https://archive.org/download/collection3-of-free-public-domain-books/americanbible00hubbrich_bw.pdf",
+      "sha256": "37e525911860c29fc88f89f89c88b4b48e350728396fbb11db3970d39abf8f31",
+      "bytes": 18137068,
+      "pages": 382,
+      "categories": [
+        "scanned",
+        "historical-type",
+        "illustrations",
+        "ocr-control"
+      ],
+      "rationale": "382-page image-based historical book scan used as a no-OCR control and robustness case."
+    },
+    {
+      "file": "scan-costume-design.pdf",
+      "title": "Costume Design and Illustration (public-domain scan)",
+      "url": "https://archive.org/download/collection3-of-free-public-domain-books/costumedesignill00trapiala_bw.pdf",
+      "sha256": "54d509f4f6febef6b14017951925497548e57b7e1b6b4969f03d58ebbc6f50ff",
+      "bytes": 14723645,
+      "pages": 226,
+      "categories": [
+        "scanned",
+        "illustrations",
+        "historical-type",
+        "ocr-control"
+      ],
+      "rationale": "226-page illustrated image-based scan with plates, decorative typography, and no reliable text layer."
+    },
+    {
+      "file": "ti-am62x-trm.pdf",
+      "title": "AM62x Processors Technical Reference Manual",
+      "url": "https://www.ti.com/lit/ug/spruiv7c/spruiv7c.pdf",
+      "sha256": "34cc2fd7e46ec00af723653e62743596d187b8cc1c3a5f28d71216d744f73af2",
+      "bytes": 135025267,
+      "pages": 16613,
+      "categories": [
+        "semiconductor",
+        "extreme-length",
+        "register-tables",
+        "throughput"
+      ],
+      "rationale": "16,613-page, 135 MB reference manual: the corpus stress test for page trees, memory, and throughput."
+    },
+    {
+      "file": "un-annual-report-2023.pdf",
+      "title": "United Nations Annual Report 2023",
+      "url": "https://www.un.org/sites/un2.un.org/files/sg_annual_report_2023_en_0.pdf",
+      "sha256": "9fdd882dd1891d720704ac7b890f64b0fe1568799df3e3b2e2469d41ffb77059",
+      "bytes": 38400395,
+      "pages": 105,
+      "categories": [
+        "graphic-design",
+        "multi-column",
+        "charts",
+        "photographs"
+      ],
+      "rationale": "Visually designed report with photographs, oversized typography, data callouts, charts, and varied layouts."
+    },
+    {
+      "file": "un-multilingualism.pdf",
+      "title": "Why It Matters: Multilingualism at the United Nations",
+      "url": "https://www.un.org/sites/un2.un.org/files/2227864e.pdf",
+      "sha256": "3a376c01bb16dc6be32b7465f7a3851746290223073b42193d8f46ea6fc911ed",
+      "bytes": 18798157,
+      "pages": 70,
+      "categories": [
+        "multilingual",
+        "rtl-arabic",
+        "cjk-chinese",
+        "graphic-design"
+      ],
+      "rationale": "Designed report mixing all six UN languages, timelines, callouts, images, and complex reading order."
+    },
+    {
+      "file": "un-security-council-arabic.pdf",
+      "title": "UN Security Council S/2024/748 (Arabic)",
+      "url": "https://documents.un.org/doc/undoc/gen/n24/268/36/pdf/n2426836.pdf",
+      "sha256": "99945dc3d331778a3a4903687c6853b66d979c0b22b916bebff0800c9ad65708",
+      "bytes": 17422876,
+      "pages": 182,
+      "categories": [
+        "rtl-arabic",
+        "long-document",
+        "annexes",
+        "mixed-language"
+      ],
+      "rationale": "182-page Arabic RTL report with English/French inserts, numbered notes, tables, images, and annexes."
+    },
+    {
+      "file": "unicode-16.pdf",
+      "title": "The Unicode Standard, Version 16.0",
+      "url": "https://www.unicode.org/versions/Unicode16.0.0/UnicodeStandard-16.0.pdf",
+      "sha256": "fb106a03e3aa88e4f54f84d07b9e22bee05615ebbc468b3957973d34eb1ef83c",
+      "bytes": 12103377,
+      "pages": 1140,
+      "categories": [
+        "multilingual",
+        "cjk",
+        "rtl",
+        "formal-standard"
+      ],
+      "rationale": "1,140-page multilingual standard spanning complex scripts, character charts, tables, and technical prose."
+    },
+    {
+      "file": "us-budget-2025-table-26-1.pdf",
+      "title": "US Federal Budget FY2025 Table 26-1",
+      "url": "https://www.govinfo.gov/content/pkg/BUDGET-2025-PER/pdf/BUDGET-2025-PER-6-2-1.pdf",
+      "sha256": "c8e7cf07a5c5b3179181060683a216a3d36e33c05e0b6b9d8b354600be7a25b9",
+      "bytes": 2400846,
+      "pages": 475,
+      "categories": [
+        "extreme-tables",
+        "landscape",
+        "tiny-text",
+        "long-document"
+      ],
+      "rationale": "475-page government budget table with wide numeric columns, tiny text, and repeated multi-page structure."
+    },
+    {
+      "file": "usb-midi-2.pdf",
+      "title": "USB MIDI 2.0 Specification",
+      "url": "https://www.usb.org/sites/default/files/USB%20MIDI%20v2_0.pdf",
+      "sha256": "604f8683e0b16c39b79c7fc11ea51ac74477fdcee6b8cd6dc32ba664db1122fe",
+      "bytes": 1595403,
+      "pages": 47,
+      "categories": [
+        "formal-standard",
+        "protocol-tables",
+        "bit-fields",
+        "diagrams"
+      ],
+      "rationale": "Protocol specification with packet diagrams, bit-field tables, code values, and technical figures."
+    },
+    {
+      "file": "verapdf-tagged-fail-a.pdf",
+      "title": "veraPDF tagged-PDF failure fixture A",
+      "url": "https://raw.githubusercontent.com/veraPDF/veraPDF-corpus-PDFA-Tagged/master/veraPDF%20test%20suite%206-8-3-3-t01-fail-a.pdf",
+      "sha256": "b19edaa377e6a8240a4437205ac4d145f01f03e7dd3efa315e3f0c4bbb116d42",
+      "bytes": 9709,
+      "pages": 1,
+      "categories": [
+        "tagged-pdf",
+        "logical-structure",
+        "malformed-pdf"
+      ],
+      "rationale": "Official atomic fixture with intentionally invalid tagged-PDF logical structure."
+    },
+    {
+      "file": "verapdf-tagged-fail-b.pdf",
+      "title": "veraPDF tagged-PDF failure fixture B",
+      "url": "https://raw.githubusercontent.com/veraPDF/veraPDF-corpus-PDFA-Tagged/master/veraPDF%20test%20suite%206-8-3-3-t01-fail-b.pdf",
+      "sha256": "77c9327439148014f731ec349090c421c465f275c8d5925cc9812a7e4fa530be",
+      "bytes": 10301,
+      "pages": 2,
+      "categories": [
+        "tagged-pdf",
+        "logical-structure",
+        "malformed-pdf"
+      ],
+      "rationale": "Official atomic fixture with a second intentionally invalid tagged-PDF structure case."
+    },
+    {
+      "file": "vulkan-sc-1.0.pdf",
+      "title": "Vulkan SC 1.0 Specification with Extensions",
+      "url": "https://registry.khronos.org/VulkanSC/specs/1.0-extensions/pdf/vkspec.pdf",
+      "sha256": "b2e51244c992d9fd509da2fc940785358fa2f56ab29d527b6149a05a18971f82",
+      "bytes": 8102364,
+      "pages": 2105,
+      "categories": [
+        "formal-standard",
+        "extreme-length",
+        "tables",
+        "code"
+      ],
+      "rationale": "2,105-page API standard with nested valid-usage lists, code, equations, extension tables, and cross-references."
+    }
+  ]
+}

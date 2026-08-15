@@ -1,0 +1,991 @@
+{
+  "schema": 1,
+  "description": "Blind fixed-page content anchors generated only from source PDFs.",
+  "method": {
+    "page_fractions": [
+      0.05,
+      0.25,
+      0.5,
+      0.75,
+      0.95
+    ],
+    "words_per_anchor": 7,
+    "source_extractor": "pdftotext",
+    "excludes": [
+      "repeated chrome",
+      "title-like lines",
+      "RTL lines with ambiguous extractor order"
+    ]
+  },
+  "manifest_sha256": "aa899971c663d9b11755fe1f8b46a86cc9662f2d28620886c2844963588b24cd",
+  "documents": {
+    "arxiv-attention.pdf": {
+      "sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 1,
+          "value": "networks that include an encoder and a"
+        },
+        {
+          "type": "contains_words",
+          "page": 4,
+          "value": "dimension dv we compute the dot products"
+        },
+        {
+          "type": "contains_words",
+          "page": 8,
+          "value": "input length 50 but terminate early when"
+        },
+        {
+          "type": "contains_words",
+          "page": 11,
+          "value": "hochreiter and jürgen schmidhuber long short term"
+        },
+        {
+          "type": "contains_words",
+          "page": 14,
+          "value": "note that the attentions are very sharp"
+        }
+      ]
+    },
+    "arxiv-gpt3.pdf": {
+      "sha256": "97fd272f1fdfc18677462d0292f5fbf26ca86b4d1b485c2dba03269b643a0e83",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 4,
+          "value": "tur20 each increase has brought improvements in"
+        },
+        {
+          "type": "contains_words",
+          "page": 19,
+          "value": "3 on superglue compared to fine tuned"
+        },
+        {
+          "type": "contains_words",
+          "page": 38,
+          "value": "burma fellowship monk japanese reluctant wisdom enlightenment"
+        },
+        {
+          "type": "contains_words",
+          "page": 56,
+          "value": "moved faster in fact she said raising"
+        },
+        {
+          "type": "contains_words",
+          "page": 71,
+          "value": "and veselin stoyanov roberta a robustly optimized"
+        }
+      ]
+    },
+    "arxiv-sparks-agi.pdf": {
+      "sha256": "dee926384a7c107a9b51273a99fca2aecb3ed6c27ba7ace0fba67a147a63d2aa",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 8,
+          "value": "we also give some more experiments on"
+        },
+        {
+          "type": "contains_words",
+          "page": 39,
+          "value": "the a100 revenue was about 2 billion"
+        },
+        {
+          "type": "contains_words",
+          "page": 78,
+          "value": "fact that one needs to plan ahead"
+        },
+        {
+          "type": "contains_words",
+          "page": 116,
+          "value": "the enemy tanks are moving randomly and"
+        },
+        {
+          "type": "contains_words",
+          "page": 147,
+          "value": "a new area called temperate forest add"
+        }
+      ]
+    },
+    "ecma-262-2024.pdf": {
+      "sha256": "c7558ec49d7b6ed7fdc2b375655cbfb1fb0e0f30f64a26c2f29811401fd19853",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 204,
+          "value": "property on ordinary arguments objects since implementations"
+        },
+        {
+          "type": "contains_words",
+          "page": 408,
+          "value": "localname be the sole element of boundnames"
+        },
+        {
+          "type": "contains_words",
+          "page": 612,
+          "value": "relativetarget 0 let targetindex be max len"
+        },
+        {
+          "type": "contains_words",
+          "page": 775,
+          "value": "a 7 time zone offset string format"
+        }
+      ]
+    },
+    "espressif-esp32.pdf": {
+      "sha256": "4ba58e9fa0405ec2bf80b912a29b483f6edc8c4b2b1058201913a2fe37e582f0",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 39,
+          "value": "reg sens base and dr reg rtc"
+        },
+        {
+          "type": "contains_words",
+          "page": 196,
+          "value": "bias core folw 8m bias core follow"
+        },
+        {
+          "type": "contains_words",
+          "page": 392,
+          "value": "value checking is enabled by 1 while"
+        },
+        {
+          "type": "contains_words",
+          "page": 588,
+          "value": "register 26 23 slchost conf w6 reg"
+        },
+        {
+          "type": "contains_words",
+          "page": 745,
+          "value": "mode only 4 bit information on channel"
+        }
+      ]
+    },
+    "faa-iac-rotated-airport-diagrams.pdf": {
+      "sha256": "f3b37fa4640174aadf01dd250bea9a4c9ff3274e17021b05c2605edde1a94028",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 50,
+          "value": "be depicted without concentric rings when all"
+        },
+        {
+          "type": "contains_words",
+          "page": 100,
+          "value": "textual and graphic will be solid color"
+        }
+      ]
+    },
+    "infineon-aurix-tc3xx-part2.pdf": {
+      "sha256": "7e377d6c393df8c95ea81d8867b043f165eb8cffaeffe19d7ad18b2d0f74dcf3",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 178,
+          "value": "enable bit str3 en and str7 en"
+        },
+        {
+          "type": "contains_words",
+          "page": 890,
+          "value": "table 188 mcs master interface address map"
+        },
+        {
+          "type": "contains_words",
+          "page": 1780,
+          "value": "field enables both the parity generation in"
+        },
+        {
+          "type": "contains_words",
+          "page": 2671,
+          "value": "disable the receive flow control for the"
+        },
+        {
+          "type": "contains_words",
+          "page": 3383,
+          "value": "frequency generation digital to analog conversion process"
+        }
+      ]
+    },
+    "infineon-aurix-tc3xx.pdf": {
+      "sha256": "07653ac9f688d6884705c969ad3e3ba7a47e0688e7bdb19432ea6ca81e086c56",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 520,
+          "value": "can lock read access completely until the"
+        },
+        {
+          "type": "contains_words",
+          "page": 1040,
+          "value": "external supply mode h vext vddp3 and"
+        },
+        {
+          "type": "contains_words",
+          "page": 1560,
+          "value": "first stage fft memory organisation 16 bit"
+        },
+        {
+          "type": "contains_words",
+          "page": 1976,
+          "value": "watchdog timeout was triggered at the isp"
+        }
+      ]
+    },
+    "intel-743621-007.pdf": {
+      "sha256": "f05ce720763a629170a132bd59da478b56d3f2bd16aae6985b11b5425e9dc58b",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 4,
+          "value": "intel chipset h770 and b760 mobile intel"
+        },
+        {
+          "type": "contains_words",
+          "page": 8,
+          "value": "is not applicable to the listed product"
+        },
+        {
+          "type": "contains_words",
+          "page": 13,
+          "value": "change has occurred without a tgpiotcv register"
+        },
+        {
+          "type": "contains_words",
+          "page": 16,
+          "value": "no specification changes in this revision of"
+        }
+      ]
+    },
+    "intel-743835-004.pdf": {
+      "sha256": "907ff08f960af754eff1e15979d3f7bc17f4b9ccadec2bd3f501fc12fdbe8821",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 11,
+          "value": "registers with read paths in alt access"
+        },
+        {
+          "type": "contains_words",
+          "page": 56,
+          "value": "read a counter is unlatched the other"
+        },
+        {
+          "type": "contains_words",
+          "page": 112,
+          "value": "that supports non common clock mode with"
+        },
+        {
+          "type": "contains_words",
+          "page": 168,
+          "value": "message intr has been set indicating the"
+        },
+        {
+          "type": "contains_words",
+          "page": 213,
+          "value": "rf companion crf reset signal active low"
+        }
+      ]
+    },
+    "irs-form-1040-2024.pdf": {
+      "sha256": "0a7a54354283044cb41373c6faabfa50955d44bdf91b4b76fa1ca2bf13f6d718",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 1,
+          "value": "10 from line 9 this is your"
+        },
+        {
+          "type": "contains_words",
+          "page": 2,
+          "value": "line 34 you want applied to your"
+        }
+      ]
+    },
+    "irs-instructions-1040-2024.pdf": {
+      "sha256": "0ae53ed5020d69e6571d40cd7955b7735f44a28df483626d128628d2810e93d4",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 6,
+          "value": "the required minimum distribution rules see pub"
+        },
+        {
+          "type": "contains_words",
+          "page": 28,
+          "value": "amount of your pension or annuity by"
+        },
+        {
+          "type": "contains_words",
+          "page": 56,
+          "value": "caution this is not a tax table"
+        },
+        {
+          "type": "contains_words",
+          "page": 85,
+          "value": "as a sole proprietor report your income"
+        },
+        {
+          "type": "contains_words",
+          "page": 107,
+          "value": "may not add to total time due"
+        }
+      ]
+    },
+    "israel-public-service-hebrew.pdf": {
+      "sha256": "eadaaec7b5b52ab4d76f5655708b90c634ff25b60616ce8fe4d617e9c452b0e2",
+      "checks": []
+    },
+    "japan-statistical-yearbook-2024.pdf": {
+      "sha256": "f7408d6480a7dc2b7a6afb5f06cac4ffb4e8eb419f47440197a323be4455b204",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 199,
+          "value": "fob 価格 輸入は運賃 保険料込み cif 価格である また"
+        },
+        {
+          "type": "contains_words",
+          "page": 398,
+          "value": "of tertiary industry activity have been compiled"
+        },
+        {
+          "type": "contains_words",
+          "page": 596,
+          "value": "pension for the aged disability employees pension"
+        },
+        {
+          "type": "contains_words",
+          "page": 755,
+          "value": "b life expectancy at birth by sex"
+        }
+      ]
+    },
+    "microchip-same70.pdf": {
+      "sha256": "860df612db3b658f45b99c17be88f9d975bd8b6a8f7f34fc151bc55fff129584",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 100,
+          "value": "be too small unreasonably small values break"
+        },
+        {
+          "type": "contains_words",
+          "page": 502,
+          "value": "9 16 xdmac global channel software request"
+        },
+        {
+          "type": "contains_words",
+          "page": 1004,
+          "value": "values are valid for all listed bit"
+        },
+        {
+          "type": "contains_words",
+          "page": 1505,
+          "value": "0 f0ds 2 0 receive fifo 0"
+        },
+        {
+          "type": "contains_words",
+          "page": 1907,
+          "value": "provide current consumption and wake up time"
+        }
+      ]
+    },
+    "nasa-systems-engineering-handbook.pdf": {
+      "sha256": "8eeb4887a4dc57a23049da7dd2ed556833cf98e214b240468d987873164ff688",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 15,
+          "value": "system design product realization and technical management"
+        },
+        {
+          "type": "contains_words",
+          "page": 74,
+          "value": "studies interface characteristics and rationales to requirements"
+        },
+        {
+          "type": "contains_words",
+          "page": 148,
+          "value": "strategy and procedures for conducting interface management"
+        },
+        {
+          "type": "contains_words",
+          "page": 223,
+          "value": "elements can be at a higher trl"
+        },
+        {
+          "type": "contains_words",
+          "page": 282,
+          "value": "22 u s c 2778 of the"
+        }
+      ]
+    },
+    "nxp-imx8mm-rm.pdf": {
+      "sha256": "a21135c79743c35cc55ab791f353fcb7e591a84960085c0e0f857548bf1e41ef",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 266,
+          "value": "34 dft tap id configuration register description"
+        },
+        {
+          "type": "contains_words",
+          "page": 1330,
+          "value": "iomuxc sai5 rx data select input 3"
+        },
+        {
+          "type": "contains_words",
+          "page": 2660,
+          "value": "means the register is available in host"
+        },
+        {
+          "type": "contains_words",
+          "page": 3989,
+          "value": "spread selects which green pixels are used"
+        },
+        {
+          "type": "contains_words",
+          "page": 5053,
+          "value": "25 inter mb mode favor in intra"
+        }
+      ]
+    },
+    "nxp-imx8mp-rm.pdf": {
+      "sha256": "372b93437cf0b815fb033d929a35611eb4d63cd80262b2e90005561f3d0eda39",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 371,
+          "value": "b23c pre divider register ccm pre root100"
+        },
+        {
+          "type": "contains_words",
+          "page": 1857,
+          "value": "296 sw pad ctl pad clkin1 sw"
+        },
+        {
+          "type": "contains_words",
+          "page": 3714,
+          "value": "ln0 mon rx oc dfe dac err"
+        },
+        {
+          "type": "contains_words",
+          "page": 5572,
+          "value": "composer vsi packet data ieee register 1"
+        },
+        {
+          "type": "contains_words",
+          "page": 7058,
+          "value": "bits estimation bias for intra cu 16"
+        }
+      ]
+    },
+    "nxp-s32k3xx.pdf": {
+      "sha256": "671598c1f699b14ac1b707d245bd209e913a7a1a6b4c78129abb9acff848ca8d",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 8,
+          "value": "s32k328 asil b dual core 8mb general"
+        },
+        {
+          "type": "contains_words",
+          "page": 42,
+          "value": "28 289bga package decoupling capacitor pinout diagram"
+        },
+        {
+          "type": "contains_words",
+          "page": 85,
+          "value": "3v 2 97v 3 63v gpio output"
+        },
+        {
+          "type": "contains_words",
+          "page": 128,
+          "value": "64 quadspi octal 3 3v ddr 120mhz"
+        },
+        {
+          "type": "contains_words",
+          "page": 162,
+          "value": "absolute maximum ratings for symbol i injpad"
+        }
+      ]
+    },
+    "pdf-32000-1-2008.pdf": {
+      "sha256": "9de0ca9e8570d6209e8bd48a355be8eb6ec376acfc3fc3ae97cd8730351417ff",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 38,
+          "value": "comité consultatif international téléphonique et télégraphique international"
+        },
+        {
+          "type": "contains_words",
+          "page": 189,
+          "value": "into effect temporarily while the shading pattern"
+        },
+        {
+          "type": "contains_words",
+          "page": 378,
+          "value": "the collection such as a title and"
+        },
+        {
+          "type": "contains_words",
+          "page": 567,
+          "value": "products to share nonstandard structure elements in"
+        },
+        {
+          "type": "contains_words",
+          "page": 718,
+          "value": "the generation number after an object has"
+        }
+      ]
+    },
+    "pgf-tikz-manual.pdf": {
+      "sha256": "f679b859a0f05f5d9eaf92918de895aebfe5f3bc7d52724b278b2c4ec4fb9704",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 66,
+          "value": "intersections of d and e by label"
+        },
+        {
+          "type": "contains_words",
+          "page": 331,
+          "value": "style diamond draw blue thick fill blue"
+        },
+        {
+          "type": "contains_words",
+          "page": 662,
+          "value": "total number of words in the decoration"
+        },
+        {
+          "type": "contains_words",
+          "page": 992,
+          "value": "will completely expand hvaluei using edef before"
+        },
+        {
+          "type": "contains_words",
+          "page": 1257,
+          "value": "draw blue very thick fill blue 20"
+        }
+      ]
+    },
+    "qpdf-bad-xref.pdf": {
+      "sha256": "5895dfedf978f600b12e29643617dbb111869b60526d957878e349571e1467d1",
+      "checks": []
+    },
+    "qpdf-damaged-inline-image.pdf": {
+      "sha256": "18dae3c4253d30e262da786e7d238305dc2046f1c94d2b566d5589336106084c",
+      "checks": []
+    },
+    "qpdf-encrypted-password.pdf": {
+      "sha256": "221b17165d2c807500165c7890f6f8f355b6cf62ecdb430d9bae71cec17b8369",
+      "checks": []
+    },
+    "qpdf-rotated.pdf": {
+      "sha256": "698f6e15b2ac77e17a9677977ac1b4d657d1c7c29fde69cd46f4702ecf19c911",
+      "checks": []
+    },
+    "raspberry-pi-rp2040.pdf": {
+      "sha256": "be56fbb75ba0ae9e26558a73c93ac3e75c2ad4e6878d3b6703de2a76d886ea8c",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 32,
+          "value": "or software can insert a fixed 8"
+        },
+        {
+          "type": "contains_words",
+          "page": 160,
+          "value": "flag this is set by psm restart"
+        },
+        {
+          "type": "contains_words",
+          "page": 321,
+          "value": "be evaluated see expressions note that the"
+        },
+        {
+          "type": "contains_words",
+          "page": 482,
+          "value": "threshold value set in the ic tx"
+        },
+        {
+          "type": "contains_words",
+          "page": 610,
+          "value": "profile shall be adjusted to achieve the"
+        }
+      ]
+    },
+    "renesas-ra6m2.pdf": {
+      "sha256": "a7a18f1cafe7c34a30bfccfb799f97b05d14ee9bfef9f210dcb34258a3707a9a",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 87,
+          "value": "0 when the mcu is not in"
+        },
+        {
+          "type": "contains_words",
+          "page": 434,
+          "value": "dar register to the address of the"
+        },
+        {
+          "type": "contains_words",
+          "page": 869,
+          "value": "received by an ack response and the"
+        },
+        {
+          "type": "contains_words",
+          "page": 1304,
+          "value": "0 0 ssifrdr has one stage or"
+        },
+        {
+          "type": "contains_words",
+          "page": 1651,
+          "value": "vol 0 3 vcc vih 0 7"
+        }
+      ]
+    },
+    "riscv-unprivileged-20250508.pdf": {
+      "sha256": "cef2e63c08c6f82cf7acc9056a589954f5b1adf6f7dccaa38cd75278b093e984",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 36,
+          "value": "a common encoding across rv64i and a"
+        },
+        {
+          "type": "contains_words",
+          "page": 182,
+          "value": "be a major bottleneck in servers running"
+        },
+        {
+          "type": "contains_words",
+          "page": 364,
+          "value": "as vd and which will be clobbered"
+        },
+        {
+          "type": "contains_words",
+          "page": 545,
+          "value": "rkey bits 128 get velem vs2 egw"
+        },
+        {
+          "type": "contains_words",
+          "page": 691,
+          "value": "instruction is finished any un taken alternative"
+        }
+      ]
+    },
+    "scan-american-bible.pdf": {
+      "sha256": "37e525911860c29fc88f89f89c88b4b48e350728396fbb11db3970d39abf8f31",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 19,
+          "value": "and a people in trouble s he"
+        },
+        {
+          "type": "contains_words",
+          "page": 96,
+          "value": "governed but this can not be true"
+        },
+        {
+          "type": "contains_words",
+          "page": 191,
+          "value": "fugitive ministers there shall be no fear"
+        },
+        {
+          "type": "contains_words",
+          "page": 286,
+          "value": "man is holy and that this love"
+        },
+        {
+          "type": "contains_words",
+          "page": 363,
+          "value": "that he who does not advertise is"
+        }
+      ]
+    },
+    "scan-costume-design.pdf": {
+      "sha256": "54d509f4f6febef6b14017951925497548e57b7e1b6b4969f03d58ebbc6f50ff",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 11,
+          "value": "teachers association classes formerly on the staff"
+        },
+        {
+          "type": "contains_words",
+          "page": 56,
+          "value": "list of materials it consists of examples"
+        },
+        {
+          "type": "contains_words",
+          "page": 113,
+          "value": "centuries adopted the byzantine styles for the"
+        },
+        {
+          "type": "contains_words",
+          "page": 170,
+          "value": "includes several half tone plates of filipino"
+        },
+        {
+          "type": "contains_words",
+          "page": 215,
+          "value": "history 13th and 14th centuries 108 110"
+        }
+      ]
+    },
+    "ti-am62x-trm.pdf": {
+      "sha256": "34cc2fd7e46ec00af723653e62743596d187b8cc1c3a5f28d71216d744f73af2",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 831,
+          "value": "cluster0 pbist 0 dft pbist cpu out"
+        },
+        {
+          "type": "contains_words",
+          "page": 4153,
+          "value": "id register defines the destination id value"
+        },
+        {
+          "type": "contains_words",
+          "page": 8306,
+          "value": "9689 icssm pr1 iep0 slv cmp0 reg0"
+        },
+        {
+          "type": "contains_words",
+          "page": 12460,
+          "value": "17206 usb2ss phy2 utmi reg47 register field"
+        },
+        {
+          "type": "contains_words",
+          "page": 15782,
+          "value": "11158 rom table 0 0 rom manual"
+        }
+      ]
+    },
+    "un-annual-report-2023.pdf": {
+      "sha256": "9fdd882dd1891d720704ac7b890f64b0fe1568799df3e3b2e2469d41ffb77059",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 5,
+          "value": "a giant puppet of a 10 year"
+        },
+        {
+          "type": "contains_words",
+          "page": 26,
+          "value": "advocating in favour of a new global"
+        },
+        {
+          "type": "contains_words",
+          "page": 52,
+          "value": "solar powered borehole in the village of"
+        },
+        {
+          "type": "contains_words",
+          "page": 79,
+          "value": "number of multilateral treaties deposited with the"
+        },
+        {
+          "type": "contains_words",
+          "page": 100,
+          "value": "by the special adviser on addressing racism"
+        }
+      ]
+    },
+    "un-multilingualism.pdf": {
+      "sha256": "3a376c01bb16dc6be32b7465f7a3851746290223073b42193d8f46ea6fc911ed",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 4,
+          "value": "why it matters multilingualism at the united"
+        },
+        {
+          "type": "contains_words",
+          "page": 18,
+          "value": "official languages english french portuguese and spanish"
+        },
+        {
+          "type": "contains_words",
+          "page": 35,
+          "value": "how language requirements are set in job"
+        },
+        {
+          "type": "contains_words",
+          "page": 52,
+          "value": "facilitated international discussion and understanding and contributed"
+        },
+        {
+          "type": "contains_words",
+          "page": 66,
+          "value": "reporting periodically on progress made in implementing"
+        }
+      ]
+    },
+    "un-security-council-arabic.pdf": {
+      "sha256": "99945dc3d331778a3a4903687c6853b66d979c0b22b916bebff0800c9ad65708",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 9,
+          "value": "attack in somali capital that kills 4"
+        },
+        {
+          "type": "contains_words",
+          "page": 46,
+          "value": "for the coordination of humanitarian affairs somalia"
+        },
+        {
+          "type": "contains_words",
+          "page": 91,
+          "value": "appendix b list of relevant wam sops"
+        },
+        {
+          "type": "contains_words",
+          "page": 136,
+          "value": "26 changes in charcoal stockpiles in and"
+        },
+        {
+          "type": "contains_words",
+          "page": 173,
+          "value": "suspected pirates arrested by warships the seychelles"
+        }
+      ]
+    },
+    "unicode-16.pdf": {
+      "sha256": "fb106a03e3aa88e4f54f84d07b9e22bee05615ebbc468b3957973d34eb1ef83c",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 57,
+          "value": "otherwise change positions of their components radically"
+        },
+        {
+          "type": "contains_words",
+          "page": 285,
+          "value": "character based parsers a set of guidelines"
+        },
+        {
+          "type": "contains_words",
+          "page": 570,
+          "value": "with devanagari u a8f9 devanagari gap filler"
+        },
+        {
+          "type": "contains_words",
+          "page": 855,
+          "value": "compatibility characters necessary for some regions like"
+        },
+        {
+          "type": "contains_words",
+          "page": 1083,
+          "value": "be indicated with a formatting tag shown"
+        }
+      ]
+    },
+    "us-budget-2025-table-26-1.pdf": {
+      "sha256": "c8e7cf07a5c5b3179181060683a216a3d36e33c05e0b6b9d8b354600be7a25b9",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 24,
+          "value": "total agricultural research and services subfunction 352"
+        },
+        {
+          "type": "contains_words",
+          "page": 119,
+          "value": "of education nonrecurring expenses fund 018 80"
+        },
+        {
+          "type": "contains_words",
+          "page": 238,
+          "value": "executive office for immigration review 011 03"
+        },
+        {
+          "type": "contains_words",
+          "page": 356,
+          "value": "change in uncollected customer payments from federal"
+        },
+        {
+          "type": "contains_words",
+          "page": 451,
+          "value": "to the postal service fund 440 00"
+        }
+      ]
+    },
+    "usb-midi-2.pdf": {
+      "sha256": "604f8683e0b16c39b79c7fc11ea51ac74477fdcee6b8cd6dc32ba664db1122fe",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 2,
+          "value": "the association of musical electronics industry other"
+        },
+        {
+          "type": "contains_words",
+          "page": 12,
+          "value": "group terminals represented in blocks to show"
+        },
+        {
+          "type": "contains_words",
+          "page": 24,
+          "value": "descriptor as being a class specific interface"
+        },
+        {
+          "type": "contains_words",
+          "page": 35,
+          "value": "report associations to a group terminal blocks"
+        },
+        {
+          "type": "contains_words",
+          "page": 45,
+          "value": "descriptor for that id from among the"
+        }
+      ]
+    },
+    "verapdf-tagged-fail-a.pdf": {
+      "sha256": "b19edaa377e6a8240a4437205ac4d145f01f03e7dd3efa315e3f0c4bbb116d42",
+      "checks": []
+    },
+    "verapdf-tagged-fail-b.pdf": {
+      "sha256": "77c9327439148014f731ec349090c421c465f275c8d5925cc9812a7e4fa530be",
+      "checks": []
+    },
+    "vulkan-sc-1.0.pdf": {
+      "sha256": "b2e51244c992d9fd509da2fc940785358fa2f56ab29d527b6149a05a18971f82",
+      "checks": [
+        {
+          "type": "contains_words",
+          "page": 105,
+          "value": "vkphysicaldevicedriverproperties structure is included in the pnext"
+        },
+        {
+          "type": "contains_words",
+          "page": 526,
+          "value": "state discard rectangle ext specifies that the"
+        },
+        {
+          "type": "contains_words",
+          "page": 1052,
+          "value": "vk false the current value of stenciltestenable"
+        },
+        {
+          "type": "contains_words",
+          "page": 1579,
+          "value": "format g10x6 b10x6 r10x6 3plane 420 unorm"
+        },
+        {
+          "type": "contains_words",
+          "page": 2000,
+          "value": "adds more expressive alignment requirements for uniform"
+        }
+      ]
+    }
+  }
+}

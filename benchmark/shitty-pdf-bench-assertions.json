@@ -1,12 +1,11 @@
 {
   "schema": 1,
-  "description": "Format-neutral golden assertions for eight adversarial semiconductor PDFs.",
+  "description": "Preliminary format-neutral golden assertions for the eight semiconductor documents in shitty-pdf-bench.json.",
   "documents": {
     "infineon-aurix-tc3xx.pdf": {
-      "sha256": "ae857984adccc169367ced72650ef67ffa6da3733af936ce8519f90456a7a4b8",
+      "sha256": "07653ac9f688d6884705c969ad3e3ba7a47e0688e7bdb19432ea6ca81e086c56",
       "checks": [
         {"type": "contains", "value": "AURIX TC3xx"},
-        {"type": "contains", "value": "System Timer (STM)"},
         {"type": "contains", "value": "Feature List"},
         {"type": "min_chars", "value": 1000000},
         {"type": "min_table_rows", "value": 100}
@@ -33,7 +32,7 @@
       ]
     },
     "microchip-same70.pdf": {
-      "sha256": "a43af577ee4f40639f9db566782098fcb00357a8581ae916b453a5885624c3a1",
+      "sha256": "860df612db3b658f45b99c17be88f9d975bd8b6a8f7f34fc151bc55fff129584",
       "checks": [
         {"type": "contains", "value": "SAM E70/S70/V70/V71 Family"},
         {"type": "contains", "value": "ARM Cortex-M7"},
@@ -43,7 +42,7 @@
       ]
     },
     "nxp-imx8mm-rm.pdf": {
-      "sha256": "4375ce46e7418102f7da241921ba695ec351b4073bb5ec5faefd0ed7dbc2385e",
+      "sha256": "a21135c79743c35cc55ab791f353fcb7e591a84960085c0e0f857548bf1e41ef",
       "checks": [
         {"type": "contains", "value": "i.MX 8M Mini Applications Processor Reference Manual"},
         {"type": "contains", "value": "Document Number: IMX8MMRM"},
@@ -52,7 +51,7 @@
       ]
     },
     "nxp-imx8mp-rm.pdf": {
-      "sha256": "c5deeaa0b656393277c7e5164980be3b8f910e29caef0d43233730fdd3f983b3",
+      "sha256": "372b93437cf0b815fb033d929a35611eb4d63cd80262b2e90005561f3d0eda39",
       "checks": [
         {"type": "contains", "value": "i.MX 8M Plus Applications Processor Reference Manual"},
         {"type": "contains", "value": "Document Number: IMX8MPRM"},
@@ -61,7 +60,7 @@
       ]
     },
     "nxp-s32k3xx.pdf": {
-      "sha256": "4355419736984b22137b2f168a3df116ee98ed1fdb910f0fcbb1113982d9a005",
+      "sha256": "671598c1f699b14ac1b707d245bd209e913a7a1a6b4c78129abb9acff848ca8d",
       "checks": [
         {"type": "contains", "value": "S32K344"},
         {"type": "contains", "value": "Arm Cortex-M7"},

@@ -54,7 +54,7 @@ def main() -> int:
         }
     (args.results / "quality.json").write_text(json.dumps(result, indent=2) + "\n")
     lines = [
-        "# olmOCR-bench: three-way model-free PDF benchmark",
+        "# olmOCR-bench: three-way non-OCR PDF benchmark",
         "",
         "Official 8,413-check evaluator; Liteparse OCR disabled.",
         "",

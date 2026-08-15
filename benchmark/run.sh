@@ -17,12 +17,13 @@ case "$SUITE" in
     OLMOCR_ROOT="${OLMOCR_ROOT:-$ROOT/.benchmark/olmocr}"
     python3 "$ROOT/benchmark/run_olmocr.py" "$OLMOCR_ROOT" "${@:2}"
     ;;
-  horrible)
-    python3 "$ROOT/benchmark/bench.py" horrible "${@:2}"
-    python3 "$ROOT/benchmark/score_horrible.py" "$ROOT/benchmark/results/horrible"
+  shitty-pdf-bench)
+    python3 "$ROOT/benchmark/bench.py" shitty-pdf-bench "${@:2}"
+    python3 "$ROOT/benchmark/score_shitty_pdf_bench.py" \
+      "$ROOT/benchmark/results/shitty-pdf-bench"
     ;;
   *)
-    echo "usage: benchmark/run.sh {office|olmocr|horrible} [options]" >&2
+    echo "usage: benchmark/run.sh {office|olmocr|shitty-pdf-bench} [options]" >&2
     exit 2
     ;;
 esac
