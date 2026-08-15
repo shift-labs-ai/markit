@@ -47,3 +47,6 @@ test/fixtures/pdfs/*.pdf
 *.node
 /index.js
 /index.d.ts
+
+# Agent session transcripts: local working state, never part of the product.
+.pi-rlm/
