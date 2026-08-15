@@ -13,7 +13,7 @@ pub(crate) mod type1;
 
 use rustc_hash::FxHashMap;
 
-use super::own_pdf::{decode_stream, Dict, Pdf, Val};
+use super::own_pdf::{Dict, Pdf, Val};
 use encoding::build_simple_encoding;
 use tounicode::parse_tounicode;
 
@@ -130,9 +130,9 @@ pub(crate) fn build_font(pdf: &Pdf, dict: &Dict) -> FontInfo {
             // Embedded CMap stream: parse its codespace + cidranges
             // (unicode joins later from ToUnicode or the ordering).
             Some(Val::Stream(sd, raw)) => {
-                if let Ok(text) = decode_stream(&sd, raw, pdf) {
-                    info.vertical = memchr::memmem::find(&text, b"/WMode 1").is_some();
-                    info.cjk = cjk_cmap::parse_embedded(&text, None);
+                if let Ok(text) = pdf.decode_stream_cached(&sd, raw) {
+                    info.vertical = memchr::memmem::find(text.as_ref(), b"/WMode 1").is_some();
+                    info.cjk = cjk_cmap::parse_embedded(text.as_ref(), None);
                 }
             }
             _ => {}
@@ -161,8 +161,8 @@ pub(crate) fn build_font(pdf: &Pdf, dict: &Dict) -> FontInfo {
                                 _ => None,
                             });
                         if let Some(Val::Stream(sd, raw)) = program {
-                            if let Ok(bytes) = decode_stream(&sd, raw, pdf) {
-                                if let Some(advances) = truetype::gid_advances(&bytes) {
+                            if let Ok(bytes) = pdf.decode_stream_cached(&sd, raw) {
+                                if let Some(advances) = truetype::gid_advances(bytes.as_ref()) {
                                     for (gid, w) in advances.iter().enumerate() {
                                         info.cid_widths.entry(gid as u32).or_insert(*w);
                                     }
@@ -265,8 +265,8 @@ pub(crate) fn build_font(pdf: &Pdf, dict: &Dict) -> FontInfo {
         .collect();
     let mut has_tounicode = false;
     if let Some(Val::Stream(sd, raw)) = g(b"ToUnicode") {
-        if let Ok(data) = decode_stream(&sd, raw, pdf) {
-            parse_tounicode(&data, &mut info);
+        if let Ok(data) = pdf.decode_stream_cached(&sd, raw) {
+            parse_tounicode(data.as_ref(), &mut info);
             has_tounicode = true;
         }
     }
@@ -293,9 +293,9 @@ pub(crate) fn build_font(pdf: &Pdf, dict: &Dict) -> FontInfo {
                     let Ok(Some(Val::Stream(sd, raw))) = pdf.dict_get(&fd, key) else {
                         return None;
                     };
-                    let program = decode_stream(&sd, raw, pdf).ok()?;
+                    let program = pdf.decode_stream_cached(&sd, raw).ok()?;
                     match key {
-                        b"FontFile2" => truetype::code_to_unicode(&program).map(|arr| {
+                        b"FontFile2" => truetype::code_to_unicode(program.as_ref()).map(|arr| {
                             arr.iter()
                                 .map(|&u| {
                                     (u != 0)
@@ -304,8 +304,8 @@ pub(crate) fn build_font(pdf: &Pdf, dict: &Dict) -> FontInfo {
                                 })
                                 .collect()
                         }),
-                        b"FontFile" => type1::type1_code_to_unicode(&program),
-                        _ => type1::cff_code_to_unicode(&program),
+                        b"FontFile" => type1::type1_code_to_unicode(program.as_ref()),
+                        _ => type1::cff_code_to_unicode(program.as_ref()),
                     }
                 };
                 let map = program_map(b"FontFile2")
@@ -479,16 +479,16 @@ fn recover_cid_unicode(pdf: &Pdf, cid_font: &Dict, info: &mut FontInfo) {
     let Ok(Some(Val::Stream(sd, raw))) = pdf.dict_get(&fd, b"FontFile2") else {
         return;
     };
-    let Ok(program) = decode_stream(&sd, raw, pdf) else {
+    let Ok(program) = pdf.decode_stream_cached(&sd, raw) else {
         return;
     };
-    let Some(gid_uni) = truetype::gid_to_unicode(&program) else {
+    let Some(gid_uni) = truetype::gid_to_unicode(program.as_ref()) else {
         return;
     };
 
     match pdf.dict_get(cid_font, b"CIDToGIDMap") {
         Ok(Some(Val::Stream(md, mraw))) => {
-            if let Ok(map) = decode_stream(&md, mraw, pdf) {
+            if let Ok(map) = pdf.decode_stream_cached(&md, mraw) {
                 for (cid, gb) in map.chunks_exact(2).enumerate() {
                     let gid = u16::from_be_bytes([gb[0], gb[1]]);
                     if let Some(&u) = gid_uni.get(&gid) {

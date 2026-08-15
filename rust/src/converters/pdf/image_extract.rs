@@ -66,10 +66,34 @@ pub fn extract_image_region_fast(input: &[u8], region: &ImageRegion) -> Result<E
         .into_iter()
         .nth(idx)
         .ok_or_else(|| anyhow!("image index out of range"))?;
+    extract_image_source(&pdf, &source)
+}
+
+/// Extract one interpreter placement while its parsed document is live.
+/// Inline images have no standalone stream and remain unextractable.
+pub(crate) fn extract_image_source(pdf: &Pdf, source: &ImageSource) -> Result<ExtractedImage> {
     match source {
         ImageSource::Inline => bail!("inline image: no extractable stream"),
-        ImageSource::XObject { dict, raw } => extract_xobject(&pdf, &dict, raw),
+        ImageSource::XObject { dict, raw } => extract_xobject(pdf, dict, raw),
     }
+}
+
+fn encode_png(width: u32, height: u32, color: png::ColorType, samples: &[u8]) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    {
+        // Extracted images are working artifacts referenced from
+        // Markdown. Fast mode trades compression ratio for materially
+        // lower encode time without changing decoded pixels.
+        let mut encoder = png::Encoder::new(&mut out, width, height);
+        encoder.set_color(color);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_compression(png::Compression::Fast);
+        let mut writer = encoder.write_header().map_err(|e| anyhow!("png: {e}"))?;
+        writer
+            .write_image_data(samples)
+            .map_err(|e| anyhow!("png: {e}"))?;
+    }
+    Ok(out)
 }
 
 /// JBIG2Decode → grayscale PNG (pure-Rust hayro-jbig2).
@@ -109,16 +133,8 @@ fn extract_jbig2(data: &[u8], globals: Option<&[u8]>) -> Result<ExtractedImage> 
     img.decode(&mut sink).map_err(|e| anyhow!("jbig2: {e:?}"))?;
     sink.rows.resize(w * h, 255);
 
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, w as u32, h as u32);
-        enc.set_color(png::ColorType::Grayscale);
-        enc.set_depth(png::BitDepth::Eight);
-        let mut wr = enc.write_header()?;
-        wr.write_image_data(&sink.rows)?;
-    }
     Ok(ExtractedImage {
-        bytes: png,
+        bytes: encode_png(w as u32, h as u32, png::ColorType::Grayscale, &sink.rows)?,
         ext: "png",
     })
 }
@@ -184,16 +200,8 @@ fn extract_ccitt(pdf: &Pdf, dict: &Dict, data: &[u8]) -> Result<ExtractedImage> 
     }
     let gray = super::ccitt::decode(data, k, cols, height, byte_align, black_is_1)?;
     let rows = gray.len() / cols;
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, cols as u32, rows as u32);
-        enc.set_color(png::ColorType::Grayscale);
-        enc.set_depth(png::BitDepth::Eight);
-        let mut w = enc.write_header()?;
-        w.write_image_data(&gray)?;
-    }
     Ok(ExtractedImage {
-        bytes: png,
+        bytes: encode_png(cols as u32, rows as u32, png::ColorType::Grayscale, &gray)?,
         ext: "png",
     })
 }
@@ -433,17 +441,8 @@ fn extract_xobject(pdf: &Pdf, dict: &Dict, raw: &[u8]) -> Result<ExtractedImage>
         None => (color, final_samples),
     };
 
-    let mut out = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut out, width, height);
-        enc.set_color(color);
-        enc.set_depth(png::BitDepth::Eight);
-        let mut w = enc.write_header().map_err(|e| anyhow!("png: {e}"))?;
-        w.write_image_data(&final_samples)
-            .map_err(|e| anyhow!("png: {e}"))?;
-    }
     Ok(ExtractedImage {
-        bytes: out,
+        bytes: encode_png(width, height, color, &final_samples)?,
         ext: "png",
     })
 }
@@ -581,6 +580,7 @@ fn color_info(pdf: &Pdf, dict: &Dict) -> Result<(usize, Option<Vec<u8>>, bool)> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
 
     fn pdf() -> Pdf<'static> {
         Pdf::parse(
@@ -590,6 +590,16 @@ mod tests {
 trailer << /Root 1 0 R >>",
         )
         .unwrap()
+    }
+
+    #[test]
+    fn fast_png_round_trips_pixels() {
+        let pixels = [0, 64, 128, 255, 255, 128, 64, 0];
+        let encoded = encode_png(4, 2, png::ColorType::Grayscale, &pixels).unwrap();
+        let mut reader = png::Decoder::new(Cursor::new(encoded)).read_info().unwrap();
+        let mut decoded = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut decoded).unwrap();
+        assert_eq!(&decoded[..info.buffer_size()], &pixels);
     }
 
     #[test]

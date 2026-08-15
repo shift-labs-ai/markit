@@ -448,7 +448,7 @@ mod tests {
     fn excessive_filter_chain_is_rejected() {
         use elsa::FrozenMap;
         use rustc_hash::FxHashMap;
-        use std::cell::RefCell;
+        use std::cell::{Cell, RefCell};
 
         let pdf = Pdf {
             data: b"",
@@ -459,6 +459,8 @@ mod tests {
             decrypt: RefCell::new(None),
             legacy: RefCell::new(None),
             legacy_cache: FrozenMap::new(),
+            stream_cache: FrozenMap::new(),
+            stream_cache_bytes: Cell::new(0),
         };
         let filters = (0..9)
             .map(|_| Val::Name(b"ASCIIHexDecode".as_slice()))

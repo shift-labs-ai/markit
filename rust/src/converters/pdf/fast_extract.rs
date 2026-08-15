@@ -7,7 +7,7 @@
 use std::rc::Rc;
 
 use anyhow::{anyhow, bail, Result};
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::geom::rotation_base;
 use super::interp::{FontCache, ImageSource, Interp};
@@ -101,6 +101,18 @@ fn device_bbox((x0, y0, x1, y1): (f64, f64, f64, f64), page_height: f64) -> (f32
 }
 
 pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
+    Ok(extract_document_fast(input, false)?.0)
+}
+
+pub(crate) type ExtractedPageImages =
+    FxHashMap<u32, Vec<Option<super::image_extract::ExtractedImage>>>;
+
+/// Interpret text, geometry, and (when requested) native image streams
+/// from one parsed PDF. Image failures stay local to their placement.
+pub(crate) fn extract_document_fast(
+    input: &[u8],
+    extract_images: bool,
+) -> Result<(Vec<PageContent>, ExtractedPageImages)> {
     let pdf = Pdf::parse(input)?;
     let (hidden_ocgs, pages) = page_tree(&pdf)?;
     let mut out = Vec::with_capacity(pages.len());
@@ -109,6 +121,7 @@ pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
     let mut any_decoded = false;
     let mut content = Vec::new();
     let font_cache = FontCache::default();
+    let mut extracted_images = FxHashMap::default();
 
     for (index, (page, inherited)) in pages.iter().enumerate() {
         let page_number = (index + 1) as u32;
@@ -127,6 +140,27 @@ pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
         any_text_ops |= interp.text_ops > 0;
         any_decoded |= interp.any_decoded;
 
+        let bboxes: Vec<_> = interp
+            .image_placements
+            .iter()
+            .map(|placement| device_bbox(placement.bbox, page_height))
+            .collect();
+        let images =
+            super::shared::image_regions_from_bboxes_pub(&bboxes, page_number, page_height);
+        if extract_images && !images.is_empty() {
+            let extracted = interp
+                .image_placements
+                .iter()
+                .filter(|placement| {
+                    super::shared::image_bbox_is_large_pub(device_bbox(placement.bbox, page_height))
+                })
+                .map(|placement| {
+                    super::image_extract::extract_image_source(&pdf, &placement.source).ok()
+                })
+                .collect();
+            extracted_images.insert(page_number, extracted);
+        }
+
         let raws = interp
             .items
             .into_iter()
@@ -141,13 +175,6 @@ pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
             })
             .collect();
         let text_boxes = super::shared::finish_text_boxes_pub(raws, page_number)?;
-        let bboxes: Vec<_> = interp
-            .image_placements
-            .iter()
-            .map(|placement| device_bbox(placement.bbox, page_height))
-            .collect();
-        let images =
-            super::shared::image_regions_from_bboxes_pub(&bboxes, page_number, page_height);
         out.push(PageContent {
             page_number,
             page_width,
@@ -165,7 +192,7 @@ pub fn extract_pages_fast(input: &[u8]) -> Result<Vec<PageContent>> {
     if !any_text && any_text_ops && !any_decoded && !out.is_empty() {
         bail!("text ops decoded to nothing (unsupported encodings)");
     }
-    Ok(out)
+    Ok((out, extracted_images))
 }
 
 pub(crate) fn page_image_placements<'a>(

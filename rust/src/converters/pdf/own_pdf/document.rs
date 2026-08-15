@@ -6,7 +6,8 @@
 use anyhow::{anyhow, bail, Result};
 use elsa::FrozenMap;
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::cell::RefCell;
+use std::borrow::Cow;
+use std::cell::{Cell, RefCell};
 
 use super::crypto::{Decryptor, LegacyCrypt};
 use super::filters::decode_stream;
@@ -45,6 +46,13 @@ pub struct Pdf<'a> {
     /// Decrypted stream bytes for legacy encryption, keyed by object
     /// number (entries are never evicted, so returned slices stay valid).
     pub(super) legacy_cache: FrozenMap<u32, Box<[u8]>>,
+    /// Decoded streams that many pages share — font programs, ToUnicode
+    /// and encoding CMaps — keyed by the raw slice's location. All raw
+    /// slices borrow document-owned storage that is never evicted, so
+    /// the (address, length) pair identifies a stream for the
+    /// document's lifetime. One decode instead of one per page.
+    pub(super) stream_cache: FrozenMap<(usize, usize), Box<[u8]>>,
+    pub(super) stream_cache_bytes: Cell<usize>,
 }
 
 pub(super) struct ObjStm {
@@ -53,6 +61,8 @@ pub(super) struct ObjStm {
     pub(super) offsets: Vec<(u32, usize)>,
     pub(super) first: usize,
 }
+
+const MAX_STREAM_CACHE_BYTES: usize = 64 * 1024 * 1024;
 
 impl<'a> Pdf<'a> {
     pub fn parse(data: &'a [u8]) -> Result<Pdf<'a>> {
@@ -65,6 +75,8 @@ impl<'a> Pdf<'a> {
             decrypt: RefCell::new(None),
             legacy: RefCell::new(None),
             legacy_cache: FrozenMap::new(),
+            stream_cache: FrozenMap::new(),
+            stream_cache_bytes: Cell::new(0),
         };
         let loaded = match find_startxref(data) {
             Ok(start) => pdf.load_xref_chain(start).is_ok() && !pdf.trailer.is_empty(),
@@ -181,6 +193,8 @@ impl<'a> Pdf<'a> {
             decrypt: RefCell::new(None),
             legacy: RefCell::new(None),
             legacy_cache: FrozenMap::new(),
+            stream_cache: FrozenMap::new(),
+            stream_cache_bytes: Cell::new(0),
         };
         pdf.load_xref_chain(start)?;
         Ok(pdf)
@@ -306,6 +320,35 @@ impl<'a> Pdf<'a> {
             None => Ok(None),
         }
     }
+
+    /// `decode_stream` with a bounded document-lifetime cache for font
+    /// programs and CMaps shared across pages. The raw slice must come
+    /// from the supplied stream dictionary; its stable document-owned
+    /// location is the cache identity. Failed decodes are not cached,
+    /// and entries beyond the cache budget remain one-shot owned data.
+    pub(crate) fn decode_stream_cached<'s>(
+        &'s self,
+        dict: &Dict<'s>,
+        raw: &'s [u8],
+    ) -> Result<Cow<'s, [u8]>>
+    where
+        'a: 's,
+    {
+        let key = (raw.as_ptr() as usize, raw.len());
+        if let Some(bytes) = self.stream_cache.get(&key) {
+            return Ok(Cow::Borrowed(bytes));
+        }
+        let decoded = decode_stream(dict, raw, self)?;
+        let cached = self.stream_cache_bytes.get();
+        if decoded.len() <= MAX_STREAM_CACHE_BYTES.saturating_sub(cached) {
+            let len = decoded.len();
+            let bytes = self.stream_cache.insert(key, decoded.into_boxed_slice());
+            self.stream_cache_bytes.set(cached + len);
+            Ok(Cow::Borrowed(bytes))
+        } else {
+            Ok(Cow::Owned(decoded))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -345,9 +388,30 @@ endobj";
             decrypt: RefCell::new(None),
             legacy: RefCell::new(None),
             legacy_cache: FrozenMap::new(),
+            stream_cache: FrozenMap::new(),
+            stream_cache_bytes: Cell::new(0),
         };
         let err = pdf.ensure_objstm(1).unwrap_err().to_string();
         assert!(err.contains("ObjStm /N"), "wrong rejection path: {err}");
+    }
+
+    #[test]
+    fn decode_stream_cached_returns_one_stable_buffer() {
+        let data = b"%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [] /Count 0 >> endobj
+trailer << /Root 1 0 R >>";
+        let pdf = Pdf::parse(data).unwrap();
+        let dict = vec![(b"Length".as_slice(), Val::Num(5.0))];
+        let raw: &[u8] = b"hello";
+        let first = pdf.decode_stream_cached(&dict, raw).unwrap();
+        let second = pdf.decode_stream_cached(&dict, raw).unwrap();
+        assert_eq!(first.as_ref(), b"hello");
+        assert!(
+            std::ptr::eq(first.as_ptr(), second.as_ptr()),
+            "second decode must reuse the cached buffer"
+        );
+        assert_eq!(pdf.stream_cache_bytes.get(), 5);
     }
 
     #[test]
@@ -377,6 +441,8 @@ endobj";
             decrypt: RefCell::new(None),
             legacy: RefCell::new(None),
             legacy_cache: FrozenMap::new(),
+            stream_cache: FrozenMap::new(),
+            stream_cache_bytes: Cell::new(0),
         };
         assert!(pdf.object(1).is_err());
     }

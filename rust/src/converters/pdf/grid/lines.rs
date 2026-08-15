@@ -22,11 +22,11 @@ pub(super) fn unique_sorted(values: &[f64]) -> Vec<f64> {
 // Y-line group splitting
 // ---------------------------------------------------------------------------
 
-fn chain_covers_range(intervals: &[(f64, f64)], lower_y: f64, upper_y: f64, eps: f64) -> bool {
-    let mut sorted = intervals.to_vec();
-    sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+/// `intervals` must be sorted by start. Same chain walk as the original
+/// per-query implementation, minus the per-query clone and sort.
+fn chain_covers_sorted(sorted: &[(f64, f64)], lower_y: f64, upper_y: f64, eps: f64) -> bool {
     let mut covered = lower_y;
-    for iv in &sorted {
+    for iv in sorted {
         if iv.0 > covered + eps {
             break;
         }
@@ -40,9 +40,19 @@ fn chain_covers_range(intervals: &[(f64, f64)], lower_y: f64, upper_y: f64, eps:
     false
 }
 
-fn bridging_x_set(upper_y: f64, lower_y: f64, verticals: &[Segment]) -> HashSet<i64> {
-    let eps = 1.5;
-    let mut xs = HashSet::new();
+/// Vertical segments grouped by rounded x, each group's y-intervals
+/// sorted by start with cached extremes. Built once per page: the old
+/// path rebuilt this map — and re-sorted every interval list — for
+/// every adjacent y-line pair, which was quadratic on rule-dense
+/// register manuals.
+struct XIntervals {
+    x: i64,
+    intervals: Vec<(f64, f64)>,
+    min_start: f64,
+    max_end: f64,
+}
+
+fn vertical_index(verticals: &[Segment]) -> Vec<XIntervals> {
     let mut by_x: HashMap<i64, Vec<(f64, f64)>> = HashMap::new();
     for seg in verticals {
         let rx = seg.x1.round() as i64;
@@ -50,9 +60,41 @@ fn bridging_x_set(upper_y: f64, lower_y: f64, verticals: &[Segment]) -> HashSet<
             .or_default()
             .push((seg.y1.min(seg.y2), seg.y1.max(seg.y2)));
     }
-    for (rx, intervals) in &by_x {
-        if chain_covers_range(intervals, lower_y, upper_y, eps) {
-            xs.insert(*rx);
+    let mut index: Vec<XIntervals> = by_x
+        .into_iter()
+        .map(|(x, mut intervals)| {
+            intervals.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            let min_start = intervals.first().map_or(f64::INFINITY, |iv| iv.0);
+            let max_end = intervals
+                .iter()
+                .fold(f64::NEG_INFINITY, |acc, iv| acc.max(iv.1));
+            XIntervals {
+                x,
+                intervals,
+                min_start,
+                max_end,
+            }
+        })
+        .collect();
+    index.sort_by_key(|entry| entry.x);
+    index
+}
+
+fn bridging_x_set(upper_y: f64, lower_y: f64, index: &[XIntervals]) -> HashSet<i64> {
+    let eps = 1.5;
+    let mut xs = HashSet::new();
+    for entry in index {
+        // Exact pre-filters: the chain starts at lower_y, so it needs a
+        // first interval within eps of it, and covered can never exceed
+        // max(lower_y, max_end).
+        if entry.min_start > lower_y + eps {
+            continue;
+        }
+        if entry.max_end < upper_y - eps && lower_y < upper_y - eps {
+            continue;
+        }
+        if chain_covers_sorted(&entry.intervals, lower_y, upper_y, eps) {
+            xs.insert(entry.x);
         }
     }
     xs
@@ -74,11 +116,12 @@ pub(super) fn split_y_lines_into_groups(y_lines: &[f64], verticals: &[Segment]) 
     let mut current_group = vec![y_lines[0]];
     let mut prev_bridging_cols: i64 = -1;
 
+    let index = vertical_index(verticals);
     for i in 1..y_lines.len() {
         let upper_y = y_lines[i - 1];
         let lower_y = y_lines[i];
 
-        let bridging_xs = bridging_x_set(upper_y, lower_y, verticals);
+        let bridging_xs = bridging_x_set(upper_y, lower_y, &index);
         let cols = bridging_xs.len();
         if cols == 0 {
             groups.push(current_group);
@@ -335,6 +378,59 @@ mod tests {
             split_y_lines_into_groups(&[100.0, 80.0, 60.0], &v),
             [vec![100.0, 80.0], vec![80.0, 60.0]]
         );
+    }
+
+    /// The indexed bridging query must agree with the original
+    /// per-query implementation (clone + sort + chain walk) on
+    /// pseudo-random segment layouts.
+    #[test]
+    fn indexed_bridging_matches_naive_reference() {
+        fn naive_bridging(upper_y: f64, lower_y: f64, verticals: &[Segment]) -> HashSet<i64> {
+            let eps = 1.5;
+            let mut xs = HashSet::new();
+            let mut by_x: HashMap<i64, Vec<(f64, f64)>> = HashMap::new();
+            for seg in verticals {
+                let rx = seg.x1.round() as i64;
+                by_x.entry(rx)
+                    .or_default()
+                    .push((seg.y1.min(seg.y2), seg.y1.max(seg.y2)));
+            }
+            for (rx, intervals) in &by_x {
+                let mut sorted = intervals.clone();
+                sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+                if chain_covers_sorted(&sorted, lower_y, upper_y, eps) {
+                    xs.insert(*rx);
+                }
+            }
+            xs
+        }
+
+        let mut state = 0x2545f4914f6cdd1d_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let segments: Vec<Segment> = (0..300)
+            .map(|i| {
+                let x = (next() * 40.0).floor() * 5.0;
+                let top = next() * 200.0;
+                let len = next() * 40.0;
+                vertical(&format!("s{i}"), x, top + len, top)
+            })
+            .collect();
+        let index = vertical_index(&segments);
+        for _ in 0..200 {
+            let a = next() * 200.0;
+            let b = next() * 200.0;
+            let (upper, lower) = (a.max(b), a.min(b));
+            assert_eq!(
+                bridging_x_set(upper, lower, &index),
+                naive_bridging(upper, lower, &segments),
+                "mismatch for band {lower}..{upper}"
+            );
+        }
     }
 
     #[test]

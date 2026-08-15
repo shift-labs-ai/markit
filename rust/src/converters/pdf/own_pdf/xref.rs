@@ -197,7 +197,7 @@ mod tests {
     use super::*;
     use elsa::FrozenMap;
     use rustc_hash::FxHashMap;
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
 
     fn blank_pdf(data: &[u8]) -> Pdf<'_> {
         Pdf {
@@ -209,6 +209,8 @@ mod tests {
             decrypt: RefCell::new(None),
             legacy: RefCell::new(None),
             legacy_cache: FrozenMap::new(),
+            stream_cache: FrozenMap::new(),
+            stream_cache_bytes: Cell::new(0),
         }
     }
 
