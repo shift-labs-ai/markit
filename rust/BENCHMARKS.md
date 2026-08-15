@@ -6,11 +6,12 @@ Every parser here is non-OCR: it reads the text layer already inside the
 PDF rather than running optical character recognition or a vision model.
 OCR is disabled for all three.
 
-**Measured at `7e27453` on macOS 26.5 arm64, against
+**Measured at `44a5389` on macOS 26.5 arm64, against
 `@llamaindex/liteparse@2.12.0` and `@firecrawl/anydoc@0.1.9`.** Results
 are not stored in this repository; the pinned harness below reproduces
 them. Quote this commit alongside any number on this page, because a
 rerun at a different commit legitimately produces a different one.
+Every commit since is byte-identical on shitty-pdf-bench.
 
 ### Official olmOCR-bench quality
 
