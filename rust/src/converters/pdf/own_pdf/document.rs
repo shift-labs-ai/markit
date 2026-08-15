@@ -181,31 +181,6 @@ impl<'a> Pdf<'a> {
         Ok(())
     }
 
-    /// Parse without rejecting encryption (decryption setup / probing).
-    pub fn parse_allow_encrypted(data: &'a [u8]) -> Result<Pdf<'a>> {
-        let start = find_startxref(data)?;
-        let mut pdf = Pdf {
-            data,
-            xref: FxHashMap::default(),
-            trailer: Vec::new(),
-            objstm_cache: FrozenMap::new(),
-            objstm_in_progress: RefCell::new(FxHashSet::default()),
-            decrypt: RefCell::new(None),
-            legacy: RefCell::new(None),
-            legacy_cache: FrozenMap::new(),
-            stream_cache: FrozenMap::new(),
-            stream_cache_bytes: Cell::new(0),
-        };
-        pdf.load_xref_chain(start)?;
-        Ok(pdf)
-    }
-}
-
-impl<'a> Pdf<'a> {
-    pub fn object_numbers(&self) -> Vec<u32> {
-        self.xref.keys().copied().collect()
-    }
-
     /// Resolve an object by number, parsing it on demand.
     pub fn object<'s>(&'s self, num: u32) -> Result<Val<'s>>
     where
