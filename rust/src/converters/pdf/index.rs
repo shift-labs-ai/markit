@@ -128,16 +128,27 @@ fn group_extent(boxes: &[TextBox], margin: f64) -> GroupExtent {
     }
 }
 
-/// A ruled table can leave one detached value/status group on one side
-/// of an otherwise full-width page. That is not a page column. Preserve
-/// genuine ruled multi-column pages when both sides recur in at least
-/// two vertically separated groups.
+/// A ruled table can leave one detached value or status group beside an
+/// otherwise full-width page. That is not a page column.
+///
+/// Three gates must all agree before the layout collapses, because a
+/// false positive destroys a real multi-column page:
+///   1. exactly one gutter, with a vertical rule drawn along it;
+///   2. the gutter sits near an edge, or the page is overwhelmingly one
+///      full-width band with a detached field beside it;
+///   3. one side of the gutter holds at most one group, so the split is
+///      not a genuine column pair recurring down the page.
 fn is_sparse_ruled_split(layout: &ColumnLayout, segments: &[Segment]) -> bool {
+    /// How near the gutter a vertical rule must fall to explain it.
+    const RULE_GUTTER_TOLERANCE: f64 = 24.0;
+    /// Gutters within this band of the text width are plausible page
+    /// columns rather than a detached edge field.
+    const CENTRAL_GUTTER_BAND: std::ops::RangeInclusive<f64> = 0.25..=0.75;
+
     if layout.boundaries.len() != 1 {
         return false;
     }
     let boundary = layout.boundaries[0];
-    const RULE_GUTTER_TOLERANCE: f64 = 24.0;
     if !segments.iter().any(|segment| {
         (segment.x1 - segment.x2).abs() <= 0.8
             && ((segment.x1 + segment.x2) / 2.0 - boundary).abs() <= RULE_GUTTER_TOLERANCE
@@ -166,11 +177,7 @@ fn is_sparse_ruled_split(layout: &ColumnLayout, segments: &[Segment]) -> bool {
         .map(|(boxes, _)| boxes.len())
         .max()
         .is_some_and(|count| count * 5 >= total_boxes * 4);
-    // Central gutters are plausible page columns even if one vertical
-    // slice contains only one group. The exception is a page whose
-    // content is overwhelmingly one full-width band with a detached
-    // ruled footer/promo beneath it.
-    if (0.25..=0.75).contains(&boundary_fraction) && !dominant_band {
+    if CENTRAL_GUTTER_BAND.contains(&boundary_fraction) && !dominant_band {
         return false;
     }
 
@@ -302,7 +309,6 @@ impl Converter for PdfConverter {
                                     markdown: format!("![{}]({})", img.id, filepath.display()),
                                 },
                             ));
-                            continue;
                         }
                     }
                 }
@@ -320,11 +326,6 @@ impl Converter for PdfConverter {
                     ));
                 }
             }
-            let image_blocks: Vec<ImageBlock> = positioned_image_blocks
-                .iter()
-                .map(|(_, block)| block.clone())
-                .collect();
-
             // Detect column layout. A one-off group detached by a ruled
             // table separator is not a page column.
             let mut layout = detect_columns(&page.text_boxes, &page.segments);
@@ -338,6 +339,10 @@ impl Converter for PdfConverter {
             }
 
             if layout.column_count == 1 {
+                let image_blocks: Vec<ImageBlock> = positioned_image_blocks
+                    .into_iter()
+                    .map(|(_, block)| block)
+                    .collect();
                 let md = process_column(
                     page.page_number,
                     &page.text_boxes,
@@ -404,8 +409,8 @@ impl Converter for PdfConverter {
 
 #[cfg(test)]
 mod tests {
-    use super::super::types::Bounds;
     use super::*;
+    use crate::converters::pdf::types::Bounds;
     use std::path::Path;
 
     fn layout_box(id: &str, left: f64, right: f64) -> TextBox {
@@ -459,6 +464,30 @@ mod tests {
             ..edge_field
         };
         assert!(!is_sparse_ruled_split(&balanced_page, &segments));
+    }
+
+    #[test]
+    fn centered_rule_between_real_columns_is_not_a_sparse_split() {
+        // Journals draw a hairline down the gutter. Collapsing on that
+        // would interleave a genuine two-column page, so the central
+        // band must win over the rule.
+        let segments = vec![Segment {
+            id: "gutter-rule".into(),
+            x1: 300.0,
+            y1: 100.0,
+            x2: 300.0,
+            y2: 700.0,
+        }];
+        let two_column = ColumnLayout {
+            column_count: 2,
+            columns: vec![
+                vec![layout_box("left", 60.0, 290.0)],
+                vec![layout_box("right", 310.0, 540.0)],
+            ],
+            bands: vec![false, false],
+            boundaries: vec![300.0],
+        };
+        assert!(!is_sparse_ruled_split(&two_column, &segments));
     }
 
     #[test]

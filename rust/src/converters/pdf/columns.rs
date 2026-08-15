@@ -42,12 +42,17 @@ const H_SPLIT_GAP_LINES: f64 = 2.5;
 /// 10pt).
 const MIN_GUTTER_PTS: f64 = 12.0;
 
-/// Narrower fallback for densely set prose, admitted only with strong
-/// support in every resulting column and no vector rules on the page.
+/// Fraction of the region's lines allowed to span a candidate gutter
+/// end to end. Full-width abstracts and decks legitimately cross a
+/// two-column body; ordinary body text does not.
+const MAX_FULL_FRACTION: f64 = 0.25;
+
+/// Relaxed thresholds for densely set prose, admitted only when the
+/// page carries no vector rules and every resulting column holds
+/// `RELAXED_MIN_PROSE_LINES` substantial lines.
 const RELAXED_MIN_GUTTER_PTS: f64 = 10.0;
 const RELAXED_MAX_FULL_FRACTION: f64 = 0.50;
 const RELAXED_MIN_PROSE_LINES: usize = 10;
-const MAX_FULL_FRACTION: f64 = 0.25;
 
 /// Fraction of the text width excluded at each edge when searching for
 /// gutters — a gutter in the outer margins is ragged-edge whitespace,
@@ -532,33 +537,36 @@ fn layout_region(
         Err(boxes) => boxes,
     };
 
-    // A ruled table region must not be column-split — its interior
-    // whitespace belongs to the grid, not the page layout. An unruled
-    // tabular-looking region may still be fragmented prose: strong,
-    // wide line support on every side of a gutter overrides that veto.
+    // A ruled table region must not be column-split: its interior
+    // whitespace belongs to the grid, not to the page layout.
     if region_has_ruled_grid(&boxes, segments) {
         out.push((boxes, is_band));
         return;
     }
 
-    let tabular = region_is_tabular(&boxes);
     let mut gutters = find_gutters(&boxes, false);
-    // Compact journal columns can leave only a 10pt gutter and have many
-    // full-width abstract lines crossing above them. With no vector
-    // rules, admit that relaxed candidate only when both text intervals
-    // contain at least ten substantial prose lines. This excludes side
-    // notes and sparse figure labels.
+    // Compact journal columns can leave only a 10pt gutter under many
+    // full-width abstract lines. With no vector rules on the page,
+    // admit that relaxed candidate only when every resulting column
+    // holds substantial prose, which excludes side notes and sparse
+    // figure labels.
     if gutters.is_empty() && segments.is_empty() {
         let relaxed = find_gutters(&boxes, true);
         if gutters_have_prose_support(&boxes, &relaxed, RELAXED_MIN_PROSE_LINES) {
             gutters = relaxed;
         }
     }
-    if tabular && !gutters_have_prose_support(&boxes, &gutters, MIN_BOXES_PER_COLUMN) {
+    if gutters.is_empty() {
         out.push((boxes, is_band));
         return;
     }
-    if gutters.is_empty() {
+
+    // An unruled region whose rows read as data cells stays whole for
+    // table detection. It may still be fragmented prose, so wide line
+    // support on every side of the gutter overrides that veto.
+    if region_is_tabular(&boxes)
+        && !gutters_have_prose_support(&boxes, &gutters, MIN_BOXES_PER_COLUMN)
+    {
         out.push((boxes, is_band));
         return;
     }

@@ -198,7 +198,7 @@ def verify_shitty_pdf_bench_corpus(files: list[Path], manifest: Path) -> None:
 
 def report(rows: list[dict], output: Path, suite: str, tools: list[str]) -> None:
     lines = [
-        f"# {suite.title()} benchmark: {' vs '.join(tools)}",
+        f"# {suite} benchmark: {' vs '.join(tools)}",
         "",
         "End-to-end warm CLI wall time. PDF runs disable Liteparse OCR.",
         "",
