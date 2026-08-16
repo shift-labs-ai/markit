@@ -13,18 +13,30 @@ pub struct ConvertOptions {
     pub quiet: bool,
     pub output_file: Option<String>,
     pub image_dir: Option<String>,
+    /// Skip image extraction entirely. Embedded images are decoded and
+    /// re-encoded per placement, which dominates conversion time on
+    /// figure-heavy documents, so callers who only want text can opt out.
+    pub no_images: bool,
 }
 
-pub fn convert(source: &str, opts: &ConvertOptions) -> u8 {
-    let markit = Markit::new();
-
-    // Auto-create a temp dir for images if not explicitly provided
-    let image_dir = opts.image_dir.clone().unwrap_or_else(|| {
+/// Where extracted images are written, or `None` when the caller opted
+/// out. Without an explicit directory a per-process temp dir is implied,
+/// which is why skipping has to be requested rather than inferred.
+fn image_output_dir(opts: &ConvertOptions) -> Option<String> {
+    if opts.no_images {
+        return None;
+    }
+    Some(opts.image_dir.clone().unwrap_or_else(|| {
         std::env::temp_dir()
             .join(format!("markit-images-{}", std::process::id()))
             .to_string_lossy()
             .to_string()
-    });
+    }))
+}
+
+pub fn convert(source: &str, opts: &ConvertOptions) -> u8 {
+    let markit = Markit::new();
+    let image_dir = image_output_dir(opts);
 
     let is_stdin = source == "-";
     let is_url =
@@ -42,7 +54,7 @@ pub fn convert(source: &str, opts: &ConvertOptions) -> u8 {
             return EXIT_ERROR;
         }
         let info = StreamInfo {
-            image_dir: Some(image_dir),
+            image_dir,
             ..Default::default()
         };
         markit.convert(&buffer, &info)
@@ -71,7 +83,7 @@ pub fn convert(source: &str, opts: &ConvertOptions) -> u8 {
         markit.convert_file_with(
             source,
             StreamInfo {
-                image_dir: Some(image_dir.clone()),
+                image_dir: image_dir.clone(),
                 ..Default::default()
             },
         )
@@ -183,5 +195,56 @@ pub fn convert(source: &str, opts: &ConvertOptions) -> u8 {
             );
             EXIT_ERROR
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn options() -> ConvertOptions {
+        ConvertOptions {
+            json: false,
+            quiet: true,
+            output_file: None,
+            image_dir: None,
+            no_images: false,
+        }
+    }
+
+    #[test]
+    fn default_run_implies_a_temp_image_directory() {
+        let dir = image_output_dir(&options()).expect("images extract by default");
+        assert!(dir.contains("markit-images-"), "{dir}");
+    }
+
+    #[test]
+    fn explicit_directory_wins_over_the_temp_default() {
+        let opts = ConvertOptions {
+            image_dir: Some("/tmp/chosen".into()),
+            ..options()
+        };
+        assert_eq!(image_output_dir(&opts).as_deref(), Some("/tmp/chosen"));
+    }
+
+    /// The flag exists to avoid the implicit temp directory, so it must
+    /// win even when a directory was named alongside it.
+    #[test]
+    fn no_images_suppresses_extraction_entirely() {
+        assert_eq!(
+            image_output_dir(&ConvertOptions {
+                no_images: true,
+                ..options()
+            }),
+            None
+        );
+        assert_eq!(
+            image_output_dir(&ConvertOptions {
+                no_images: true,
+                image_dir: Some("/tmp/ignored".into()),
+                ..options()
+            }),
+            None
+        );
     }
 }

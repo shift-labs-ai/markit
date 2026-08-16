@@ -19,13 +19,21 @@ export async function convert(
   options: OutputOptions & {
     output?: string;
     imageDir?: string;
+    /**
+     * Skip image extraction. Embedded images are decoded and re-encoded
+     * per placement, which dominates conversion time on figure-heavy
+     * documents, so callers who only want text can opt out.
+     */
+    noImages?: boolean;
   },
 ): Promise<void> {
   const markit = new Markit();
 
-  // Auto-create a temp dir for images if not explicitly provided
-  const imageDir =
-    options.imageDir || mkdtempSync(join(tmpdir(), "markit-images-"));
+  // Auto-create a temp dir for images if not explicitly provided. Skipped
+  // entirely under --no-images, so nothing is created for text-only runs.
+  const imageDir = options.noImages
+    ? undefined
+    : options.imageDir || mkdtempSync(join(tmpdir(), "markit-images-"));
 
   try {
     let result;

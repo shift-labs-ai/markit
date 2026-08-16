@@ -29,6 +29,9 @@ markit https://en.wikipedia.org/wiki/Markdown
 markit photo.jpg                          # EXIF metadata
 markit recording.mp3                      # Audio metadata
 
+# Text only, skipping image extraction
+markit report.pdf --no-images
+
 # Write to file
 markit report.pdf -o report.md
 
@@ -121,6 +124,8 @@ markit <source>                          # Convert file or URL
 markit <source> -o output.md             # Write to file
 markit <source> --json                   # JSON output
 markit <source> -q                       # Raw markdown only
+markit <source> --no-images              # Skip image extraction
+markit <source> -i ./images              # Extract images to a directory
 cat file.pdf | markit -                  # Read from stdin
 markit formats                           # List supported formats
 markit onboard                           # Add to CLAUDE.md

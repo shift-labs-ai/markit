@@ -47,6 +47,10 @@ struct Cli {
     /// Extract images to this directory
     #[arg(short = 'i', long = "image-dir", global = true)]
     image_dir: Option<String>,
+
+    /// Skip image extraction; images become placeholder comments
+    #[arg(long = "no-images", global = true, conflicts_with = "image_dir")]
+    no_images: bool,
 }
 
 #[derive(Subcommand)]
@@ -178,6 +182,7 @@ fn main() -> ExitCode {
                     quiet: cli.quiet,
                     output_file: out_override.or(cli.output),
                     image_dir: cli.image_dir,
+                    no_images: cli.no_images,
                 },
             );
             ExitCode::from(code)
@@ -193,6 +198,7 @@ fn main() -> ExitCode {
                             quiet: cli.quiet,
                             output_file: cli.output,
                             image_dir: cli.image_dir,
+                            no_images: cli.no_images,
                         },
                     );
                     ExitCode::from(code)

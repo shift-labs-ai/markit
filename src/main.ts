@@ -21,6 +21,8 @@ program
   .option("-q, --quiet", "Raw markdown only, no decoration")
   .option("-o, --output <file>", "Write to file instead of stdout")
   .option("-i, --image-dir <dir>", "Extract images to this directory")
+  // Commander maps --no-images to opts.images === false.
+  .option("--no-images", "Skip image extraction; images become comments")
   .addHelpText(
     "after",
     `
@@ -49,6 +51,7 @@ program
       quiet: globals.quiet,
       output: opts.output,
       imageDir: globals.imageDir,
+      noImages: globals.images === false,
     });
   });
 
@@ -101,6 +104,7 @@ program.on("command:*", async (args) => {
     quiet: globals.quiet,
     output: globals.output,
     imageDir: globals.imageDir,
+    noImages: globals.images === false,
   });
 });
 
