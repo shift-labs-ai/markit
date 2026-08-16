@@ -6,12 +6,16 @@ Every parser here is non-OCR: it reads the text layer already inside the
 PDF rather than running optical character recognition or a vision model.
 OCR is disabled for all three.
 
-**Measured at `44a5389` on macOS 26.5 arm64, against
-`@llamaindex/liteparse@2.12.0` and `@firecrawl/anydoc@0.1.9`.** Results
+**olmOCR-bench measured at `44a5389`; shitty-pdf-bench measured at
+`5408b66` with `--no-images`.** Both on macOS 26.5 arm64 against
+`@llamaindex/liteparse@2.12.0` and `@firecrawl/anydoc@0.1.9`. Results
 are not stored in this repository; the pinned harness below reproduces
-them. Quote this commit alongside any number on this page, because a
+them. Quote the commit alongside any number on this page, because a
 rerun at a different commit legitimately produces a different one.
-Every commit since is byte-identical on shitty-pdf-bench.
+
+Image extraction never changes extracted text, verified across all 39
+convertible corpus documents, so the quality figures hold under either
+image setting.
 
 ### Official olmOCR-bench quality
 
@@ -62,16 +66,26 @@ the manifest, never any converter output, so the anchors cannot be
 tuned to a winner.
 
 Controlled end-to-end CLI timing uses one warmup and three measured
-iterations per document; each row sums the per-document medians:
+iterations per document; each row sums the per-document medians. No
+parser extracts images: anydoc writes no image files and liteparse is
+given `--image-mode off`, so markit runs with `--no-images` rather than
+its default, which would otherwise decode and re-encode every embedded
+image and measure markit doing strictly more work than the tools it is
+compared against.
 
 | Tool | Converted | Median ms/doc | Total seconds |
 |---|---:|---:|---:|
-| **markit** | 39/40 (97.5%) | **154.67** | **25.16** |
-| liteparse | 39/40 (97.5%) | 756.73 | 56.42 |
-| anydoc | 37/40 (92.5%) | 965.81 | 341.23 |
+| **markit** | 39/40 (97.5%) | **118.31** | **23.19** |
+| liteparse | 39/40 (97.5%) | 736.37 | 55.44 |
+| anydoc | 37/40 (92.5%) | 939.44 | 322.23 |
 
-markit is **2.2× faster than liteparse** and **13.6× faster than anydoc**
-on this same-machine end-to-end run.
+markit is **2.4× faster than liteparse** and **13.9× faster than anydoc**
+on this same-machine end-to-end run, and is the fastest parser on all 37
+documents every tool converted.
+
+Image extraction is 8% of markit's runtime over this corpus, which is
+dominated by text-heavy manuals, but 97% on a figure-heavy paper such as
+arxiv-gpt3 (83 images, 12 MB). Extracted text is identical either way.
 
 Caveats:
 - The olmOCR baseline check is permissive: image-placeholder-only outputs

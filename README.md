@@ -72,13 +72,14 @@ markit data.xlsx -q | napkin create "Imported Data"
 ## Benchmarks
 
 Non-OCR PDF to Markdown: parsers that read the text layer already inside a
-PDF, with no OCR and no model calls. Measured on one machine.
+PDF, with no OCR and no model calls. Measured on one machine, with image
+extraction off for every parser.
 
 | | markit | liteparse | anydoc |
 |---|---:|---:|---:|
 | olmOCR-bench score | **45.0%** | 38.8% | 31.2% |
 | shitty-pdf-bench text recovered | **100.0%** | 83.2% | 91.0% |
-| shitty-pdf-bench conversion time | **25.2s** | 56.4s | 341.2s |
+| shitty-pdf-bench conversion time | **23.2s** | 55.4s | 322.2s |
 
 olmOCR-bench is AllenAI's public benchmark. shitty-pdf-bench is ours: 40
 hash-pinned public PDFs, 50,884 pages of semiconductor manuals, standards,

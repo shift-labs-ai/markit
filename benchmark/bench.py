@@ -110,8 +110,13 @@ def run_once(
 ) -> tuple[str, float]:
     with tempfile.TemporaryDirectory(prefix="markit-bench-") as temp:
         output = Path(temp) / "output.md"
+        # Every tool runs without image extraction. anydoc writes no image
+        # files and liteparse is given --image-mode off, so leaving markit
+        # on its default (which decodes and re-encodes every embedded
+        # image to a temp directory) measured it doing strictly more work
+        # than the tools it is compared against.
         if tool == "markit":
-            command = [binary, str(source), "--quiet"]
+            command = [binary, str(source), "--quiet", "--no-images"]
         elif tool == "anydoc":
             command = [binary, str(source)]
         else:
