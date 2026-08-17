@@ -9,7 +9,7 @@ import json
 import re
 from pathlib import Path
 
-TOOLS = ("markit", "anydoc", "liteparse")
+DEFAULT_TOOLS = ("markit", "anydoc", "liteparse")
 WORD_PATTERN = re.compile(r"[^\W_]+(?:['’][^\W_]+)?|\d+(?:[.,]\d+)*", re.UNICODE)
 
 
@@ -66,11 +66,17 @@ def main() -> int:
     )
     parser.add_argument("--output-stem", default="quality")
     parser.add_argument("--label", default="shitty-pdf-bench quality")
+    parser.add_argument(
+        "--tools",
+        default=",".join(DEFAULT_TOOLS),
+        help="comma-separated tool names, each a subdirectory of results",
+    )
     args = parser.parse_args()
+    tools = tuple(name.strip() for name in args.tools.split(",") if name.strip())
 
     spec = json.loads(args.assertions.read_text())
     details = []
-    for tool in TOOLS:
+    for tool in tools:
         for filename, document in spec["documents"].items():
             if not document["checks"]:
                 continue
@@ -95,7 +101,7 @@ def main() -> int:
             )
 
     summary = {}
-    for tool in TOOLS:
+    for tool in tools:
         rows = [row for row in details if row["tool"] == tool]
         passed = sum(row["passed"] for row in rows)
         total = sum(row["total"] for row in rows)
@@ -117,7 +123,7 @@ def main() -> int:
         "| Tool | Checks | Score | Documents passing every check |",
         "| --- | ---: | ---: | ---: |",
     ]
-    for tool in TOOLS:
+    for tool in tools:
         row = summary[tool]
         lines.append(
             f"| {tool} | {row['passed']}/{row['total']} | {row['score']:.1f}% | "

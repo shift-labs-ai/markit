@@ -83,6 +83,43 @@ markit is **2.4× faster than liteparse** and **13.9× faster than anydoc**
 on this same-machine end-to-end run, and is the fastest parser on all 37
 documents every tool converted.
 
+### The wider non-OCR field
+
+liteparse and anydoc are the closest comparable tools, but they are not
+the whole field. The parsers below all read the embedded text layer with
+no OCR and no model calls, so they answer the same question markit does.
+
+Measured on a stratified 16-document subset of shitty-pdf-bench spanning
+1 to 1,323 pages and deliberately including Arabic and Hebrew RTL, scans,
+rotated pages, forms, and malformed files. Timing covers the 13 documents
+every parser converted (3,476 pages); recall covers the 52 blind anchors
+in the subset. Python tools are invoked per document, so interpreter and
+import startup is included, as it is for any real caller; it is at most
+3.8s of pymupdf4llm's total.
+
+| Tool | Text recovered | Seconds | Pages/s |
+|---|---:|---:|---:|
+| **markit** | **100.0%** | **1.0** | **3,612** |
+| liteparse 2.12.0 | 98.1% | 7.2 | 486 |
+| anydoc 0.1.9 | 94.2% | 14.1 | 247 |
+| pypdf 6.16.1 | 84.6% | 50.0 | 70 |
+| pdfplumber 0.11.10 | 73.1% | 112.2 | 31 |
+| markitdown 0.1.7 | 73.1% | 140.1 | 25 |
+| pymupdf4llm 1.28.2 | 90.4% | 328.0 | 11 |
+
+markit leads on both axes against every parser tested. pymupdf4llm is
+commonly described as the fast option; that reputation belongs to raw
+`get_text()` extraction, while its Markdown layer runs per-page layout and
+table analysis and is the slowest tool here.
+
+The four Python parsers were run with one warmup and one timed pass rather
+than the median of three used above, because the margins are 51× to 336×
+and extra iterations would not change the ordering. pdfplumber and pypdf
+emit plain text rather than Markdown, so their recall is reported for
+completeness rather than as a Markdown comparison.
+
+Run with `python3.14`, `pymupdf 1.28.2`, and `pdfminer.six 20260107`.
+
 Image extraction is 8% of markit's runtime over this corpus, which is
 dominated by text-heavy manuals, but 97% on a figure-heavy paper such as
 arxiv-gpt3 (83 images, 12 MB). Extracted text is identical either way.

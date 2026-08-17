@@ -85,6 +85,14 @@ olmOCR-bench is AllenAI's public benchmark. shitty-pdf-bench is ours: 40
 hash-pinned public PDFs, 50,884 pages of semiconductor manuals, standards,
 RTL documents, scans, and malformed files.
 
+Against the wider non-OCR field, on a 16-document subset covering 3,476
+pages and 52 sampled passages:
+
+| | markit | liteparse | anydoc | pypdf | pdfplumber | markitdown | pymupdf4llm |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Text recovered | **100.0%** | 98.1% | 94.2% | 84.6% | 73.1% | 73.1% | 90.4% |
+| Pages/s | **3,612** | 486 | 247 | 70 | 31 | 25 | 11 |
+
 Method, provenance, and per-category results are in
 [rust/BENCHMARKS.md](rust/BENCHMARKS.md); the harness that reproduces them
 is in [benchmark/](benchmark/).
