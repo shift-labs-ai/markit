@@ -37,6 +37,9 @@
     "artifacts": "napi artifacts",
     "verify": "npm run check:all && cd rust && cargo test && cd .. && npm run build:native && bun test && npm run build"
   },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "publishConfig": {
     "access": "public"
   },
