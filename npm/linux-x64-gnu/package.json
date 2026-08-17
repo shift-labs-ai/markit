@@ -1,6 +1,6 @@
 {
-  "name": "@shift-labs/markit-linux-x64-gnu",
-  "version": "0.6.0",
+  "name": "@shiftlabs/markit-linux-x64-gnu",
+  "version": "0.6.1",
   "os": [
     "linux"
   ],
@@ -11,7 +11,7 @@
   "files": [
     "markit.linux-x64-gnu.node"
   ],
-  "description": "Native Rust binary for @shift-labs/markit",
+  "description": "Native Rust binary for @shiftlabs/markit",
   "license": "MIT",
   "repository": {
     "type": "git",

@@ -11,24 +11,24 @@ Convert anything to Markdown.
 
 ```bash
 # Convert a file
-npx @shift-labs/markit report.pdf -q
+npx @shiftlabs/markit report.pdf -q
 
 # Convert a URL
-npx @shift-labs/markit https://en.wikipedia.org/wiki/Markdown -q
+npx @shiftlabs/markit https://en.wikipedia.org/wiki/Markdown -q
 
 # GitHub URLs (repos, files, gists, issues, PRs)
-npx @shift-labs/markit https://github.com/owner/repo -q
-npx @shift-labs/markit https://github.com/owner/repo/issues/42 -q
-npx @shift-labs/markit https://gist.github.com/user/id -q
+npx @shiftlabs/markit https://github.com/owner/repo -q
+npx @shiftlabs/markit https://github.com/owner/repo/issues/42 -q
+npx @shiftlabs/markit https://gist.github.com/user/id -q
 
 # Write to file
-npx @shift-labs/markit document.docx -q -o output.md
+npx @shiftlabs/markit document.docx -q -o output.md
 
 # See all options
-npx @shift-labs/markit --help
+npx @shiftlabs/markit --help
 
 # See supported formats
-npx @shift-labs/markit formats
+npx @shiftlabs/markit formats
 ```
 
 `-q` gives raw markdown. `--json` gives `{ markdown, title }`.
@@ -36,7 +36,7 @@ npx @shift-labs/markit formats
 ## SDK
 
 ```typescript
-import { Markit } from "@shift-labs/markit";
+import { Markit } from "@shiftlabs/markit";
 
 const markit = new Markit();
 const { markdown } = await markit.convertFile("report.pdf");

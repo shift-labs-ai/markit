@@ -3,7 +3,7 @@
 Convert anything to markdown. PDF, DOCX, PPTX, XLSX, HTML, EPUB, Jupyter, RSS, images, audio, URLs, and more. Works as a CLI and as a library.
 
 ```bash
-npm install -g @shift-labs/markit
+npm install -g @shiftlabs/markit
 ```
 
 ---
@@ -108,7 +108,7 @@ markit onboard                 # Add instructions to CLAUDE.md
 markit is also a Node library. Every format uses the same bundled Rust engine as the CLI on supported macOS and Linux platforms—there is no second fallback implementation:
 
 ```typescript
-import { Markit } from "@shift-labs/markit";
+import { Markit } from "@shiftlabs/markit";
 
 const markit = new Markit();
 const { markdown } = await markit.convertFile("report.pdf");
@@ -147,7 +147,7 @@ cd rust && cargo test
 
 ## Distribution
 
-Releases publish `@shift-labs/markit` plus six scoped native binary packages
+Releases publish `@shiftlabs/markit` plus six scoped native binary packages
 for macOS and Linux (x64/ARM64, glibc/musl). npm selects the matching binary
 through `optionalDependencies`. The former `markit-ai` package is a deprecated
 compatibility shim that re-exports this SDK.
@@ -165,7 +165,7 @@ git push origin v0.6.0
 
 The release workflow requires an npm automation token in the repository secret
 `NPM_TOKEN`. It publishes platform packages first through `napi prepublish`,
-then `@shift-labs/markit`, then the deprecated `markit-ai` shim, and finally
+then `@shiftlabs/markit`, then the deprecated `markit-ai` shim, and finally
 creates the GitHub release.
 
 ## License

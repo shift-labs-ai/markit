@@ -1,6 +1,6 @@
 {
-  "name": "@shift-labs/markit-darwin-x64",
-  "version": "0.6.0",
+  "name": "@shiftlabs/markit-darwin-x64",
+  "version": "0.6.1",
   "os": [
     "darwin"
   ],
@@ -11,7 +11,7 @@
   "files": [
     "markit.darwin-x64.node"
   ],
-  "description": "Native Rust binary for @shift-labs/markit",
+  "description": "Native Rust binary for @shiftlabs/markit",
   "license": "MIT",
   "repository": {
     "type": "git",

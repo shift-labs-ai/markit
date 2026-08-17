@@ -40,10 +40,10 @@ try {
     case 'darwin':
       switch (arch) {
         case 'x64':
-          nativeBinding = tryLoad('markit.darwin-x64.node', '@shift-labs/markit-darwin-x64');
+          nativeBinding = tryLoad('markit.darwin-x64.node', '@shiftlabs/markit-darwin-x64');
           break;
         case 'arm64':
-          nativeBinding = tryLoad('markit.darwin-arm64.node', '@shift-labs/markit-darwin-arm64');
+          nativeBinding = tryLoad('markit.darwin-arm64.node', '@shiftlabs/markit-darwin-arm64');
           break;
         default:
           throw new Error(`Unsupported architecture on macOS: ${arch}`);
@@ -53,16 +53,16 @@ try {
       switch (arch) {
         case 'x64':
           if (isMusl()) {
-            nativeBinding = tryLoad('markit.linux-x64-musl.node', '@shift-labs/markit-linux-x64-musl');
+            nativeBinding = tryLoad('markit.linux-x64-musl.node', '@shiftlabs/markit-linux-x64-musl');
           } else {
-            nativeBinding = tryLoad('markit.linux-x64-gnu.node', '@shift-labs/markit-linux-x64-gnu');
+            nativeBinding = tryLoad('markit.linux-x64-gnu.node', '@shiftlabs/markit-linux-x64-gnu');
           }
           break;
         case 'arm64':
           if (isMusl()) {
-            nativeBinding = tryLoad('markit.linux-arm64-musl.node', '@shift-labs/markit-linux-arm64-musl');
+            nativeBinding = tryLoad('markit.linux-arm64-musl.node', '@shiftlabs/markit-linux-arm64-musl');
           } else {
-            nativeBinding = tryLoad('markit.linux-arm64-gnu.node', '@shift-labs/markit-linux-arm64-gnu');
+            nativeBinding = tryLoad('markit.linux-arm64-gnu.node', '@shiftlabs/markit-linux-arm64-gnu');
           }
           break;
         default:
@@ -81,7 +81,7 @@ if (!nativeBinding) {
   const detail = loadError instanceof Error ? loadError.message : String(loadError || 'unknown error');
   throw new Error(
     `Markit's native Rust engine could not be loaded for ${platform}-${arch}. ` +
-    `Reinstall @shift-labs/markit and ensure optional dependencies are enabled. ${detail}`
+    `Reinstall @shiftlabs/markit and ensure optional dependencies are enabled. ${detail}`
   );
 }
 

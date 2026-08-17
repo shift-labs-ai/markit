@@ -1,6 +1,6 @@
 {
-  "name": "@shift-labs/markit",
-  "version": "0.6.0",
+  "name": "@shiftlabs/markit",
+  "version": "0.6.1",
   "description": "Convert anything to markdown. PDF, DOCX, PPTX, XLSX, HTML, EPUB, Jupyter, RSS, images, audio, URLs, and more. Works as a CLI and as a library.",
   "type": "module",
   "main": "dist/index.js",
@@ -86,11 +86,11 @@
     }
   },
   "optionalDependencies": {
-    "@shift-labs/markit-darwin-arm64": "0.6.0",
-    "@shift-labs/markit-darwin-x64": "0.6.0",
-    "@shift-labs/markit-linux-x64-gnu": "0.6.0",
-    "@shift-labs/markit-linux-arm64-gnu": "0.6.0",
-    "@shift-labs/markit-linux-x64-musl": "0.6.0",
-    "@shift-labs/markit-linux-arm64-musl": "0.6.0"
+    "@shiftlabs/markit-darwin-arm64": "0.6.1",
+    "@shiftlabs/markit-darwin-x64": "0.6.1",
+    "@shiftlabs/markit-linux-x64-gnu": "0.6.1",
+    "@shiftlabs/markit-linux-arm64-gnu": "0.6.1",
+    "@shiftlabs/markit-linux-x64-musl": "0.6.1",
+    "@shiftlabs/markit-linux-arm64-musl": "0.6.1"
   }
 }

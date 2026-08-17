@@ -1,7 +1,7 @@
 {
   "name": "markit-ai",
-  "version": "0.6.0",
-  "description": "Compatibility shim for @shift-labs/markit",
+  "version": "0.6.1",
+  "description": "Compatibility shim for @shiftlabs/markit",
   "type": "module",
   "main": "index.js",
   "types": "index.d.ts",
@@ -23,7 +23,7 @@
     "README.md"
   ],
   "dependencies": {
-    "@shift-labs/markit": "0.6.0"
+    "@shiftlabs/markit": "0.6.1"
   },
   "engines": {
     "node": "^20.19.0 || >=22.12.0"

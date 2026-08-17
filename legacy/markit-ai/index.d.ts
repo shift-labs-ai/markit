@@ -1,1 +1,1 @@
-export * from "@shift-labs/markit";
+export * from "@shiftlabs/markit";

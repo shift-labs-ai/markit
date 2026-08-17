@@ -46,7 +46,7 @@ jobs:
         with:
           workspaces: rust -> rust/target
       - run: bun install --frozen-lockfile
-      # Bootstrap the first scoped release: until @shift-labs/markit-* exists,
+      # Bootstrap the first scoped release: until @shiftlabs/markit-* exists,
       # Bun may skip unrelated optional platform packages such as Biome's.
       - run: npm install --no-save @biomejs/cli-linux-x64
       - run: bun run check
@@ -135,7 +135,7 @@ jobs:
           else
             echo "tag=latest" >> "$GITHUB_OUTPUT"
           fi
-      - name: Publish platform packages and @shift-labs/markit
+      - name: Publish platform packages and @shiftlabs/markit
         run: npm publish --tag ${{ steps.npm-tag.outputs.tag }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -152,7 +152,7 @@ jobs:
 
   # The shim is a deprecated forwarder published under the old unscoped
   # name, so it needs npm credentials for markit-ai as well as the
-  # @shift-labs scope. It runs after the real packages are published and
+  # @shiftlabs scope. It runs after the real packages are published and
   # cannot fail the release: losing a migration notice must not mark a
   # completed publish as failed, or skip the GitHub release.
   publish-shim:
@@ -179,6 +179,6 @@ jobs:
       - name: Publish and deprecate markit-ai
         run: |
           npm publish ./legacy/markit-ai --tag ${{ steps.npm-tag.outputs.tag }} --access public
-          npm deprecate "markit-ai@*" "Moved to @shift-labs/markit. Install @shift-labs/markit instead."
+          npm deprecate "markit-ai@*" "Moved to @shiftlabs/markit. Install @shiftlabs/markit instead."
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
