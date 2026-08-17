@@ -139,12 +139,6 @@ jobs:
         run: npm publish --tag ${{ steps.npm-tag.outputs.tag }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - name: Publish and deprecate markit-ai compatibility shim
-        run: |
-          npm publish ./legacy/markit-ai --tag ${{ steps.npm-tag.outputs.tag }} --access public
-          npm deprecate "markit-ai@*" "Moved to @shift-labs/markit. Install @shift-labs/markit instead."
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   github-release:
     name: create GitHub release
@@ -155,3 +149,36 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+
+  # The shim is a deprecated forwarder published under the old unscoped
+  # name, so it needs npm credentials for markit-ai as well as the
+  # @shift-labs scope. It runs after the real packages are published and
+  # cannot fail the release: losing a migration notice must not mark a
+  # completed publish as failed, or skip the GitHub release.
+  publish-shim:
+    name: publish markit-ai compatibility shim
+    needs: publish
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Determine npm tag
+        id: npm-tag
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if [[ "$version" == *-* ]]; then
+            prerelease="${version#*-}"
+            echo "tag=${prerelease%%.*}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish and deprecate markit-ai
+        run: |
+          npm publish ./legacy/markit-ai --tag ${{ steps.npm-tag.outputs.tag }} --access public
+          npm deprecate "markit-ai@*" "Moved to @shift-labs/markit. Install @shift-labs/markit instead."
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
