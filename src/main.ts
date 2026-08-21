@@ -23,6 +23,10 @@ program
   .option("-i, --image-dir <dir>", "Extract images to this directory")
   // Commander maps --no-images to opts.images === false.
   .option("--no-images", "Skip image extraction; images become comments")
+  .option(
+    "--page-markers",
+    "Mark page boundaries with <!-- markit:page N --> (PDF only)",
+  )
   .addHelpText(
     "after",
     `
@@ -52,6 +56,7 @@ program
       output: opts.output,
       imageDir: globals.imageDir,
       noImages: globals.images === false,
+      pageMarkers: globals.pageMarkers,
     });
   });
 
@@ -105,6 +110,7 @@ program.on("command:*", async (args) => {
     output: globals.output,
     imageDir: globals.imageDir,
     noImages: globals.images === false,
+    pageMarkers: globals.pageMarkers,
   });
 });
 

@@ -17,6 +17,8 @@ pub struct ConvertOptions {
     /// re-encoded per placement, which dominates conversion time on
     /// figure-heavy documents, so callers who only want text can opt out.
     pub no_images: bool,
+    /// Emit `<!-- markit:page N -->` before each page's content.
+    pub page_markers: bool,
 }
 
 /// Where extracted images are written, or `None` when the caller opted
@@ -55,6 +57,7 @@ pub fn convert(source: &str, opts: &ConvertOptions) -> u8 {
         }
         let info = StreamInfo {
             image_dir,
+            page_markers: opts.page_markers,
             ..Default::default()
         };
         markit.convert(&buffer, &info)
@@ -84,6 +87,7 @@ pub fn convert(source: &str, opts: &ConvertOptions) -> u8 {
             source,
             StreamInfo {
                 image_dir: image_dir.clone(),
+                page_markers: opts.page_markers,
                 ..Default::default()
             },
         )
@@ -209,6 +213,7 @@ mod tests {
             output_file: None,
             image_dir: None,
             no_images: false,
+            page_markers: false,
         }
     }
 

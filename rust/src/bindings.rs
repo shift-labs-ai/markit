@@ -12,7 +12,7 @@ use crate::types::{ConversionResult, Converter, StreamInfo};
 
 // ── JS-facing types ──────────────────────────────────────────────────
 
-/// Stream metadata. All fields are optional strings.
+/// Stream metadata. Every field is optional.
 #[napi(object)]
 #[derive(Default, Clone)]
 pub struct JsStreamInfo {
@@ -23,6 +23,8 @@ pub struct JsStreamInfo {
     pub local_path: Option<String>,
     pub url: Option<String>,
     pub image_dir: Option<String>,
+    /// Emit `<!-- markit:page N -->` before each page's content.
+    pub page_markers: Option<bool>,
 }
 
 impl From<JsStreamInfo> for StreamInfo {
@@ -35,6 +37,7 @@ impl From<JsStreamInfo> for StreamInfo {
             local_path: js.local_path,
             url: js.url,
             image_dir: js.image_dir,
+            page_markers: js.page_markers.unwrap_or(false),
         }
     }
 }
@@ -49,6 +52,7 @@ impl From<&StreamInfo> for JsStreamInfo {
             local_path: info.local_path.clone(),
             url: info.url.clone(),
             image_dir: info.image_dir.clone(),
+            page_markers: Some(info.page_markers),
         }
     }
 }

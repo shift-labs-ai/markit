@@ -7,6 +7,11 @@ export interface StreamInfo {
   url?: string;
   /** Directory to write extracted images/diagrams. */
   imageDir?: string;
+  /**
+   * Emit `<!-- markit:page N -->` before each page's content, carrying
+   * the 1-based physical page number. PDF only; off by default.
+   */
+  pageMarkers?: boolean;
 }
 
 export interface ConversionResult {
