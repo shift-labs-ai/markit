@@ -123,6 +123,107 @@ pub fn strip_headers_footers(pages: &mut [PageContent]) {
     }
 }
 
+/// Fewest pages a band line must appear on before repetition counts as
+/// evidence that it is a running fixture rather than that page's own
+/// content. Deliberately low: two accidental matches are plausible,
+/// three at the same margin are not.
+const MIN_REPEAT_PAGES: usize = 3;
+
+/// Detect and remove the document's page-number series.
+///
+/// Printed folios form an arithmetic progression: the number rises by
+/// one from page to page at a constant offset from the physical index,
+/// because front matter shifts the printed numbering. The progression
+/// is the evidence. A folio that happens to equal its physical index
+/// proves nothing on its own — and a book numbered with any offset must
+/// still have its folios recognised, which an equality test never does.
+///
+/// Runs before the per-page chrome detector so that a real folio is
+/// already gone when that detector looks, and a lone number that is NOT
+/// part of a series is left alone as content.
+pub fn strip_folio_series(pages: &mut [PageContent]) {
+    if pages.len() < MIN_PAGES {
+        return;
+    }
+
+    // (top band?, folio − physical index) → the pages voting for it.
+    let mut series: HashMap<(bool, i64), Vec<(usize, String)>> = HashMap::new();
+    for (idx, page) in pages.iter().enumerate() {
+        if page.page_height <= 0.0 {
+            continue;
+        }
+        for tb in &page.text_boxes {
+            let Some(value) = folio_value(&tb.text) else {
+                continue;
+            };
+            let mid_y = (tb.bounds.top + tb.bounds.bottom) / 2.0;
+            if !in_margin_zone(mid_y, page.page_height) {
+                continue;
+            }
+            let band_top = mid_y >= page.page_height / 2.0;
+            let offset = value - (idx as i64 + 1);
+            series
+                .entry((band_top, offset))
+                .or_default()
+                .push((idx, tb.id.clone()));
+        }
+    }
+
+    // A series qualifies on three consecutive pages — n, n+1, n+2 at one
+    // margin is already a progression — or on a fifth of the document,
+    // which catches numbering that skips plates and inserts.
+    let mut strip: HashSet<&str> = HashSet::new();
+    for members in series.values() {
+        let mut pages_seen: Vec<usize> = members.iter().map(|(idx, _)| *idx).collect();
+        pages_seen.sort_unstable();
+        pages_seen.dedup();
+        let mut run = 1usize;
+        let mut longest_run = 1usize;
+        for pair in pages_seen.windows(2) {
+            run = if pair[1] == pair[0] + 1 { run + 1 } else { 1 };
+            longest_run = longest_run.max(run);
+        }
+        if longest_run >= MIN_REPEAT_PAGES || pages_seen.len() * 5 >= pages.len() {
+            strip.extend(members.iter().map(|(_, id)| id.as_str()));
+        }
+    }
+
+    if strip.is_empty() {
+        return;
+    }
+    for page in pages.iter_mut() {
+        page.text_boxes.retain(|tb| !strip.contains(tb.id.as_str()));
+    }
+}
+
+/// How many pages carry each normalized band line, counted over the
+/// per-page detector's own band so the census and the detector see the
+/// same boxes. One page per line at most: a line repeated twice on the
+/// same page is still one page's worth of evidence.
+fn band_page_counts(pages: &[PageContent]) -> HashMap<String, usize> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for page in pages {
+        let h = page.page_height;
+        if h <= 0.0 {
+            continue;
+        }
+        let mut seen: HashSet<String> = HashSet::new();
+        for tb in &page.text_boxes {
+            if tb.bounds.bottom < h * (1.0 - SP_BAND_RATIO) && tb.bounds.top > h * SP_BAND_RATIO {
+                continue;
+            }
+            let key = normalize_whitespace(tb.text.trim());
+            if !key.is_empty() {
+                seen.insert(key);
+            }
+        }
+        for key in seen {
+            *counts.entry(key).or_insert(0) += 1;
+        }
+    }
+    counts
+}
+
 /// Fraction of page height treated as the top/bottom band for the
 /// single-page chrome detector. Wider than the repetition band: chrome on
 /// a first page can sit a little deeper (e.g. a citation banner above a
@@ -142,6 +243,15 @@ const SP_MAX_CHARS: usize = 200;
 /// even when a stray page number rides along.
 const SP_MAX_GROUP_LINES: usize = 4;
 
+/// Strip decorative rules and bullets from both ends: banner lines like
+/// `||WWW.EXAMPLE.COM` or `- 8 -` carry ornaments that would defeat
+/// every prefix/whole-line signature.
+fn trim_ornaments(text: &str) -> &str {
+    text.trim_matches(|c: char| {
+        c.is_whitespace() || "|\u{2022}\u{00b7}\u{25aa}\u{2013}\u{2014}-_=~*".contains(c)
+    })
+}
+
 /// Does the text match an unambiguous running-chrome signature?
 /// URLs/DOIs, journal-banner phrases, copyright marks, `Page N`,
 /// standalone page numbers, volume/issue markers, and journal citation
@@ -160,12 +270,7 @@ pub(crate) fn matches_chrome_pattern(text: &str) -> bool {
     } else {
         text
     };
-    // Strip decorative rules and bullets before matching: banner lines
-    // like "||WWW.EXAMPLE.COM" or "- 8 -" carry ornaments that would
-    // defeat every prefix/whole-line signature.
-    let t = text.trim_matches(|c: char| {
-        c.is_whitespace() || "|\u{2022}\u{00b7}\u{25aa}\u{2013}\u{2014}-_=~*".contains(c)
-    });
+    let t = trim_ornaments(text);
     if t.is_empty() {
         return false;
     }
@@ -433,16 +538,61 @@ fn body_font_size(page: &PageContent) -> f64 {
 
 /// A standalone page-number line: bare digits or a roman folio.
 fn is_lone_folio(text: &str) -> bool {
-    let t = text.trim();
+    folio_value(text).is_some()
+}
+
+/// The number a standalone page-number line carries: bare digits (≤4)
+/// or a roman folio. `None` for anything else.
+fn folio_value(text: &str) -> Option<i64> {
+    let t = trim_ornaments(text);
     if !t.is_empty() && t.len() <= 4 && t.bytes().all(|b| b.is_ascii_digit()) {
-        return true;
+        return t.parse().ok();
     }
     let lower = t.to_lowercase();
-    (1..=7).contains(&lower.len()) && is_roman_numeral(&lower)
+    if (1..=7).contains(&lower.len()) && is_roman_numeral(&lower) {
+        return Some(roman_value(&lower));
+    }
+    None
+}
+
+/// Value of a validated roman numeral (`is_roman_numeral` first).
+fn roman_value(lower: &str) -> i64 {
+    let digit = |c: char| match c {
+        'm' => 1000,
+        'd' => 500,
+        'c' => 100,
+        'l' => 50,
+        'x' => 10,
+        'v' => 5,
+        _ => 1,
+    };
+    let chars: Vec<char> = lower.chars().collect();
+    let mut total = 0i64;
+    for (i, c) in chars.iter().enumerate() {
+        let v = digit(*c);
+        if chars[i + 1..].iter().any(|next| digit(*next) > v) {
+            total -= v;
+        } else {
+            total += v;
+        }
+    }
+    total
 }
 
 /// Edge fraction of page height where extreme-most folios always strip.
 const SP_EDGE_RATIO: f64 = 0.1;
+
+/// Does this line carry a chrome signature the per-page detector may act
+/// on? A bare number or roman numeral is the weakest signature there is
+/// — it is equally a table cell, a list marker, or a code — so once the
+/// document is long enough for `strip_folio_series` to rule on page
+/// numbers, the shape alone stops licensing a strip here.
+fn is_chrome_line(text: &str, series_available: bool) -> bool {
+    if series_available && is_lone_folio(text) {
+        return false;
+    }
+    matches_chrome_pattern(text)
+}
 
 /// Per-page chrome detection: position + isolation + pattern signature.
 ///
@@ -454,9 +604,26 @@ const SP_EDGE_RATIO: f64 = 0.1;
 /// body-line height. Titles and headings never match the pattern gate,
 /// so they survive regardless of position.
 ///
+/// **Position alone never proves chrome.** Where the document is long
+/// enough to supply cross-page evidence, two further gates apply, and
+/// both exist because a page that opens or closes tight against its
+/// margin chains its own first or last lines into the chrome group:
+///
+///   1. A bare number stops counting as a chrome signature —
+///      `strip_folio_series` owns page numbers there, and a lone digit
+///      is otherwise indistinguishable from a table cell or a code.
+///   2. A group holding a line that carries no chrome signature of its
+///      own and appears on fewer than `MIN_REPEAT_PAGES` pages is that
+///      page's content and survives whole. Keeping a stray banner is a
+///      blemish; deleting a page's opening line is data loss.
+///
 /// Coordinates are PDF user space: Y grows upward, `bounds.top` is the
 /// numerically larger edge.
 pub fn strip_single_page_chrome(pages: &mut [PageContent]) {
+    // Below MIN_PAGES there is no repetition to appeal to, so the
+    // signature-and-isolation heuristic stands on its own.
+    let band_pages = (pages.len() >= MIN_PAGES).then(|| band_page_counts(pages));
+
     for page in pages.iter_mut() {
         let h = page.page_height;
         if h <= 0.0 || page.text_boxes.is_empty() {
@@ -523,7 +690,7 @@ pub fn strip_single_page_chrome(pages: &mut [PageContent]) {
                             line_hit = false;
                             last_top = tb.bounds.top;
                         }
-                        line_hit |= matches_chrome_pattern(tb.text.trim());
+                        line_hit |= is_chrome_line(tb.text.trim(), band_pages.is_some());
                     }
                     hits + usize::from(line_hit)
                 };
@@ -543,6 +710,22 @@ pub fn strip_single_page_chrome(pages: &mut [PageContent]) {
                 }
                 if pattern_lines == 0 {
                     continue;
+                }
+                // One line of this page's own content in the group is
+                // enough to spare the whole group.
+                if let Some(counts) = &band_pages {
+                    let carries_content = group.iter().any(|tb| {
+                        let text = tb.text.trim();
+                        !is_chrome_line(text, true)
+                            && counts
+                                .get(&normalize_whitespace(text))
+                                .copied()
+                                .unwrap_or(0)
+                                < MIN_REPEAT_PAGES
+                    });
+                    if carries_content {
+                        continue;
+                    }
                 }
 
                 // Isolation: gap from the group's body-side edge to the
@@ -584,7 +767,11 @@ pub fn strip_single_page_chrome(pages: &mut [PageContent]) {
         // against the margin, is a page number regardless of isolation —
         // folios sit directly beneath footnotes all the time. Runs after
         // group stripping so a folio can still anchor its chrome group.
-        if page.text_boxes.len() > 2 {
+        // Only where no series evidence was obtainable: with it,
+        // `strip_folio_series` has already taken the real folios and
+        // what is left is a number the document never numbered a page
+        // with.
+        if band_pages.is_none() && page.text_boxes.len() > 2 {
             if let Some(bottom_most) = page
                 .text_boxes
                 .iter()
@@ -1026,6 +1213,310 @@ mod tests {
         ]);
         strip_single_page_chrome(&mut pages);
         assert_eq!(pages[0].text_boxes.len(), 3);
+    }
+
+    /// Boxes with distinct ids on one page — `make_text_box` reuses a
+    /// single id per page, which the id-keyed passes cannot tell apart.
+    fn ided_box(id: &str, text: &str, top: f64, page_number: u32) -> TextBox {
+        TextBox {
+            id: id.to_string(),
+            text: text.to_string(),
+            page_number,
+            font_size: 10.0,
+            is_bold: false,
+            bounds: Bounds {
+                left: 50.0,
+                right: 200.0,
+                top,
+                bottom: top - 10.0,
+            },
+        }
+    }
+
+    fn texts(page: &PageContent) -> Vec<&str> {
+        page.text_boxes.iter().map(|tb| tb.text.as_str()).collect()
+    }
+
+    /// The folio series: printed numbers rising by one, offset from the
+    /// physical index by the front matter. Detecting the progression is
+    /// what licenses removal.
+    fn folio_pages(offset: i64, count: u32) -> Vec<PageContent> {
+        (1..=count)
+            .map(|i| {
+                make_page(
+                    i,
+                    vec![
+                        ided_box(&format!("p{i}-body"), "Body prose line.", 500.0, i),
+                        ided_box(
+                            &format!("p{i}-folio"),
+                            &(i as i64 + offset).to_string(),
+                            40.0,
+                            i,
+                        ),
+                    ],
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn folio_series_strips_at_any_constant_offset() {
+        // Front matter shifts the printed number: physical 1 prints 21.
+        let mut pages = folio_pages(20, 12);
+        strip_folio_series(&mut pages);
+        for page in &pages {
+            assert_eq!(
+                texts(page),
+                ["Body prose line."],
+                "page {}",
+                page.page_number
+            );
+        }
+    }
+
+    #[test]
+    fn folio_series_strips_when_printed_equals_physical() {
+        let mut pages = folio_pages(0, 12);
+        strip_folio_series(&mut pages);
+        for page in &pages {
+            assert_eq!(
+                texts(page),
+                ["Body prose line."],
+                "page {}",
+                page.page_number
+            );
+        }
+    }
+
+    #[test]
+    fn roman_front_matter_folios_form_their_own_series() {
+        let numerals = ["i", "ii", "iii", "iv", "v", "vi", "vii", "viii"];
+        let mut pages: Vec<PageContent> = (1..=8u32)
+            .map(|i| {
+                make_page(
+                    i,
+                    vec![
+                        ided_box(&format!("p{i}-body"), "Front matter prose.", 500.0, i),
+                        ided_box(&format!("p{i}-folio"), numerals[i as usize - 1], 40.0, i),
+                    ],
+                )
+            })
+            .collect();
+        strip_folio_series(&mut pages);
+        for page in &pages {
+            assert_eq!(
+                texts(page),
+                ["Front matter prose."],
+                "page {}",
+                page.page_number
+            );
+        }
+    }
+
+    #[test]
+    fn a_number_that_is_not_a_series_is_content() {
+        // One page carries a bare number in the margin; nothing else in
+        // the document continues it, so it is not a page number.
+        let mut pages: Vec<PageContent> = (1..=12u32)
+            .map(|i| {
+                let mut boxes = vec![ided_box(
+                    &format!("p{i}-body"),
+                    "Body prose line.",
+                    500.0,
+                    i,
+                )];
+                if i == 5 {
+                    boxes.push(ided_box("p5-count", "7", 40.0, i));
+                }
+                make_page(i, boxes)
+            })
+            .collect();
+        strip_folio_series(&mut pages);
+        strip_single_page_chrome(&mut pages);
+        assert!(texts(&pages[4]).contains(&"7"), "{:?}", texts(&pages[4]));
+    }
+
+    #[test]
+    fn a_page_opening_under_the_running_header_keeps_its_heading() {
+        // The shape that loses content: a folio at the top margin with
+        // the page's own first line one body-height below it. Chained
+        // into one group, a single number once licensed stripping both.
+        let mut pages: Vec<PageContent> = (1..=12u32)
+            .map(|i| {
+                make_page(
+                    i,
+                    vec![
+                        ided_box(&format!("p{i}-folio"), &i.to_string(), 760.0, i),
+                        ided_box(
+                            &format!("p{i}-head"),
+                            &format!("Entry {i} — what this page defines"),
+                            748.0,
+                            i,
+                        ),
+                        ided_box(&format!("p{i}-body"), "Body prose line.", 500.0, i),
+                    ],
+                )
+            })
+            .collect();
+        strip_headers_footers(&mut pages);
+        strip_folio_series(&mut pages);
+        strip_single_page_chrome(&mut pages);
+        for page in &pages {
+            let kept = texts(page);
+            assert!(
+                kept.iter().any(|t| t.starts_with("Entry ")),
+                "page {} lost its heading: {kept:?}",
+                page.page_number
+            );
+            assert!(
+                !kept.contains(&page.page_number.to_string().as_str()),
+                "page {} kept its folio: {kept:?}",
+                page.page_number
+            );
+        }
+    }
+
+    #[test]
+    fn a_running_header_goes_and_the_heading_under_it_stays() {
+        // The whole shape at once: a genuine repeating header, the
+        // page's own first line one body-height beneath it, and the
+        // folio at the foot. The header and the folio are running
+        // fixtures; the heading between them is not.
+        let mut pages: Vec<PageContent> = (1..=12u32)
+            .map(|i| {
+                make_page(
+                    i,
+                    vec![
+                        ided_box(&format!("p{i}-run"), "Acme Handbook", 760.0, i),
+                        ided_box(&format!("p{i}-head"), &format!("Entry {i}"), 748.0, i),
+                        ided_box(&format!("p{i}-body"), "Body prose line.", 500.0, i),
+                        ided_box(&format!("p{i}-folio"), &i.to_string(), 40.0, i),
+                    ],
+                )
+            })
+            .collect();
+        strip_headers_footers(&mut pages);
+        strip_folio_series(&mut pages);
+        strip_single_page_chrome(&mut pages);
+        for (i, page) in pages.iter().enumerate() {
+            assert_eq!(
+                texts(page),
+                [format!("Entry {}", i + 1), "Body prose line.".into()],
+                "page {}",
+                page.page_number
+            );
+        }
+    }
+
+    #[test]
+    fn a_line_unique_to_its_page_spares_the_group_it_sits_in() {
+        // A banner tight above a page's own content chains with it. The
+        // content has no chrome signature and appears nowhere else, so
+        // the group is not chrome — keeping a stray banner is a blemish,
+        // dropping the line under it is data loss.
+        let mut pages: Vec<PageContent> = (1..=10u32)
+            .map(|i| {
+                let mut boxes = vec![ided_box(
+                    &format!("p{i}-body"),
+                    "Body prose line.",
+                    500.0,
+                    i,
+                )];
+                if i == 4 {
+                    boxes.insert(0, ided_box("p4-url", "http://example.com/x", 770.0, i));
+                    boxes.insert(1, ided_box("p4-title", "The Only Title Here", 758.0, i));
+                }
+                make_page(i, boxes)
+            })
+            .collect();
+        strip_headers_footers(&mut pages);
+        strip_folio_series(&mut pages);
+        strip_single_page_chrome(&mut pages);
+        assert!(
+            texts(&pages[3]).contains(&"The Only Title Here"),
+            "{:?}",
+            texts(&pages[3])
+        );
+    }
+
+    #[test]
+    fn a_repeating_footer_still_strips_in_a_long_document() {
+        // Inside the per-page detector's band but outside the repetition
+        // detector's narrower zone, so this is the per-page detector's
+        // own verdict: the line recurs, so it is a running fixture.
+        let mut pages: Vec<PageContent> = (1..=10u32)
+            .map(|i| {
+                make_page(
+                    i,
+                    vec![
+                        ided_box(&format!("p{i}-b1"), "Body prose one.", 500.0, i),
+                        ided_box(&format!("p{i}-b2"), "Body prose two.", 480.0, i),
+                        ided_box(&format!("p{i}-b3"), "Body prose three.", 460.0, i),
+                        ided_box(&format!("p{i}-cite"), "http://journal.example/x", 115.0, i),
+                    ],
+                )
+            })
+            .collect();
+        strip_single_page_chrome(&mut pages);
+        for page in &pages {
+            assert!(
+                !texts(page).iter().any(|t| t.starts_with("http")),
+                "page {} kept its running footer: {:?}",
+                page.page_number,
+                texts(page)
+            );
+        }
+    }
+
+    #[test]
+    fn a_document_without_chrome_is_left_alone() {
+        let mut pages: Vec<PageContent> = (1..=10u32)
+            .map(|i| {
+                make_page(
+                    i,
+                    vec![
+                        ided_box(&format!("p{i}-head"), &format!("Section {i}"), 760.0, i),
+                        ided_box(&format!("p{i}-body"), "Body prose line.", 500.0, i),
+                        ided_box(
+                            &format!("p{i}-last"),
+                            &format!("Closing line {i}."),
+                            60.0,
+                            i,
+                        ),
+                    ],
+                )
+            })
+            .collect();
+        let before: Vec<Vec<String>> = pages
+            .iter()
+            .map(|p| texts(p).iter().map(|t| t.to_string()).collect())
+            .collect();
+        strip_headers_footers(&mut pages);
+        strip_folio_series(&mut pages);
+        strip_single_page_chrome(&mut pages);
+        let after: Vec<Vec<String>> = pages
+            .iter()
+            .map(|p| texts(p).iter().map(|t| t.to_string()).collect())
+            .collect();
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn a_single_page_document_still_reads_its_own_chrome() {
+        // Below MIN_PAGES there is no series and no repetition to appeal
+        // to, so the signature-and-isolation heuristic stands alone.
+        let mut pages = single_page(vec![
+            chrome_box("url", "www.example.com/journal", 780.0, 770.0),
+            chrome_box("b1", "Body prose line one.", 600.0, 590.0),
+            chrome_box("b2", "Body prose line two.", 580.0, 570.0),
+            chrome_box("folio", "4", 30.0, 20.0),
+        ]);
+        strip_folio_series(&mut pages);
+        strip_single_page_chrome(&mut pages);
+        assert_eq!(
+            texts(&pages[0]),
+            ["Body prose line one.", "Body prose line two."]
+        );
     }
 
     #[test]

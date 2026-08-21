@@ -13,6 +13,10 @@ pub struct StreamInfo {
     pub url: Option<String>,
     /// Directory to write extracted images/diagrams.
     pub image_dir: Option<String>,
+    /// Emit `<!-- markit:page N -->` before each page's content, with
+    /// the 1-based physical page number. Off by default: the marker is
+    /// for callers that need to map output back to pages.
+    pub page_markers: bool,
 }
 
 #[derive(Debug, Clone)]

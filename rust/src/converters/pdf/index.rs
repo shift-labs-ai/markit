@@ -20,12 +20,18 @@ use super::borderless::detect_borderless_tables;
 use super::columns::{detect_columns, ColumnLayout};
 use super::fast_extract::extract_document_fast;
 use super::grid::resolve_table_grids;
-use super::headers::{strip_headers_footers, strip_single_page_chrome};
+use super::headers::{strip_folio_series, strip_headers_footers, strip_single_page_chrome};
 use super::render::{render_page_content, ImageBlock};
 use super::types::{Segment, TextBox};
 
 const EXTENSIONS: &[&str] = &[".pdf"];
 const MIMETYPES: &[&str] = &["application/pdf", "application/x-pdf"];
+
+/// Opening of a page marker, completed by the 1-based physical page
+/// number and ` -->`. An HTML comment so the marker is invisible when
+/// the markdown is rendered, and a fixed prefix so a reader can split
+/// on it: `<!-- markit:page 12 -->`.
+const PAGE_MARKER_PREFIX: &str = "<!-- markit:page ";
 
 /// Process a set of text boxes (one column or full page): run table detection,
 /// separate free text, and render to markdown.
@@ -259,10 +265,13 @@ impl Converter for PdfConverter {
         let (mut pages, extracted_images) = extract_document_fast(input, image_dir.is_some())?;
 
         // Remove running headers/footers before processing. The
-        // repetition detector handles multi-page documents; the per-page
-        // chrome detector complements it on single pages and
-        // inconsistent per-page chrome.
+        // repetition detector handles multi-page documents, the folio
+        // detector the page-number series, and the per-page chrome
+        // detector complements both on single pages and inconsistent
+        // per-page chrome. Order matters: each pass narrows what the
+        // next one is allowed to call chrome.
         strip_headers_footers(&mut pages);
+        strip_folio_series(&mut pages);
         strip_single_page_chrome(&mut pages);
 
         if let Some(dir) = image_dir {
@@ -272,6 +281,15 @@ impl Converter for PdfConverter {
         let mut page_markdowns: Vec<String> = Vec::new();
 
         for page in &pages {
+            // One marker per physical page, ahead of that page's
+            // content, so a caller can map any line back to the page it
+            // came from. Emitted before the empty-content check: a blank
+            // or image-only page still occupies a page number, and a
+            // marker sequence with holes in it would be worse than none.
+            if info.page_markers {
+                page_markdowns.push(format!("{PAGE_MARKER_PREFIX}{} -->", page.page_number));
+            }
+
             // Build image blocks for this page
             let mut positioned_image_blocks: Vec<(f64, ImageBlock)> = Vec::new();
 
@@ -604,6 +622,108 @@ trailer << /Root 1 0 R >>";
             ..Default::default()
         };
         assert!(c.convert(input, &info).is_ok());
+    }
+
+    /// A minimal multi-page PDF, one text line per (y, text) entry.
+    /// Generated in the test so the geometry it depends on is visible
+    /// here rather than hidden in a committed binary.
+    fn multi_page_pdf(pages: &[Vec<(u32, &str)>]) -> Vec<u8> {
+        let mut out = String::from("%PDF-1.4\n");
+        let kids: Vec<String> = (0..pages.len())
+            .map(|i| format!("{} 0 R", 4 + i * 2))
+            .collect();
+        out.push_str("1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n");
+        out.push_str(&format!(
+            "2 0 obj << /Type /Pages /Kids [{}] /Count {} >> endobj\n",
+            kids.join(" "),
+            pages.len()
+        ));
+        out.push_str("3 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n");
+        for (i, lines) in pages.iter().enumerate() {
+            let page_obj = 4 + i * 2;
+            let content_obj = page_obj + 1;
+            out.push_str(&format!(
+                "{page_obj} 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+                 /Resources << /Font << /F1 3 0 R >> >> /Contents {content_obj} 0 R >> endobj\n"
+            ));
+            let mut stream = String::new();
+            for (y, text) in lines {
+                stream.push_str(&format!("BT /F1 12 Tf 72 {y} Td ({text}) Tj ET\n"));
+            }
+            out.push_str(&format!(
+                "{content_obj} 0 obj << /Length {} >> stream\n{stream}endstream endobj\n",
+                stream.len()
+            ));
+        }
+        out.push_str("trailer << /Root 1 0 R >>");
+        out.into_bytes()
+    }
+
+    fn convert_bytes(input: &[u8], page_markers: bool) -> String {
+        PdfConverter
+            .convert(
+                input,
+                &StreamInfo {
+                    extension: Some(".pdf".into()),
+                    page_markers,
+                    ..Default::default()
+                },
+            )
+            .expect("conversion")
+            .markdown
+    }
+
+    /// Markers are additive: take them out and what is left is exactly
+    /// the default run's markdown.
+    fn without_markers(markdown: &str) -> String {
+        markdown
+            .lines()
+            .filter(|line| !line.starts_with(PAGE_MARKER_PREFIX))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .split("\n\n")
+            .map(str::trim)
+            .filter(|block| !block.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+
+    /// Three pages, the middle one blank: a page with no content still
+    /// holds a page number, so it still gets a marker.
+    fn three_page_pdf() -> Vec<u8> {
+        multi_page_pdf(&[
+            vec![(700, "First page prose.")],
+            vec![],
+            vec![(700, "Third page prose.")],
+        ])
+    }
+
+    #[test]
+    fn page_markers_are_off_by_default() {
+        let markdown = convert_bytes(&three_page_pdf(), false);
+        assert!(!markdown.contains(PAGE_MARKER_PREFIX), "{markdown}");
+        assert!(markdown.contains("First page prose."), "{markdown}");
+        assert_eq!(without_markers(&markdown), markdown);
+    }
+
+    #[test]
+    fn page_markers_number_every_physical_page() {
+        let pdf = three_page_pdf();
+        let marked = convert_bytes(&pdf, true);
+        let markers: Vec<&str> = marked
+            .lines()
+            .filter(|line| line.starts_with(PAGE_MARKER_PREFIX))
+            .collect();
+        assert_eq!(
+            markers,
+            [
+                "<!-- markit:page 1 -->",
+                "<!-- markit:page 2 -->",
+                "<!-- markit:page 3 -->"
+            ],
+            "{marked}"
+        );
+        assert_eq!(without_markers(&marked), convert_bytes(&pdf, false));
     }
 
     fn convert_fixture(path: &str) -> String {
