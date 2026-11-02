@@ -322,7 +322,7 @@ fn md5(data: &[u8]) -> [u8; 16] {
     }
     msg.extend_from_slice(&bitlen.to_le_bytes());
 
-    for chunk in msg.chunks_exact(64) {
+    for chunk in msg.as_chunks::<64>().0 {
         let m: [u32; 16] = std::array::from_fn(|i| {
             u32::from_le_bytes([
                 chunk[i * 4],
@@ -402,7 +402,7 @@ impl LegacyCrypt {
             type Dec = cbc::Decryptor<aes::Aes128>;
             let mut buf = data[16..].to_vec();
             let mut dec = Dec::new(obj_key.into(), data[..16].into());
-            for chunk in buf.chunks_exact_mut(16) {
+            for chunk in buf.as_chunks_mut::<16>().0 {
                 dec.decrypt_block_mut(chunk.into());
             }
             if let Some(&pad) = buf.last() {
@@ -466,7 +466,7 @@ fn aes128_cbc_nopad_encrypt(key: &[u8], iv: &[u8], data: &[u8]) -> Vec<u8> {
     type Enc = cbc::Encryptor<aes::Aes128>;
     let mut buf = data.to_vec();
     let mut enc = Enc::new(key.into(), iv.into());
-    for chunk in buf.chunks_exact_mut(16) {
+    for chunk in buf.as_chunks_mut::<16>().0 {
         enc.encrypt_block_mut(chunk.into());
     }
     buf
@@ -480,7 +480,7 @@ fn aes256_cbc_nopad_decrypt(key: &[u8], iv: &[u8], data: &[u8]) -> Result<Vec<u8
     }
     let mut buf = data.to_vec();
     let mut dec = Dec::new(key.into(), iv.into());
-    for chunk in buf.chunks_exact_mut(16) {
+    for chunk in buf.as_chunks_mut::<16>().0 {
         dec.decrypt_block_mut(chunk.into());
     }
     Ok(buf)

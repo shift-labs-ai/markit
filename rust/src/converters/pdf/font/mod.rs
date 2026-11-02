@@ -484,8 +484,8 @@ fn recover_cid_unicode(pdf: &Pdf, cid_font: &Dict, info: &mut FontInfo) {
     match pdf.dict_get(cid_font, b"CIDToGIDMap") {
         Ok(Some(Val::Stream(md, mraw))) => {
             if let Ok(map) = pdf.decode_stream_cached(&md, mraw) {
-                for (cid, gb) in map.chunks_exact(2).enumerate() {
-                    let gid = u16::from_be_bytes([gb[0], gb[1]]);
+                for (cid, gb) in map.as_chunks::<2>().0.iter().enumerate() {
+                    let gid = u16::from_be_bytes(*gb);
                     if let Some(&u) = gid_uni.get(&gid) {
                         if let Some(c) = char::from_u32(u) {
                             info.to_unicode

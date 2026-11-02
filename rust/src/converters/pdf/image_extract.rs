@@ -321,7 +321,12 @@ fn extract_xobject(pdf: &Pdf, dict: &Dict, raw: &[u8]) -> Result<ExtractedImage>
                 }
             }
             16 => {
-                for pair in r.chunks_exact(2).take(width as usize * components) {
+                for pair in r
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .take(width as usize * components)
+                {
                     samples.push(pair[0]);
                 }
             }
@@ -384,7 +389,7 @@ fn extract_xobject(pdf: &Pdf, dict: &Dict, raw: &[u8]) -> Result<ExtractedImage>
         (None, 4) => {
             // CMYK → RGB (naive but serviceable).
             let mut rgb = Vec::with_capacity(samples.len() / 4 * 3);
-            for px in samples.chunks_exact(4) {
+            for px in samples.as_chunks::<4>().0 {
                 let (c, m, y, k) = (px[0] as u32, px[1] as u32, px[2] as u32, px[3] as u32);
                 rgb.push((255 - (c + k).min(255)) as u8);
                 rgb.push((255 - (m + k).min(255)) as u8);
@@ -409,7 +414,7 @@ fn extract_xobject(pdf: &Pdf, dict: &Dict, raw: &[u8]) -> Result<ExtractedImage>
             }
             png::ColorType::Rgb => {
                 let mut rgba = Vec::with_capacity(final_samples.len() / 3 * 4);
-                for (i, px) in final_samples.chunks_exact(3).enumerate() {
+                for (i, px) in final_samples.as_chunks::<3>().0.iter().enumerate() {
                     rgba.extend_from_slice(px);
                     rgba.push(alpha[i]);
                 }
@@ -482,7 +487,7 @@ fn smask_alpha(pdf: &Pdf, dict: &Dict, width: u32, height: u32) -> Result<Option
         match sbpc {
             8 => alpha.extend_from_slice(&r[..width as usize]),
             16 => {
-                for pair in r.chunks_exact(2).take(width as usize) {
+                for pair in r.as_chunks::<2>().0.iter().take(width as usize) {
                     alpha.push(pair[0]);
                 }
             }
