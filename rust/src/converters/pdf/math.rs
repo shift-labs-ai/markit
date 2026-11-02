@@ -6,6 +6,8 @@
 //! inside a line, converts them to LaTeX, and wraps them in `$…$`;
 //! the sentinels are stripped from everything else.
 
+use std::borrow::Cow;
+
 use unicode_normalization::UnicodeNormalization;
 
 use super::shared::{SUB_CLOSE, SUB_OPEN, SUP_CLOSE, SUP_OPEN};
@@ -31,8 +33,35 @@ fn is_strong_math(c: char) -> bool {
     // real math characters established.
 }
 
-fn has_strong_math(s: &str) -> bool {
-    s.chars().any(is_strong_math)
+/// A letter of the Greek alphabet, accented or not. The block's symbol
+/// forms from U+03D0 on (ϑ ϕ ϖ ϵ) are notation only and are not
+/// letters here.
+fn is_greek_letter(c: char) -> bool {
+    matches!(c, '\u{0386}' | '\u{0388}'..='\u{03CE}') && c.is_alphabetic()
+}
+
+/// Greek letters that written Greek uses and mathematical notation
+/// never does: vowels with tonos or dialytika, final sigma, omicron,
+/// and the capitals mathematics writes as Latin letters
+/// (Α Β Ε Ζ Η Ι Κ Μ Ν Ο Ρ Τ Χ).
+fn is_written_greek(c: char) -> bool {
+    matches!(
+        c,
+        '\u{0386}' | '\u{0388}'..='\u{0390}' | '\u{03AA}'..='\u{03B0}' | '\u{03C2}' | '\u{03CA}'..='\u{03CE}'
+            | '\u{03BF}'
+            | '\u{0391}' | '\u{0392}' | '\u{0395}' | '\u{0396}' | '\u{0397}' | '\u{0399}' | '\u{039A}'
+            | '\u{039C}' | '\u{039D}' | '\u{039F}' | '\u{03A1}' | '\u{03A4}' | '\u{03A7}'
+    )
+}
+
+fn has_greek(text: &str) -> bool {
+    text.chars().any(|c| ('\u{0370}'..='\u{03FF}').contains(&c))
+}
+
+/// Is `text` written in Greek? PDFs often carry accents as combining
+/// marks, so the test runs on the composed (NFC) text.
+pub(crate) fn writes_greek(text: &str) -> bool {
+    has_greek(text) && text.nfc().any(is_written_greek)
 }
 
 fn has_intrinsic_math(s: &str) -> bool {
@@ -648,9 +677,27 @@ fn strip_sentinels(s: &str) -> String {
 /// Split a line into plain and math segments; math segments become
 /// `$latex$`, plain segments pass through `escape_plain`. Sentinels
 /// never survive.
-pub(crate) fn render_line_with_math(text: &str, escape_plain: impl Fn(&str) -> String) -> String {
-    if !has_strong_math(text) {
-        return escape_plain(&strip_sentinels(text));
+///
+/// `greek_prose` says the line sits in Greek-language text (see
+/// [`writes_greek`]): its Greek letters are then the language, not
+/// notation, so they are no evidence of mathematics while operators
+/// and other symbols still are, and the line is composed to NFC so its
+/// accents come out as single characters.
+pub(crate) fn render_line_with_math(
+    text: &str,
+    greek_prose: bool,
+    escape_plain: impl Fn(&str) -> String,
+) -> String {
+    let text: Cow<str> = if greek_prose && has_greek(text) {
+        Cow::Owned(text.nfc().collect())
+    } else {
+        Cow::Borrowed(text)
+    };
+    let is_strong = |c: char| is_strong_math(c) && !(greek_prose && is_greek_letter(c));
+    let has_strong = |s: &str| s.chars().any(is_strong);
+
+    if !has_strong(&text) {
+        return escape_plain(&strip_sentinels(&text));
     }
     let words: Vec<&str> = text.split(' ').collect();
     #[derive(PartialEq, Clone, Copy)]
@@ -662,7 +709,7 @@ pub(crate) fn render_line_with_math(text: &str, escape_plain: impl Fn(&str) -> S
     let kinds: Vec<Kind> = words
         .iter()
         .map(|w| {
-            if has_strong_math(w) {
+            if has_strong(w) {
                 Kind::Strong
             } else if is_weak_math_word(w) {
                 Kind::Weak
@@ -692,7 +739,7 @@ pub(crate) fn render_line_with_math(text: &str, escape_plain: impl Fn(&str) -> S
         // A single stray math character in prose (α-helix, 500 × 300)
         // is not an equation: demand two pieces of strong evidence, or
         // one plus script structure.
-        let strong_chars = run.chars().filter(|c| is_strong_math(*c)).count();
+        let strong_chars = run.chars().filter(|&c| is_strong(c)).count();
         let has_scripts = run.chars().any(super::shared::is_script_sentinel);
         if any_strong
             && (strong_chars >= 2 || (strong_chars >= 1 && has_scripts) || has_intrinsic_math(&run))
@@ -716,10 +763,20 @@ mod tests {
         s.to_string()
     }
 
+    /// One line of English or notation.
+    fn math(line: &str) -> String {
+        render_line_with_math(line, false, ident)
+    }
+
+    /// One line on a page written in Greek.
+    fn greek(line: &str) -> String {
+        render_line_with_math(line, true, ident)
+    }
+
     #[test]
     fn plain_prose_untouched() {
         assert_eq!(
-            render_line_with_math("Just ordinary prose here.", ident),
+            math("Just ordinary prose here."),
             "Just ordinary prose here."
         );
     }
@@ -727,7 +784,7 @@ mod tests {
     #[test]
     fn norm_inequality_becomes_latex() {
         let line = "we have: ‖v‖\u{E002}2\u{E003} ≤ ‖v‖\u{E002}q\u{E003},";
-        let out = render_line_with_math(line, ident);
+        let out = math(line);
         assert!(out.contains(r"$\|v\|_{2} \le \|v\|_{q},$"), "{out}");
         assert!(out.starts_with("we have: "), "{out}");
     }
@@ -735,27 +792,27 @@ mod tests {
     #[test]
     fn sentinels_are_stripped_from_plain_text() {
         let line = "footnote\u{E000}1\u{E001} continues";
-        assert_eq!(render_line_with_math(line, ident), "footnote1 continues");
+        assert_eq!(math(line), "footnote1 continues");
     }
 
     #[test]
     fn greek_and_operators_map() {
-        let out = render_line_with_math("λ ∈ Ω", ident);
+        let out = math("λ ∈ Ω");
         assert_eq!(out, r"$\lambda \in \Omega$");
     }
 
     #[test]
     fn negation_slash_becomes_not() {
-        let out = render_line_with_math("x ̸= y ∈ Z", ident);
+        let out = math("x ̸= y ∈ Z");
         assert!(out.contains(r"\not"), "{out}");
         assert!(out.contains(r"\in"), "{out}");
     }
 
     #[test]
     fn mathematical_alphanumeric_letters_become_latex_styles() {
-        let out = render_line_with_math("𝐀 ∈ 𝑉, 𝛼 ≥ 𝟐", ident);
+        let out = math("𝐀 ∈ 𝑉, 𝛼 ≥ 𝟐");
         assert_eq!(out, r"$\mathbf{A} \in V, \alpha \ge 2$");
-        assert_eq!(render_line_with_math("𝑋", ident), "$X$");
+        assert_eq!(math("𝑋"), "$X$");
     }
 
     #[test]
@@ -778,19 +835,54 @@ mod tests {
 
     #[test]
     fn accented_variables_become_latex_accents_inside_math() {
-        let out = render_line_with_math("K̃ ∩ P̃", ident);
+        let out = math("K̃ ∩ P̃");
         assert_eq!(out, r"$\tilde{K} \cap \tilde{P}$");
     }
 
     #[test]
+    fn greek_prose_stays_text() {
+        // Accents arrive decomposed from the PDF and come out composed.
+        assert_eq!(
+            greek("(Νομοθετικε\u{0301}ς πρα\u{0301}ξεις)"),
+            "(Νομοθετικές πράξεις)"
+        );
+        assert_eq!(greek("ΚΑΝΟΝΙΣΜΟΙ"), "ΚΑΝΟΝΙΣΜΟΙ");
+        assert_eq!(greek("το άρθρο 5 της οδηγίας"), "το άρθρο 5 της οδηγίας");
+        // A short line holds no letter only written Greek uses; the
+        // page decides.
+        assert_eq!(greek("39 και 42 και 43,"), "39 και 42 και 43,");
+    }
+
+    #[test]
+    fn written_greek_is_recognised_by_its_letters() {
+        assert!(writes_greek("Νομοθετικε\u{0301}ς"));
+        assert!(writes_greek("ΚΑΝΟΝΙΣΜΟΙ"));
+        assert!(!writes_greek("δχω ≥ αρΛ"));
+        assert!(!writes_greek("plain English"));
+    }
+
+    #[test]
+    fn math_on_a_greek_prose_line_still_converts() {
+        assert_eq!(greek("όπου x ∈ ℝ και"), r"όπου $x \in \mathbb{R}$ και");
+    }
+
+    #[test]
+    fn greek_notation_is_still_math() {
+        // Products of Greek symbols, however long, are notation.
+        assert_eq!(math("αβ ∈ Σ"), r"$\alpha \beta \in \Sigma$");
+        assert_eq!(
+            math("δχω ≥ αρΛ"),
+            r"$\delta \chi \omega \ge \alpha \rho \Lambda$"
+        );
+        assert_eq!(
+            math("with σ\u{E002}ij\u{E003} given"),
+            r"with $\sigma _{ij}$ given"
+        );
+    }
+
+    #[test]
     fn single_stray_math_char_stays_prose() {
-        assert_eq!(
-            render_line_with_math("the α-helix structure", ident),
-            "the α-helix structure"
-        );
-        assert_eq!(
-            render_line_with_math("a 500 × 300 mm panel", ident),
-            "a 500 × 300 mm panel"
-        );
+        assert_eq!(math("the α-helix structure"), "the α-helix structure");
+        assert_eq!(math("a 500 × 300 mm panel"), "a 500 × 300 mm panel");
     }
 }

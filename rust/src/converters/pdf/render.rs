@@ -529,10 +529,17 @@ pub fn render_page_content(
     // so that diagram labels released as free text don't skew the body size.
     let body_fs = modal_font_size(all_text_boxes.unwrap_or(free_text_boxes));
 
+    // On a page written in Greek, Greek letters are language, not
+    // notation. A short line may not show it, so the page decides.
+    let greek_prose = all_text_boxes
+        .unwrap_or(free_text_boxes)
+        .iter()
+        .any(|tb| super::math::writes_greek(&tb.text));
+
     // Free text lines, including headings: math runs render as $LaTeX$.
     for line in group_free_text_into_lines(free_text_boxes) {
         let prefix = heading_prefix(line.font_size, body_fs, line.is_bold);
-        let content = super::math::render_line_with_math(&line.text, escape_free_text);
+        let content = super::math::render_line_with_math(&line.text, greek_prose, escape_free_text);
         blocks.push(ContentBlock {
             top_y: line.top_y,
             content: format!("{prefix}{content}"),
