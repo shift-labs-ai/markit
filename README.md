@@ -112,6 +112,22 @@ gh skill install shift-labs-ai/markit markit   # Install the agent skill
 
 ---
 
+## Page Markers
+
+Every PDF page opens with a marker, so any line can be traced back to
+the page it came from:
+
+```
+<!-- page 12 -->
+```
+
+The number is the 1-based **physical** page — page 12 of the file, which
+is not always the number printed on it. Every page gets one, including
+blank and image-only pages, so the markers run 1..N with no gaps. They
+are HTML comments, so they disappear when the markdown is rendered.
+
+---
+
 ## SDK
 
 markit is also a Node library. Every format uses the same bundled Rust engine as the CLI on supported macOS and Linux platforms—there is no second fallback implementation:

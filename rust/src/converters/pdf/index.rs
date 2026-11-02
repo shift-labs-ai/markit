@@ -20,12 +20,32 @@ use super::borderless::detect_borderless_tables;
 use super::columns::{detect_columns, ColumnLayout};
 use super::fast_extract::extract_document_fast;
 use super::grid::resolve_table_grids;
-use super::headers::{strip_headers_footers, strip_single_page_chrome};
+use super::headers::{strip_folio_series, strip_headers_footers, strip_single_page_chrome};
 use super::render::{render_page_content, ImageBlock};
 use super::types::{Segment, TextBox};
 
 const EXTENSIONS: &[&str] = &[".pdf"];
 const MIMETYPES: &[&str] = &["application/pdf", "application/x-pdf"];
+
+/// The marker that opens each page's content: `<!-- page 12 -->`, with
+/// the 1-based physical page number. An HTML comment, so it is invisible
+/// when the markdown is rendered while a reader can still map any line
+/// back to the page it came from.
+fn page_marker(page_number: u32) -> String {
+    format!("<!-- page {page_number} -->")
+}
+
+/// The page marker `text` opens with, including the block break after
+/// it, or `None`. The inverse of `page_marker`.
+fn leading_page_marker(text: &str) -> Option<&str> {
+    const CLOSE: &str = " -->\n\n";
+    let digits = text.strip_prefix("<!-- page ")?;
+    let digit_count = digits.bytes().take_while(u8::is_ascii_digit).count();
+    if digit_count == 0 || !digits[digit_count..].starts_with(CLOSE) {
+        return None;
+    }
+    Some(&text[..text.len() - digits.len() + digit_count + CLOSE.len()])
+}
 
 /// Process a set of text boxes (one column or full page): run table detection,
 /// separate free text, and render to markdown.
@@ -65,14 +85,21 @@ fn process_column(
 /// `tech-\n\nniques` → `techniques`; a compound (`state-of-the-` +
 /// `art`) keeps its hyphen. Only fires when a letter precedes the
 /// hyphen and a lowercase letter opens the next block.
+///
+/// A page break carries a page marker between the two halves. The word
+/// is completed on the page it began on and the marker follows it:
+/// `tech-\n\n<!-- page 2 -->\n\nniques used` →
+/// `techniques\n\n<!-- page 2 -->\n\nused`.
 fn dehyphenate_across_blocks(markdown: &str) -> String {
     let bytes = markdown.as_bytes();
     let mut out = String::with_capacity(markdown.len());
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'-' && bytes[i + 1..].starts_with(b"\n\n") {
+            let marker = leading_page_marker(&markdown[i + 3..]);
+            let continuation = i + 3 + marker.map_or(0, str::len);
             let before_alpha = out.chars().last().is_some_and(|c| c.is_alphabetic());
-            let next = markdown[i + 3..].chars().next();
+            let next = markdown[continuation..].chars().next();
             let next_lower = next.is_some_and(|c| c.is_lowercase() && c.is_alphabetic());
             if before_alpha && next_lower {
                 let last_word: String = out
@@ -84,7 +111,19 @@ fn dehyphenate_across_blocks(markdown: &str) -> String {
                     // Compound: keep the hyphen, drop the break.
                     out.push('-');
                 }
-                i += 3; // skip "-\n\n"
+                i = continuation;
+                if let Some(marker) = marker {
+                    let rest = &markdown[i..];
+                    let word = &rest[..rest.find(char::is_whitespace).unwrap_or(rest.len())];
+                    out.push_str(word);
+                    out.push_str("\n\n");
+                    out.push_str(marker.trim_end());
+                    i += word.len();
+                    i += markdown[i..].len() - markdown[i..].trim_start_matches(' ').len();
+                    if i < bytes.len() && bytes[i] != b'\n' {
+                        out.push_str("\n\n");
+                    }
+                }
                 continue;
             }
         }
@@ -259,10 +298,13 @@ impl Converter for PdfConverter {
         let (mut pages, extracted_images) = extract_document_fast(input, image_dir.is_some())?;
 
         // Remove running headers/footers before processing. The
-        // repetition detector handles multi-page documents; the per-page
-        // chrome detector complements it on single pages and
-        // inconsistent per-page chrome.
+        // repetition detector handles multi-page documents, the folio
+        // detector the page-number series, and the per-page chrome
+        // detector complements both on single pages and inconsistent
+        // per-page chrome. Order matters: each pass narrows what the
+        // next one is allowed to call chrome.
         strip_headers_footers(&mut pages);
+        strip_folio_series(&mut pages);
         strip_single_page_chrome(&mut pages);
 
         if let Some(dir) = image_dir {
@@ -272,6 +314,11 @@ impl Converter for PdfConverter {
         let mut page_markdowns: Vec<String> = Vec::new();
 
         for page in &pages {
+            // Emitted before the empty-content checks: a blank or
+            // image-only page still occupies a page number, so the
+            // markers run 1..N with no holes.
+            page_markdowns.push(page_marker(page.page_number));
+
             // Build image blocks for this page
             let mut positioned_image_blocks: Vec<(f64, ImageBlock)> = Vec::new();
 
@@ -562,6 +609,36 @@ mod tests {
     }
 
     #[test]
+    fn dehyphenates_across_a_page_marker() {
+        let marker = page_marker(2);
+        // The word completes on the page it began on; the marker follows.
+        assert_eq!(
+            dehyphenate_across_blocks(&format!("applied tech-\n\n{marker}\n\nniques here")),
+            format!("applied techniques\n\n{marker}\n\nhere")
+        );
+        assert_eq!(
+            dehyphenate_across_blocks(&format!("the state-of-the-\n\n{marker}\n\nart")),
+            format!("the state-of-the-art\n\n{marker}")
+        );
+        assert_eq!(
+            dehyphenate_across_blocks(&format!("a long com-\n\n{marker}\n\nputation\n\nNext")),
+            format!("a long computation\n\n{marker}\n\nNext")
+        );
+        // A capital after the marker opens a new block: untouched.
+        let untouched = format!("ends with dash-\n\n{marker}\n\nNew block");
+        assert_eq!(dehyphenate_across_blocks(&untouched), untouched);
+    }
+
+    #[test]
+    fn leading_page_marker_is_the_inverse_of_page_marker() {
+        let text = format!("{}\n\nbody", page_marker(127));
+        assert_eq!(leading_page_marker(&text), Some("<!-- page 127 -->\n\n"));
+        assert_eq!(leading_page_marker("<!-- page -->\n\nbody"), None);
+        assert_eq!(leading_page_marker("<!-- page 3 -->body"), None);
+        assert_eq!(leading_page_marker("body"), None);
+    }
+
+    #[test]
     fn accepts_pdf_extension() {
         let c = PdfConverter;
         assert!(c.accepts(&StreamInfo {
@@ -604,6 +681,67 @@ trailer << /Root 1 0 R >>";
             ..Default::default()
         };
         assert!(c.convert(input, &info).is_ok());
+    }
+
+    /// A minimal multi-page PDF, one text line per (y, text) entry.
+    /// Generated in the test so the geometry it depends on is visible
+    /// here rather than hidden in a committed binary.
+    fn multi_page_pdf(pages: &[Vec<(u32, &str)>]) -> Vec<u8> {
+        let mut out = String::from("%PDF-1.4\n");
+        let kids: Vec<String> = (0..pages.len())
+            .map(|i| format!("{} 0 R", 4 + i * 2))
+            .collect();
+        out.push_str("1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n");
+        out.push_str(&format!(
+            "2 0 obj << /Type /Pages /Kids [{}] /Count {} >> endobj\n",
+            kids.join(" "),
+            pages.len()
+        ));
+        out.push_str("3 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n");
+        for (i, lines) in pages.iter().enumerate() {
+            let page_obj = 4 + i * 2;
+            let content_obj = page_obj + 1;
+            out.push_str(&format!(
+                "{page_obj} 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+                 /Resources << /Font << /F1 3 0 R >> >> /Contents {content_obj} 0 R >> endobj\n"
+            ));
+            let mut stream = String::new();
+            for (y, text) in lines {
+                stream.push_str(&format!("BT /F1 12 Tf 72 {y} Td ({text}) Tj ET\n"));
+            }
+            out.push_str(&format!(
+                "{content_obj} 0 obj << /Length {} >> stream\n{stream}endstream endobj\n",
+                stream.len()
+            ));
+        }
+        out.push_str("trailer << /Root 1 0 R >>");
+        out.into_bytes()
+    }
+
+    #[test]
+    fn every_physical_page_opens_with_its_marker() {
+        // The middle page is blank: it still holds a page number, so it
+        // still gets a marker.
+        let pdf = multi_page_pdf(&[
+            vec![(700, "First page prose.")],
+            vec![],
+            vec![(700, "Third page prose.")],
+        ]);
+        let markdown = PdfConverter
+            .convert(
+                &pdf,
+                &StreamInfo {
+                    extension: Some(".pdf".into()),
+                    ..Default::default()
+                },
+            )
+            .expect("conversion")
+            .markdown;
+        assert_eq!(
+            markdown,
+            "<!-- page 1 -->\n\nFirst page prose.\n\n<!-- page 2 -->\n\n\
+             <!-- page 3 -->\n\nThird page prose."
+        );
     }
 
     fn convert_fixture(path: &str) -> String {
