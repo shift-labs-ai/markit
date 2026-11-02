@@ -386,7 +386,6 @@ fn edge_aligned_body(rows: &[&Row]) -> Option<BuiltBody> {
 /// gate is skipped, but fill and column-count gates still apply.
 pub(crate) fn detect_edge_aligned_table(
     text_boxes: &[TextBox],
-    page_number: u32,
 ) -> Option<(TableGrid, Vec<String>)> {
     let rows = group_rows(text_boxes);
     if rows.len() < 3 {
@@ -409,7 +408,6 @@ pub(crate) fn detect_edge_aligned_table(
         .collect();
     Some((
         TableGrid {
-            page_number,
             rows: rows.len(),
             cols: columns.len(),
             cells,
@@ -526,10 +524,7 @@ fn absorb_header_rows<'a>(
 
 /// Detect borderless tables among free text boxes. Returns the grids
 /// plus the ids of every consumed text box.
-pub fn detect_borderless_tables(
-    text_boxes: &[TextBox],
-    page_number: u32,
-) -> (Vec<TableGrid>, Vec<String>) {
+pub fn detect_borderless_tables(text_boxes: &[TextBox]) -> (Vec<TableGrid>, Vec<String>) {
     let rows = group_rows(text_boxes);
     let mut grids = Vec::new();
     let mut consumed = Vec::new();
@@ -689,7 +684,6 @@ pub fn detect_borderless_tables(
             .map(|tb| tb.bounds.top)
             .fold(f64::NEG_INFINITY, f64::max);
         grids.push(TableGrid {
-            page_number,
             rows: run.len() + header_count,
             cols: columns.len(),
             cells,
@@ -763,7 +757,7 @@ mod tests {
     #[test]
     fn detects_an_aligned_borderless_table() {
         let boxes = aligned_table();
-        let (grids, consumed) = detect_borderless_tables(&boxes, 1);
+        let (grids, consumed) = detect_borderless_tables(&boxes);
         assert_eq!(grids.len(), 1);
         let grid = &grids[0];
         assert_eq!((grid.rows, grid.cols), (4, 3));
@@ -793,7 +787,7 @@ mod tests {
             boxes.push(tb(&format!("b{r}"), "107", 107.0, y, 25.0));
             boxes.push(tb(&format!("c{r}"), "13.5", 252.0, y, 30.0));
         }
-        let (grids, _) = detect_borderless_tables(&boxes, 1);
+        let (grids, _) = detect_borderless_tables(&boxes);
         assert_eq!(grids.len(), 1);
         let grid = &grids[0];
         assert_eq!(grid.cols, 2);
@@ -842,7 +836,7 @@ mod tests {
                 ));
             }
         }
-        let (grids, consumed) = detect_borderless_tables(&boxes, 1);
+        let (grids, consumed) = detect_borderless_tables(&boxes);
         assert_eq!(grids.len(), 1);
         let grid = &grids[0];
         assert_eq!((grid.rows, grid.cols), (4, 3));
@@ -887,7 +881,7 @@ mod tests {
                 ));
             }
         }
-        let (grids, consumed) = detect_borderless_tables(&boxes, 1);
+        let (grids, consumed) = detect_borderless_tables(&boxes);
         assert_eq!(grids.len(), 1);
         let grid = &grids[0];
         assert_eq!((grid.rows, grid.cols), (4, 3));
@@ -919,7 +913,7 @@ mod tests {
                 )
             })
             .collect();
-        let (grids, consumed) = detect_borderless_tables(&boxes, 1);
+        let (grids, consumed) = detect_borderless_tables(&boxes);
         assert!(grids.is_empty());
         assert!(consumed.is_empty());
     }
@@ -932,7 +926,7 @@ mod tests {
             tb("b0", "Alice", 72.0, 685.0, 60.0),
             tb("b1", "CEO", 200.0, 685.0, 60.0),
         ];
-        let (grids, _) = detect_borderless_tables(&boxes, 1);
+        let (grids, _) = detect_borderless_tables(&boxes);
         assert!(grids.is_empty());
     }
 
@@ -943,7 +937,7 @@ mod tests {
         // short to stand alone.
         boxes.push(tb("x0", "Key", 72.0, 300.0, 60.0));
         boxes.push(tb("x1", "Value", 200.0, 300.0, 60.0));
-        let (grids, _) = detect_borderless_tables(&boxes, 1);
+        let (grids, _) = detect_borderless_tables(&boxes);
         assert_eq!(grids.len(), 1);
         assert_eq!(grids[0].rows, 4);
     }

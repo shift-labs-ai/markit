@@ -5,7 +5,6 @@
 //! - Free text → paragraphs with heading detection (by font size)
 //! - Content ordering (top-to-bottom via Y coordinate)
 //! - Paragraph wrap merging (lines broken across PDF line boundaries)
-//! - Page number removal
 //!
 //! Ported from `@oharato/pdf2md-ts`, stripped of CJK/TDnet-specific logic.
 
@@ -527,31 +526,6 @@ fn merge_paragraph_wraps(blocks: Vec<ContentBlock>, body_fs: f64) -> Vec<Content
     merged
 }
 
-/// Remove page number blocks near the bottom of the page.
-fn remove_page_numbers(blocks: Vec<ContentBlock>, page_number: Option<u32>) -> Vec<ContentBlock> {
-    static PAGE_NUM_RE: std::sync::LazyLock<regex::Regex> =
-        std::sync::LazyLock::new(|| regex::Regex::new(r"^(?:#{1,6}\s*)?\d+\s*$").unwrap());
-    let page_num_re = &*PAGE_NUM_RE;
-    let bottom_y = 120.0;
-    let len = blocks.len();
-
-    blocks
-        .into_iter()
-        .enumerate()
-        .filter(|(idx, block)| {
-            let is_bottom = *idx >= len.saturating_sub(3);
-            let is_low_y = block.top_y <= bottom_y;
-            let text = block.content.trim();
-            let is_current_page = page_num_re.is_match(text)
-                && page_number.is_some_and(|page| {
-                    text.trim_start_matches('#').trim().parse::<u32>().ok() == Some(page)
-                });
-            !(is_bottom && is_low_y && is_current_page)
-        })
-        .map(|(_, block)| block)
-        .collect()
-}
-
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -614,12 +588,7 @@ pub fn render_page_content(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    let page_number = free_text_boxes
-        .first()
-        .map(|text| text.page_number)
-        .or_else(|| tables.first().map(|table| table.page_number));
-    let cleaned = remove_page_numbers(blocks, page_number);
-    let headings_merged = merge_consecutive_headings(cleaned, body_fs);
+    let headings_merged = merge_consecutive_headings(blocks, body_fs);
     let merged = merge_paragraph_wraps(headings_merged, body_fs);
     merged
         .iter()
@@ -693,7 +662,6 @@ mod tests {
     fn make_grid(overrides: Option<TableGridOverrides>) -> TableGrid {
         let o = overrides.unwrap_or_default();
         TableGrid {
-            page_number: 1,
             rows: o.rows.unwrap_or(2),
             cols: o.cols.unwrap_or(2),
             top_y: o.top_y.unwrap_or(300.0),
@@ -852,7 +820,6 @@ mod tests {
             })
             .collect();
         let table = TableGrid {
-            page_number: 1,
             rows: 3,
             cols: 6,
             cells,
@@ -868,7 +835,6 @@ mod tests {
     #[test]
     fn renders_merged_cells_with_html_span_attributes() {
         let grid = TableGrid {
-            page_number: 1,
             top_y: 100.0,
             rows: 2,
             cols: 2,
@@ -1214,35 +1180,19 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // renderPageContent: page number removal
+    // renderPageContent: numbers are content
     // -----------------------------------------------------------------------
 
+    /// Page numbers are chrome, and chrome is decided before render with
+    /// the whole document in view (headers.rs). Render sees one page and
+    /// keeps every number it is given, whatever its value.
     #[test]
-    fn removes_standalone_page_numbers_at_the_bottom() {
-        reset_id();
-        let boxes = vec![
-            bx_y("Real content", 500.0),
-            bx_y("1", 50.0), // matches the current page number
-        ];
-        let result = render_page_content(&boxes, &[], &[], None);
-        assert!(result.contains("Real content"));
-        let has_1 = regex::Regex::new(r"\b1\b").unwrap();
-        assert!(!has_1.is_match(&result));
-    }
-
-    #[test]
-    fn keeps_a_different_standalone_number_near_the_bottom() {
-        reset_id();
-        let boxes = vec![bx_y("Real content", 500.0), bx_y("42", 50.0)];
-        let result = render_page_content(&boxes, &[], &[], None);
-        assert!(result.contains("42"));
-    }
-
-    #[test]
-    fn does_not_remove_numbers_that_are_part_of_content() {
-        reset_id();
-        let boxes = vec![bx_y("There are 42 items", 500.0)];
-        let result = render_page_content(&boxes, &[], &[], None);
-        assert!(result.contains("42"));
+    fn keeps_standalone_numbers_near_the_bottom() {
+        for number in ["1", "42"] {
+            reset_id();
+            let boxes = vec![bx_y("Real content", 500.0), bx_y(number, 50.0)];
+            let result = render_page_content(&boxes, &[], &[], None);
+            assert!(result.ends_with(number), "{number}: {result}");
+        }
     }
 }

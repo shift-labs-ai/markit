@@ -79,7 +79,6 @@ mod tests {
     #[test]
     fn removes_empty_outer_rows_and_columns_and_reindexes() {
         let grid = TableGrid {
-            page_number: 1,
             rows: 3,
             cols: 3,
             warnings: Vec::new(),
@@ -105,7 +104,6 @@ mod tests {
     #[test]
     fn all_empty_grid_remains_structurally_intact() {
         let grid = TableGrid {
-            page_number: 1,
             rows: 1,
             cols: 1,
             warnings: Vec::new(),

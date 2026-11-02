@@ -46,7 +46,6 @@ pub struct TableCell {
 /// A resolved table grid ready for markdown rendering.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TableGrid {
-    pub page_number: u32,
     pub rows: usize,
     pub cols: usize,
     pub cells: Vec<TableCell>,

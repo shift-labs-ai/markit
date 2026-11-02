@@ -163,7 +163,6 @@ fn build_cells(rows: usize, cols: usize) -> Vec<TableCell> {
 }
 
 pub(super) fn build_table_grid(
-    page_number: u32,
     y_lines: &[f64],
     x_lines: &[f64],
     filtered_segments: &[Segment],
@@ -328,7 +327,6 @@ pub(super) fn build_table_grid(
     }
 
     let grid = prune_empty_rows_and_cols(TableGrid {
-        page_number,
         rows,
         cols,
         cells,

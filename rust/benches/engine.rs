@@ -151,7 +151,7 @@ fn main() {
             name: "dense grid resolve",
             ms: median_ms(
                 || {
-                    std::hint::black_box(resolve_table_grids(1, &boxes, &segments));
+                    std::hint::black_box(resolve_table_grids(&boxes, &segments));
                 },
                 20,
                 200,

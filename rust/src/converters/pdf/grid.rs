@@ -80,7 +80,6 @@ fn grid_is_under_ruled_prose(grid: &TableGrid, structural_rows: usize) -> bool {
 }
 
 fn build_h_line_only_table(
-    page_number: u32,
     y_lines: &[f64],
     x_min: f64,
     x_max: f64,
@@ -247,7 +246,6 @@ fn build_h_line_only_table(
         y_max
     };
     let grid = prune_empty_rows_and_cols(TableGrid {
-        page_number,
         rows: visual_rows.len(),
         cols,
         cells,
@@ -263,7 +261,6 @@ fn build_h_line_only_table(
 
 /// Shared state for processing one page's line groups.
 struct GroupContext<'a> {
-    page_number: u32,
     filtered_h: &'a [Segment],
     filtered_v: &'a [Segment],
     filtered_segments: &'a [Segment],
@@ -356,7 +353,6 @@ fn process_line_group(ctx: &mut GroupContext, y_lines: &[f64], x_lo: f64, x_hi: 
             .fold(f64::NEG_INFINITY, f64::max);
 
         if let Some((grid, cids)) = build_h_line_only_table(
-            ctx.page_number,
             y_lines,
             hx_min,
             hx_max,
@@ -387,13 +383,8 @@ fn process_line_group(ctx: &mut GroupContext, y_lines: &[f64], x_lo: f64, x_hi: 
         })
         .cloned()
         .collect();
-    let (grid, cids) = build_table_grid(
-        ctx.page_number,
-        y_lines,
-        &group_x_lines,
-        ctx.filtered_segments,
-        &group_boxes,
-    );
+    let (grid, cids) =
+        build_table_grid(y_lines, &group_x_lines, ctx.filtered_segments, &group_boxes);
     if grid_is_under_ruled_prose(&grid, y_lines.len().saturating_sub(1)) {
         return;
     }
@@ -418,8 +409,7 @@ fn process_line_group(ctx: &mut GroupContext, y_lines: &[f64], x_lo: f64, x_hi: 
             })
             .cloned()
             .collect();
-        let (bgrids, bconsumed) =
-            super::borderless::detect_borderless_tables(&candidate_boxes, ctx.page_number);
+        let (bgrids, bconsumed) = super::borderless::detect_borderless_tables(&candidate_boxes);
         if bgrids.iter().any(|g| g.cols >= 2) && bconsumed.len() * 10 >= cids.len() * 6 {
             for bgrid in bgrids {
                 ctx.grids.push(bgrid);
@@ -434,7 +424,7 @@ fn process_line_group(ctx: &mut GroupContext, y_lines: &[f64], x_lo: f64, x_hi: 
         // edge-aligned reconstruction may run without the tabular-row
         // gate.
         if let Some((egrid, econsumed)) =
-            super::borderless::detect_edge_aligned_table(&candidate_boxes, ctx.page_number)
+            super::borderless::detect_edge_aligned_table(&candidate_boxes)
         {
             if egrid.cols >= 2 && econsumed.len() * 10 >= cids.len() * 6 {
                 ctx.grids.push(egrid);
@@ -560,11 +550,7 @@ pub struct GridResult {
 }
 
 /// Detect all table grids on a single page from its text boxes and segments.
-pub fn resolve_table_grids(
-    page_number: u32,
-    text_boxes: &[TextBox],
-    segments: &[Segment],
-) -> GridResult {
+pub fn resolve_table_grids(text_boxes: &[TextBox], segments: &[Segment]) -> GridResult {
     let vertical: Vec<&Segment> = segments
         .iter()
         .filter(|s| (s.x1 - s.x2).abs() <= AXIS_EPSILON)
@@ -664,7 +650,6 @@ pub fn resolve_table_grids(
     let y_groups = split_y_lines_into_groups(&all_y_lines, &filtered_v);
 
     let mut ctx = GroupContext {
-        page_number,
         filtered_h: &filtered_h,
         filtered_v: &filtered_v,
         filtered_segments: &filtered_segments,
@@ -863,7 +848,6 @@ mod tests {
             })
             .collect();
         let grid = TableGrid {
-            page_number: 1,
             rows: 10,
             cols: 1,
             cells,
@@ -882,7 +866,7 @@ mod tests {
     #[test]
     fn returns_empty_when_no_segments() {
         reset_ids();
-        let result = resolve_table_grids(1, &[tb("hello", 200.0, 500.0)], &[]);
+        let result = resolve_table_grids(&[tb("hello", 200.0, 500.0)], &[]);
         assert_eq!(result.grids.len(), 0);
         assert_eq!(result.consumed_ids.len(), 0);
     }
@@ -891,7 +875,7 @@ mod tests {
     fn returns_empty_with_only_horizontal_lines_no_vertical() {
         reset_ids();
         let segs = vec![h_seg(400.0, 100.0, 500.0), h_seg(350.0, 100.0, 500.0)];
-        let result = resolve_table_grids(1, &[tb("A", 200.0, 375.0)], &segs);
+        let result = resolve_table_grids(&[tb("A", 200.0, 375.0)], &segs);
         // H-line-only detection requires multi-column spread
         // Single centered text box won't trigger it
         assert_eq!(result.grids.len(), 0);
@@ -901,7 +885,7 @@ mod tests {
     fn returns_empty_with_no_text_boxes_empty_grid_filtered_as_diagram() {
         reset_ids();
         let segs = table_segs(&[100.0, 300.0, 500.0], &[400.0, 350.0, 300.0]);
-        let result = resolve_table_grids(1, &[], &segs);
+        let result = resolve_table_grids(&[], &segs);
         // Segments exist but no text — all-empty grid is filtered out
         assert_eq!(result.grids.len(), 0);
     }
@@ -920,7 +904,7 @@ mod tests {
             tb("Alice", 200.0, 325.0),
             tb("CEO", 400.0, 325.0),
         ];
-        let result = resolve_table_grids(1, &boxes, &segs);
+        let result = resolve_table_grids(&boxes, &segs);
         assert_eq!(result.grids.len(), 1);
         assert_eq!(result.consumed_ids.len(), 4);
     }
@@ -930,7 +914,7 @@ mod tests {
         reset_ids();
         let segs = table_segs(&[100.0, 300.0, 500.0], &[400.0, 350.0, 300.0]);
         let boxes = vec![tb("A", 200.0, 375.0)];
-        let result = resolve_table_grids(1, &boxes, &segs);
+        let result = resolve_table_grids(&boxes, &segs);
         assert!((result.grids[0].top_y - 400.0).abs() < 1.0);
     }
 
@@ -944,7 +928,7 @@ mod tests {
             tb("Alice", 200.0, 325.0),
             tb("CEO", 400.0, 325.0),
         ];
-        let result = resolve_table_grids(1, &boxes, &segs);
+        let result = resolve_table_grids(&boxes, &segs);
         let g = &result.grids[0];
         assert_eq!(cell_text(g, 0, 0), "Name");
         assert_eq!(cell_text(g, 0, 1), "Role");
@@ -960,7 +944,7 @@ mod tests {
         let outside = tb("outside", 600.0, 375.0);
         let inside_id = inside.id.clone();
         let outside_id = outside.id.clone();
-        let result = resolve_table_grids(1, &[inside, outside], &segs);
+        let result = resolve_table_grids(&[inside, outside], &segs);
         assert!(result.consumed_ids.contains(&inside_id));
         assert!(!result.consumed_ids.contains(&outside_id));
     }
@@ -980,7 +964,7 @@ mod tests {
             tb("Alice", 150.0, 325.0),
             tb("CEO", 650.0, 325.0),
         ];
-        assert_eq!(resolve_table_grids(1, &boxes, &segs).grids.len(), 1);
+        assert_eq!(resolve_table_grids(&boxes, &segs).grids.len(), 1);
     }
 
     // -----------------------------------------------------------------------
@@ -1001,7 +985,7 @@ mod tests {
         all_segs.extend(segs_b);
 
         let boxes = vec![tb("A-Name", 200.0, 375.0), tb("B-Name", 200.0, 225.0)];
-        let result = resolve_table_grids(1, &boxes, &all_segs);
+        let result = resolve_table_grids(&boxes, &all_segs);
         assert_eq!(result.grids.len(), 2);
     }
 
@@ -1014,7 +998,7 @@ mod tests {
         all_segs.extend(segs_b);
 
         let boxes = vec![tb("A", 200.0, 375.0), tb("B", 200.0, 225.0)];
-        let result = resolve_table_grids(1, &boxes, &all_segs);
+        let result = resolve_table_grids(&boxes, &all_segs);
         let mut sorted = result.grids.clone();
         sorted.sort_by(|a, b| b.top_y.partial_cmp(&a.top_y).unwrap());
         assert!((sorted[0].top_y - 400.0).abs() < 1.0);
@@ -1031,7 +1015,7 @@ mod tests {
 
         let box_a = tb("A-row", 200.0, 375.0);
         let box_b = tb("B-row", 200.0, 225.0);
-        let result = resolve_table_grids(1, &[box_a, box_b], &all_segs);
+        let result = resolve_table_grids(&[box_a, box_b], &all_segs);
         let mut sorted = result.grids.clone();
         sorted.sort_by(|a, b| b.top_y.partial_cmp(&a.top_y).unwrap());
 
@@ -1065,7 +1049,7 @@ mod tests {
         let box_b = tb("B", 200.0, 225.0);
         let id_a = box_a.id.clone();
         let id_b = box_b.id.clone();
-        let result = resolve_table_grids(1, &[box_a, box_b], &all_segs);
+        let result = resolve_table_grids(&[box_a, box_b], &all_segs);
         assert!(result.consumed_ids.contains(&id_a));
         assert!(result.consumed_ids.contains(&id_b));
     }
@@ -1084,7 +1068,7 @@ mod tests {
             tb("R2", 200.0, 275.0),
             tb("R3", 200.0, 225.0),
         ];
-        let result = resolve_table_grids(1, &boxes, &segs);
+        let result = resolve_table_grids(&boxes, &segs);
         assert_eq!(result.grids.len(), 1);
     }
 
@@ -1102,7 +1086,7 @@ mod tests {
             tb("Value", 400.0, 370.0),
             tb("Row2", 200.0, 310.0),
         ];
-        let result = resolve_table_grids(1, &boxes, &segs);
+        let result = resolve_table_grids(&boxes, &segs);
         assert_eq!(result.grids.len(), 1);
         let cell00 = cell_text(&result.grids[0], 0, 0);
         assert!(cell00.contains("Line 1"));
@@ -1134,7 +1118,7 @@ mod tests {
             tb("Label2", 140.0, 325.0),
             tb("Value2", 420.0, 325.0),
         ];
-        let result = resolve_table_grids(1, &boxes, &segs);
+        let result = resolve_table_grids(&boxes, &segs);
         assert!(!result.grids.is_empty());
         if !result.grids.is_empty() {
             // Only 2 unique X-lines from verticals (100, 500) → groupXLines has 2
@@ -1175,7 +1159,7 @@ mod tests {
             wide_box("Re-examination: MD", 72.0, 210.0, 330.0),
             wide_box("485", 340.0, 365.0, 330.0),
         ];
-        let result = resolve_table_grids(1, &boxes, &segs);
+        let result = resolve_table_grids(&boxes, &segs);
         assert_eq!(result.grids.len(), 1);
         let g = &result.grids[0];
         assert!(g.is_borderless);
@@ -1204,7 +1188,7 @@ mod tests {
             wide_box("2137", 120.0, 160.0, 330.0),
             wide_box("12.9", 300.0, 340.0, 330.0),
         ];
-        let result = resolve_table_grids(1, &boxes, &segs);
+        let result = resolve_table_grids(&boxes, &segs);
         assert_eq!(result.grids.len(), 1);
         let g = &result.grids[0];
         assert!(g.is_borderless);
@@ -1233,7 +1217,7 @@ mod tests {
             tb("E", 250.0, 275.0),
             tb("F", 550.0, 275.0),
         ];
-        let result = resolve_table_grids(1, &boxes, &segs);
+        let result = resolve_table_grids(&boxes, &segs);
         // After pruning keeps 3 rows × ~6 cols ≈ 18 cells with 6 filled (33%)
         // plus cols >= 6 → filtered as diagram
         assert_eq!(result.grids.len(), 0);
@@ -1250,7 +1234,7 @@ mod tests {
             .enumerate()
             .map(|(i, &x)| tb(&format!("c{}", i), x + 7.0, 350.0))
             .collect();
-        let result = resolve_table_grids(1, &boxes, &segs);
+        let result = resolve_table_grids(&boxes, &segs);
         assert_eq!(result.grids.len(), 0);
     }
 
@@ -1275,7 +1259,7 @@ mod tests {
             tb("Tx", 125.0, 300.0),
             tb("Tx", 275.0, 300.0),
         ];
-        let result = resolve_table_grids(1, &boxes, &segs);
+        let result = resolve_table_grids(&boxes, &segs);
         assert_eq!(result.grids.len(), 0);
     }
 
@@ -1289,7 +1273,7 @@ mod tests {
             tb("Alice", 200.0, 325.0),
             tb("Engineer", 400.0, 325.0),
         ];
-        let result = resolve_table_grids(1, &boxes, &segs);
+        let result = resolve_table_grids(&boxes, &segs);
         assert_eq!(result.grids.len(), 1);
     }
 
@@ -1306,7 +1290,7 @@ mod tests {
             v_seg(100.0, 395.0, 400.0),
             v_seg(500.0, 395.0, 400.0),
         ];
-        let result = resolve_table_grids(1, &[tb("text", 300.0, 397.0)], &segs);
+        let result = resolve_table_grids(&[tb("text", 300.0, 397.0)], &segs);
         assert_eq!(result.grids.len(), 0);
     }
 
@@ -1322,7 +1306,7 @@ mod tests {
             wide_box("Alpha Beta", 110.0, 290.0, 475.0),
             tb("C", 350.0, 475.0),
         ];
-        let result = resolve_table_grids(1, &boxes, &segs);
+        let result = resolve_table_grids(&boxes, &segs);
         assert_eq!(result.grids.len(), 1);
         let g = &result.grids[0];
         assert_eq!(cell_text(g, 0, 0), "Alpha");
@@ -1335,7 +1319,7 @@ mod tests {
         reset_ids();
         let segs = table_segs(&[100.0, 200.0, 300.0, 400.0], &[500.0, 450.0]);
         let boxes = vec![wide_box("Aaa Bbb Ccc", 110.0, 390.0, 475.0)];
-        let result = resolve_table_grids(1, &boxes, &segs);
+        let result = resolve_table_grids(&boxes, &segs);
         assert_eq!(result.grids.len(), 1);
         let texts: Vec<&str> = result.grids[0]
             .cells
@@ -1356,7 +1340,7 @@ mod tests {
             tb("X", 250.0, 475.0),
             tb("Y", 350.0, 475.0),
         ];
-        let result = resolve_table_grids(1, &boxes, &segs);
+        let result = resolve_table_grids(&boxes, &segs);
         assert_eq!(result.grids.len(), 1);
         assert_eq!(cell_text(&result.grids[0], 0, 0), "Hello World");
     }
@@ -1369,7 +1353,7 @@ mod tests {
             wide_box("Superlongword", 110.0, 290.0, 475.0),
             tb("Z", 350.0, 475.0),
         ];
-        let result = resolve_table_grids(1, &boxes, &segs);
+        let result = resolve_table_grids(&boxes, &segs);
         assert_eq!(result.grids.len(), 1);
         let all_text: Vec<&str> = result.grids[0]
             .cells
@@ -1386,7 +1370,7 @@ mod tests {
         let segs = table_segs(&[100.0, 200.0, 300.0, 400.0], &[500.0, 450.0]);
         let bx = wide_box("Alpha Beta", 110.0, 290.0, 475.0);
         let original_id = bx.id.clone();
-        let result = resolve_table_grids(1, &[bx], &segs);
+        let result = resolve_table_grids(&[bx], &segs);
         // The original ID must be consumed so it doesn't appear as free text
         assert!(result.consumed_ids.contains(&original_id));
     }
@@ -1408,7 +1392,7 @@ mod tests {
         );
         let paragraph_id = paragraph.id.clone();
         let boxes = vec![paragraph, tb("A", 200.0, 375.0), tb("B", 400.0, 375.0)];
-        let result = resolve_table_grids(1, &boxes, &segs);
+        let result = resolve_table_grids(&boxes, &segs);
         assert_eq!(result.grids.len(), 1);
         // The paragraph should NOT be consumed by the table
         assert!(!result.consumed_ids.contains(&paragraph_id));
@@ -1425,7 +1409,7 @@ mod tests {
         let h1_id = h1.id.clone();
         let h2_id = h2.id.clone();
         let boxes = vec![h1, h2, tb("Alice", 200.0, 375.0), tb("CEO", 400.0, 375.0)];
-        let result = resolve_table_grids(1, &boxes, &segs);
+        let result = resolve_table_grids(&boxes, &segs);
         assert_eq!(result.grids.len(), 1);
         // Both headers should be consumed
         assert!(result.consumed_ids.contains(&h1_id));

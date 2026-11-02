@@ -50,12 +50,11 @@ fn leading_page_marker(text: &str) -> Option<&str> {
 /// Process a set of text boxes (one column or full page): run table detection,
 /// separate free text, and render to markdown.
 fn process_column(
-    page_number: u32,
     text_boxes: &[TextBox],
     segments: &[Segment],
     image_blocks: &[ImageBlock],
 ) -> String {
-    let result = resolve_table_grids(page_number, text_boxes, segments);
+    let result = resolve_table_grids(text_boxes, segments);
 
     let consumed_set: HashSet<&str> = result.consumed_ids.iter().map(|s| s.as_str()).collect();
     let free_text_boxes: Vec<TextBox> = text_boxes
@@ -66,8 +65,7 @@ fn process_column(
 
     // Tables without any ruling leave nothing for segment detection:
     // reconstruct them from text alignment among the remaining boxes.
-    let (borderless_grids, borderless_consumed) =
-        detect_borderless_tables(&free_text_boxes, page_number);
+    let (borderless_grids, borderless_consumed) = detect_borderless_tables(&free_text_boxes);
     let borderless_set: HashSet<&str> = borderless_consumed.iter().map(|s| s.as_str()).collect();
     let free_text_boxes: Vec<TextBox> = free_text_boxes
         .into_iter()
@@ -390,12 +388,7 @@ impl Converter for PdfConverter {
                     .into_iter()
                     .map(|(_, block)| block)
                     .collect();
-                let md = process_column(
-                    page.page_number,
-                    &page.text_boxes,
-                    &page.segments,
-                    &image_blocks,
-                );
+                let md = process_column(&page.text_boxes, &page.segments, &image_blocks);
                 if !md.is_empty() {
                     page_markdowns.push(md);
                 }
@@ -430,12 +423,7 @@ impl Converter for PdfConverter {
                         .cloned()
                         .collect();
 
-                    let md = process_column(
-                        page.page_number,
-                        col_boxes,
-                        &col_segments,
-                        &group_images[gi],
-                    );
+                    let md = process_column(col_boxes, &col_segments, &group_images[gi]);
                     if !md.is_empty() {
                         column_markdowns.push(md);
                     }
@@ -718,25 +706,68 @@ trailer << /Root 1 0 R >>";
         out.into_bytes()
     }
 
-    #[test]
-    fn every_physical_page_opens_with_its_marker() {
-        // The middle page is blank: it still holds a page number, so it
-        // still gets a marker.
-        let pdf = multi_page_pdf(&[
-            vec![(700, "First page prose.")],
-            vec![],
-            vec![(700, "Third page prose.")],
-        ]);
-        let markdown = PdfConverter
+    fn convert_pages(pages: &[Vec<(u32, &str)>]) -> String {
+        PdfConverter
             .convert(
-                &pdf,
+                &multi_page_pdf(pages),
                 &StreamInfo {
                     extension: Some(".pdf".into()),
                     ..Default::default()
                 },
             )
             .expect("conversion")
-            .markdown;
+            .markdown
+    }
+
+    fn bare_number_lines(markdown: &str) -> Vec<&str> {
+        markdown
+            .lines()
+            .filter(|line| !line.is_empty() && line.bytes().all(|b| b.is_ascii_digit()))
+            .collect()
+    }
+
+    /// Body prose on every page, plus whatever each page adds at its foot.
+    fn pages_with_feet(feet: &[Option<&'static str>]) -> Vec<Vec<(u32, &'static str)>> {
+        feet.iter()
+            .map(|foot| {
+                let mut lines = vec![(700, "Body prose one."), (680, "Body prose two.")];
+                lines.extend(foot.map(|text| (40, text)));
+                lines
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_number_equal_to_its_page_index_is_content_without_a_series() {
+        // Page 3 of twelve ends on a bare `3` that nothing else continues.
+        // Matching the physical index is a coincidence, not evidence.
+        let mut feet = vec![None; 12];
+        feet[2] = Some("3");
+        let markdown = convert_pages(&pages_with_feet(&feet));
+        assert_eq!(bare_number_lines(&markdown), ["3"], "{markdown}");
+    }
+
+    #[test]
+    fn a_short_document_loses_its_folios_at_any_offset() {
+        for feet in [
+            [Some("1"), Some("2"), Some("3")],
+            [Some("21"), Some("22"), Some("23")],
+        ] {
+            let markdown = convert_pages(&pages_with_feet(&feet));
+            assert!(bare_number_lines(&markdown).is_empty(), "{markdown}");
+            assert_eq!(markdown.matches("Body prose two.").count(), 3);
+        }
+    }
+
+    #[test]
+    fn every_physical_page_opens_with_its_marker() {
+        // The middle page is blank: it still holds a page number, so it
+        // still gets a marker.
+        let markdown = convert_pages(&[
+            vec![(700, "First page prose.")],
+            vec![],
+            vec![(700, "Third page prose.")],
+        ]);
         assert_eq!(
             markdown,
             "<!-- page 1 -->\n\nFirst page prose.\n\n<!-- page 2 -->\n\n\

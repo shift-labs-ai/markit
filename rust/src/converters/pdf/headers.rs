@@ -134,9 +134,8 @@ const MIN_REPEAT_PAGES: usize = 3;
 /// Printed folios form an arithmetic progression: the number rises by
 /// one from page to page at a constant offset from the physical index,
 /// because front matter shifts the printed numbering. The progression
-/// is the evidence. A folio that happens to equal its physical index
-/// proves nothing on its own — and a book numbered with any offset must
-/// still have its folios recognised, which an equality test never does.
+/// is the evidence, at any offset. A lone number that happens to equal
+/// its physical index proves nothing on its own.
 ///
 /// Runs before the per-page chrome detector so that a real folio is
 /// already gone when that detector looks, and a lone number that is NOT
