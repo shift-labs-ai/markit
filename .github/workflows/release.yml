@@ -76,10 +76,16 @@ jobs:
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             musl: true
+            # Rust 1.98+ passes --fix-cortex-a53-843419 when linking for
+            # aarch64 Linux, and no Zig release accepts that flag, so the
+            # zig-linked musl build stays on the last toolchain that omits
+            # it. Drop the pin once Zig links with the flag.
+            toolchain: 1.97.1
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ matrix.toolchain || 'stable' }}
           targets: ${{ matrix.target }}
       - uses: oven-sh/setup-bun@v2
         with:
