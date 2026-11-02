@@ -107,6 +107,7 @@ Every command supports `--json`. Raw markdown with `-q`.
 markit report.pdf --json       # Structured output for parsing
 markit report.pdf -q           # Raw markdown, nothing else
 markit onboard                 # Add instructions to CLAUDE.md
+gh skill install shift-labs-ai/markit markit   # Install the agent skill
 ```
 
 ---
