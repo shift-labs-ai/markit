@@ -398,8 +398,20 @@ fn emit_table(
     html.push_str("<table>\n");
     for tr in tbl.children().filter(|n| is_wn(*n, "tr")) {
         html.push_str("<tr>\n");
+        // Grid columns a row leaves empty before its first cell
+        // (w:gridBefore) hold its cells in place. Columns left empty after
+        // its last (w:gridAfter) need nothing: every table row is padded to
+        // the full grid when it becomes markdown.
+        if let Some(before) = grid_count(find_wchild(tr, "trPr"), "gridBefore") {
+            push_td_open(html, before);
+            html.push_str("</td>\n");
+        }
         for tc in tr.children().filter(|n| is_wn(*n, "tc")) {
-            html.push_str("<td>");
+            // A cell covering several grid columns says so in w:gridSpan.
+            push_td_open(
+                html,
+                grid_count(find_wchild(tc, "tcPr"), "gridSpan").unwrap_or(1),
+            );
             // Join non-blank paragraphs with <br>, writing directly into
             // html via per-paragraph scratch (needed for the blank check).
             let mut first = true;
@@ -420,6 +432,26 @@ fn emit_table(
         html.push_str("</tr>\n");
     }
     html.push_str("</table>\n");
+}
+
+/// A positive grid-column count from a `w:val` child of a property block
+/// (`w:gridSpan`, `w:gridBefore`).
+fn grid_count(props: Option<roxmltree::Node>, name: &str) -> Option<usize> {
+    find_wchild(props?, name)
+        .and_then(|n| wattr(n, "val"))
+        .and_then(|v| v.parse().ok())
+        .filter(|&n| n > 0)
+}
+
+/// Open a table cell covering `columns` grid columns.
+fn push_td_open(html: &mut String, columns: usize) {
+    if columns > 1 {
+        html.push_str("<td colspan=\"");
+        html.push_str(&columns.to_string());
+        html.push_str("\">");
+    } else {
+        html.push_str("<td>");
+    }
 }
 
 // ── Paragraph content ─────────────────────────────────────────────────────────
@@ -859,6 +891,39 @@ mod tests {
             !md.contains("| Line 1") || !md.contains("| Line 2"),
             "Lines should be in same cell, got: {:?}",
             md
+        );
+    }
+
+    #[test]
+    fn merged_and_skipped_grid_columns_keep_rows_the_same_width() {
+        // A 4-column grid: a header spanning 3 that leaves the last column
+        // empty (gridAfter), a row that starts one column in (gridBefore),
+        // and a plain row.
+        let cell = |text: &str, props: &str| {
+            format!("<w:tc><w:tcPr>{props}</w:tcPr><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>")
+        };
+        let doc = wrap_body(&format!(
+            "<w:tbl><w:tblGrid><w:gridCol/><w:gridCol/><w:gridCol/><w:gridCol/></w:tblGrid>\
+             <w:tr><w:trPr><w:gridAfter w:val=\"1\"/></w:trPr>{}</w:tr>\
+             <w:tr><w:trPr><w:gridBefore w:val=\"1\"/></w:trPr>{}{}{}</w:tr>\
+             <w:tr>{}{}{}{}</w:tr></w:tbl>",
+            cell("December", "<w:gridSpan w:val=\"3\"/>"),
+            cell("Mon", ""),
+            cell("Tue", ""),
+            cell("Wed", ""),
+            cell("a", ""),
+            cell("b", ""),
+            cell("c", ""),
+            cell("d", ""),
+        ));
+        let docx = build_docx(&doc, &base_rels(""), None);
+        let md = DocxConverter
+            .convert(&docx, &info_ext(".docx"))
+            .unwrap()
+            .markdown;
+        assert_eq!(
+            md,
+            "| December |  |  |  |\n| --- | --- | --- | --- |\n|  | Mon | Tue | Wed |\n| a | b | c | d |"
         );
     }
 

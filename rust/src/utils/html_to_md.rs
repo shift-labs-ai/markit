@@ -51,6 +51,7 @@ pub fn html_to_markdown_generated(html: &str) -> String {
         summaries,
         ..Default::default()
     };
+    ctx.grid_fill = grid_fill(root, &ctx);
     let output = process(root, &mut ctx);
     post_process(&output)
 }
@@ -596,6 +597,19 @@ struct Ctx {
     /// former per-query subtree walks (O(nodes x depth)) collapse into one
     /// linear pass.
     summaries: FxHashMap<NodeId, TextSummary>,
+    /// Empty cells each table row needs to span its table's full grid.
+    grid_fill: GridFill,
+}
+
+/// Empty cells that keep every row of a table as wide as its grid: the
+/// columns a `rowspan` from an earlier row covers, and the columns a row
+/// shorter than the widest one leaves off its end.
+#[derive(Default)]
+struct GridFill {
+    /// Covered columns immediately before a cell.
+    before_cell: FxHashMap<NodeId, usize>,
+    /// Columns after a row's last cell.
+    after_row: FxHashMap<NodeId, usize>,
 }
 
 /// Edge summary of an element's post-collapse textContent.
@@ -825,7 +839,7 @@ fn rule_replacement(tag: &str, content: String, el: ElementRef, ctx: &mut Ctx) -
         "table" => rule_table(content, el, ctx),
         "thead" | "tbody" | "tfoot" => content,
         "tr" => rule_tr(content, el, ctx),
-        "td" | "th" => gfm_cell(&content, el, ctx),
+        "td" | "th" => gfm_cell(&content, el, ctx, ""),
         _ => {
             // turndown's defaultReplacement.
             if td_is_block(tag) {
@@ -1395,9 +1409,12 @@ fn rule_li(content: String, el: ElementRef, ctx: &Ctx) -> String {
 }
 
 // ============================== Table handling ==============================
-// Exact port of turndown-plugin-gfm's table rules:
-//   tableCell:  cell(content, node) — no trimming, newlines preserved
-//   tableRow:   '\n' + content + border cells when heading row
+// turndown-plugin-gfm's table rules, with every row padded to the table's
+// grid so spanned and short rows keep their columns:
+//   tableCell:  cell(content, node) — no trimming, newlines preserved;
+//               an empty cell per column covered before it or spanned by it
+//   tableRow:   '\n' + content + an empty cell per missing trailing column,
+//               + border cells when heading row
 //   table:      convert only when rows[0] is a heading row, else keep raw HTML
 //   tableSection: passthrough
 /// Is this child node "removed" by the collapseWhitespace pre-pass?
@@ -1419,8 +1436,40 @@ fn tag_of(node: &ego_tree::NodeRef<Node>) -> Option<String> {
     node.value().as_element().map(|e| e.name().to_lowercase())
 }
 
+/// Grid columns a cell covers: its `colspan`, clamped to the HTML limit.
+fn col_span(el: ElementRef) -> usize {
+    span_attr(el, "colspan", 1000)
+}
+
+/// Grid rows a cell covers: its `rowspan`, clamped to the HTML limit. A
+/// `rowspan` of 0 (to the end of the section) counts as 1.
+fn row_span(el: ElementRef) -> usize {
+    span_attr(el, "rowspan", 65_534)
+}
+
+fn span_attr(el: ElementRef, name: &str, max: usize) -> usize {
+    el.value()
+        .attr(name)
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .map_or(1, |n| n.clamp(1, max))
+}
+
+/// `filler` once per column, each as its own cell (`" filler |"`), the
+/// first opening the row when nothing precedes it.
+fn filler_cells(filler: &str, columns: usize, opens_row: bool) -> String {
+    (0..columns)
+        .map(|i| {
+            let prefix = if opens_row && i == 0 { "| " } else { " " };
+            format!("{prefix}{filler} |")
+        })
+        .collect()
+}
+
 /// gfm's cell(content, node): prefix "| " for the first childNode, " " otherwise.
-fn gfm_cell(content: &str, el: ElementRef, ctx: &Ctx) -> String {
+/// Columns a `rowspan` from above covers before the cell, and the columns
+/// after its first that its own `colspan` covers, are filled with `filler`,
+/// so every row of the table counts the same columns.
+fn gfm_cell(content: &str, el: ElementRef, ctx: &Ctx, filler: &str) -> String {
     let index = el
         .parent()
         .map(|p| {
@@ -1434,8 +1483,71 @@ fn gfm_cell(content: &str, el: ElementRef, ctx: &Ctx) -> String {
                 .unwrap_or(0)
         })
         .unwrap_or(0);
-    let prefix = if index == 0 { "| " } else { " " };
-    format!("{prefix}{content} |")
+    let covered = ctx
+        .grid_fill
+        .before_cell
+        .get(&el.id())
+        .copied()
+        .unwrap_or(0);
+    let prefix = if index == 0 && covered == 0 {
+        "| "
+    } else {
+        " "
+    };
+    format!(
+        "{}{prefix}{content} |{}",
+        filler_cells(filler, covered, index == 0),
+        filler_cells(filler, col_span(el) - 1, false)
+    )
+}
+
+/// Lay out every table's cells on its grid, recording the empty cells
+/// each row needs: columns a `rowspan` covers before a cell, and the
+/// columns after a row's last cell up to the widest row.
+fn grid_fill(root: ElementRef, ctx: &Ctx) -> GridFill {
+    let mut fill = GridFill::default();
+    let tables = root
+        .descendants()
+        .filter_map(ElementRef::wrap)
+        .filter(|el| el.value().name().eq_ignore_ascii_case("table"));
+    for table in tables {
+        let rows = table_rows(table, ctx);
+        // Columns of each row already taken by a rowspan from above.
+        let mut covered: Vec<FxHashSet<usize>> = vec![FxHashSet::default(); rows.len()];
+        let mut ends = Vec::with_capacity(rows.len());
+        let mut width = 0;
+        for (r, row) in rows.iter().enumerate() {
+            let mut col = 0;
+            let cells = child_nodes(*row, ctx)
+                .into_iter()
+                .filter(|c| matches!(tag_of(c).as_deref(), Some("td" | "th")))
+                .filter_map(ElementRef::wrap);
+            for cell in cells {
+                let start = col;
+                while covered[r].contains(&col) {
+                    col += 1;
+                }
+                if col > start {
+                    fill.before_cell.insert(cell.id(), col - start);
+                }
+                let span = col_span(cell);
+                let down = row_span(cell).min(rows.len() - r);
+                for below in &mut covered[r + 1..r + down] {
+                    below.extend(col..col + span);
+                }
+                col += span;
+            }
+            let reach = covered[r].iter().max().map_or(col, |&c| col.max(c + 1));
+            width = width.max(reach);
+            ends.push(col);
+        }
+        for (row, end) in rows.iter().zip(ends) {
+            if width > end {
+                fill.after_row.insert(row.id(), width - end);
+            }
+        }
+    }
+    fill
 }
 
 /// HTMLTableElement.rows order: thead rows, then direct/tbody rows, then tfoot.
@@ -1546,6 +1658,9 @@ fn rule_table(content: String, el: ElementRef, ctx: &Ctx) -> String {
 }
 
 fn rule_tr(content: String, el: ElementRef, ctx: &Ctx) -> String {
+    let missing = ctx.grid_fill.after_row.get(&el.id()).copied().unwrap_or(0);
+    let opens_row = content.is_empty();
+    let content = content + &filler_cells("", missing, opens_row);
     let mut border_cells = String::new();
     if is_heading_row(el, ctx) {
         for child in child_nodes(el, ctx) {
@@ -1563,8 +1678,9 @@ fn rule_tr(content: String, el: ElementRef, ctx: &Ctx) -> String {
                 "center" => ":-:",
                 _ => "---",
             };
-            border_cells.push_str(&gfm_cell(border, cell_el, ctx));
+            border_cells.push_str(&gfm_cell(border, cell_el, ctx, border));
         }
+        border_cells.push_str(&filler_cells("---", missing, border_cells.is_empty()));
     }
     if border_cells.is_empty() {
         format!("\n{}", content)
@@ -1916,6 +2032,55 @@ console.log(x);</code></pre>"#;
         assert_eq!(
             html_to_markdown(html),
             "| Name | Age |\n| --- | --- |\n| Alice | 30 |"
+        );
+    }
+
+    #[test]
+    fn colspan_cells_keep_every_row_the_same_width() {
+        // A spanning header gets a border per column it covers; a spanning
+        // body cell is followed by an empty cell per extra column.
+        let html = "<table><thead><tr><th colspan=\"3\">December</th></tr></thead>\
+                    <tbody><tr><td>Sun</td><td colspan=\"2\">Mon</td></tr>\
+                    <tr><td>1</td><td>2</td><td>3</td></tr></tbody></table>";
+        assert_eq!(
+            html_to_markdown(html),
+            "| December |  |  |\n| --- | --- | --- |\n| Sun | Mon |  |\n| 1 | 2 | 3 |"
+        );
+    }
+
+    #[test]
+    fn rowspan_covers_columns_in_the_rows_below() {
+        // Leading (Mon) and trailing (Room A) coverage both become empty
+        // cells in the rows the span reaches.
+        let html = "<table><thead><tr><th>Day</th><th>Slot</th><th>Room</th></tr></thead>\
+                    <tbody><tr><td rowspan=\"2\">Mon</td><td>9:00</td><td rowspan=\"2\">A</td></tr>\
+                    <tr><td>10:00</td></tr>\
+                    <tr><td>Tue</td><td colspan=\"2\">closed</td></tr></tbody></table>";
+        assert_eq!(
+            html_to_markdown(html),
+            "| Day | Slot | Room |\n| --- | --- | --- |\n| Mon | 9:00 | A |\n\
+             |  | 10:00 |  |\n| Tue | closed |  |"
+        );
+    }
+
+    #[test]
+    fn short_rows_are_padded_to_the_widest_row() {
+        let html = "<table><thead><tr><th>a</th></tr></thead>\
+                    <tbody><tr><td>1</td><td>2</td><td>3</td></tr><tr><td>4</td></tr></tbody></table>";
+        assert_eq!(
+            html_to_markdown(html),
+            "| a |  |  |\n| --- | --- | --- |\n| 1 | 2 | 3 |\n| 4 |  |  |"
+        );
+    }
+
+    #[test]
+    fn colspan_out_of_range_counts_as_one_column() {
+        let html =
+            "<table><thead><tr><th colspan=\"0\">a</th><th colspan=\"x\">b</th></tr></thead>\
+                    <tbody><tr><td>1</td><td>2</td></tr></tbody></table>";
+        assert_eq!(
+            html_to_markdown(html),
+            "| a | b |\n| --- | --- |\n| 1 | 2 |"
         );
     }
 
