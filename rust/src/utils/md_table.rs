@@ -2,11 +2,12 @@
 //! converter that emits a markdown table.
 
 /// Make `text` safe inside one GFM table cell: every `|` becomes `\|`,
-/// and the line breaks that would end the row become `<br>`. Each line
-/// is trimmed and blank lines are dropped, so a paragraph break or a
-/// markdown hard break (`"  \n"`) yields a single `<br>`.
+/// and the line endings that would end the row (`\n`, `\r\n`, a lone
+/// `\r`) become `<br>`. Each line is trimmed and blank lines are dropped,
+/// so a paragraph break or a markdown hard break (`"  \n"`) yields a
+/// single `<br>`.
 pub fn escape_cell(text: &str) -> String {
-    text.lines()
+    text.split(['\r', '\n'])
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
@@ -55,6 +56,7 @@ mod tests {
     fn line_breaks_become_br() {
         assert_eq!(escape_cell("one\ntwo"), "one<br>two");
         assert_eq!(escape_cell("one\r\ntwo"), "one<br>two");
+        assert_eq!(escape_cell("one\rtwo"), "one<br>two");
         assert_eq!(escape_cell("\n\none  \n\n  two\n\n"), "one<br>two");
     }
 

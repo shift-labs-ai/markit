@@ -1,4 +1,5 @@
-//! HTML → Markdown engine. Rust equivalent of src/utils/turndown.ts.
+//! HTML → Markdown engine: turndown with turndown-plugin-gfm's table
+//! rules and markit's own heading and list-item rules.
 //!
 //! Architecture follows turndown's process/join composition model:
 //! - process(node) reduces over children, each producing a replacement string
@@ -593,9 +594,8 @@ struct Ctx {
     /// Text/comment nodes the pre-pass "removed" from the DOM.
     removed: FxHashSet<NodeId>,
     /// Per-element textContent edge summary, precomputed bottom-up. The
-    /// blank/flanking predicates only ever consume these edges, so the
-    /// former per-query subtree walks (O(nodes x depth)) collapse into one
-    /// linear pass.
+    /// blank/flanking predicates only ever consume these edges, so one
+    /// linear pass answers every query without walking a subtree.
     summaries: FxHashMap<NodeId, TextSummary>,
     /// Empty cells each table row needs to span its table's full grid.
     grid_fill: GridFill,
@@ -614,7 +614,7 @@ struct GridFill {
 
 /// Edge summary of an element's post-collapse textContent.
 /// For whitespace-only content, `leading` holds the entire text and
-/// `trailing` is empty — mirroring edge_whitespace's whitespace-only case.
+/// `trailing` is empty, as turndown's edgeWhitespace treats such a string.
 #[derive(Default, Clone)]
 struct TextSummary {
     all_ws: bool,
@@ -834,7 +834,7 @@ fn rule_replacement(tag: &str, content: String, el: ElementRef, ctx: &mut Ctx) -
         "code" => rule_code(content, el, ctx),
         "pre" => rule_pre(content, el),
         "blockquote" => rule_blockquote(content),
-        "ul" | "ol" => rule_list(content, el, ctx),
+        "ul" | "ol" => rule_list(content, el),
         "li" => rule_li(content, el, ctx),
         "table" => rule_table(content, el, ctx),
         "thead" | "tbody" | "tfoot" => content,
@@ -853,7 +853,7 @@ fn rule_replacement(tag: &str, content: String, el: ElementRef, ctx: &mut Ctx) -
 
 /// Turndown's join(), appending in place: semantically identical to
 /// `left = join(left, right)` but without re-copying the accumulated left
-/// side, which made sibling concatenation quadratic on large documents.
+/// side, so sibling concatenation stays linear on large documents.
 fn join_into(left: &mut String, right: &str) {
     let s2 = trim_leading_newlines(right);
     let left_trailing = left.len() - trim_trailing_newlines(left).len();
@@ -894,9 +894,9 @@ fn post_process(output: &str) -> String {
 
 /// Post-order pass computing every element's TextSummary. A text node's
 /// contribution is its collapsed text when the pre-pass produced one, raw
-/// text when the pass never visited it, and nothing when it was removed —
-/// exactly what collect_text used to gather per query. (The pre-pass never
-/// enters <pre>, so pre-sanctuary text is always in the raw case.)
+/// text when the pass never visited it, and nothing when it was removed.
+/// (The pre-pass never enters <pre>, so pre-sanctuary text is always in
+/// the raw case.)
 fn build_summaries(
     node: ego_tree::NodeRef<Node>,
     collapsed: &FxHashMap<NodeId, String>,
@@ -1016,8 +1016,11 @@ struct EdgeWhitespace {
     trailing_non_ascii: String,
 }
 
-/// edge_whitespace consumes only the edge whitespace runs, which the
-/// TextSummary already carries: build EdgeWhitespace straight from it.
+/// turndown's edgeWhitespace split of an element's textContent,
+/// `^(([ \t\r\n]*)(\s*))(?:(?=\S)[\s\S]*\S)?((\s*?)([ \t\r\n]*))$`,
+/// read off its TextSummary, which carries exactly the edge runs the
+/// regex captures. For whitespace-only text the whole string is leading
+/// and trailing is empty.
 fn edge_whitespace_of(summary: &TextSummary) -> EdgeWhitespace {
     let is_ascii_ws = |c: char| matches!(c, ' ' | '\t' | '\r' | '\n');
     let split_leading = |run: &str| -> (String, String) {
@@ -1057,58 +1060,6 @@ fn edge_whitespace_of(summary: &TextSummary) -> EdgeWhitespace {
         trailing: run.clone(),
         trailing_ascii: run[ascii_start..].to_string(),
         trailing_non_ascii: run[..ascii_start].to_string(),
-    }
-}
-
-/// turndown's edgeWhitespace regex:
-/// ^(([ \t\r\n]*)(\s*))(?:(?=\S)[\s\S]*\S)?((\s*?)([ \t\r\n]*))$
-/// For whitespace-only strings the WHOLE string is "leading" and trailing is
-/// empty.
-#[allow(dead_code)]
-fn edge_whitespace(s: &str) -> EdgeWhitespace {
-    let chars: Vec<char> = s.chars().collect();
-    let len = chars.len();
-    let is_ascii_ws = |c: char| matches!(c, ' ' | '\t' | '\r' | '\n');
-
-    let mut i = 0;
-    while i < len && is_ascii_ws(chars[i]) {
-        i += 1;
-    }
-    let leading_ascii_end = i;
-    while i < len && chars[i].is_whitespace() {
-        i += 1;
-    }
-    let leading_end = i;
-
-    if leading_end == len {
-        // Whitespace-only: leading = whole string, trailing empty.
-        return EdgeWhitespace {
-            leading: s.to_string(),
-            leading_ascii: chars[..leading_ascii_end].iter().collect(),
-            leading_non_ascii: chars[leading_ascii_end..].iter().collect(),
-            trailing: String::new(),
-            trailing_ascii: String::new(),
-            trailing_non_ascii: String::new(),
-        };
-    }
-
-    let mut j = len;
-    while j > leading_end && is_ascii_ws(chars[j - 1]) {
-        j -= 1;
-    }
-    let trailing_ascii_start = j;
-    while j > leading_end && chars[j - 1].is_whitespace() {
-        j -= 1;
-    }
-    let trailing_start = j;
-
-    EdgeWhitespace {
-        leading: chars[..leading_end].iter().collect(),
-        leading_ascii: chars[..leading_ascii_end].iter().collect(),
-        leading_non_ascii: chars[leading_ascii_end..leading_end].iter().collect(),
-        trailing: chars[trailing_start..].iter().collect(),
-        trailing_ascii: chars[trailing_ascii_start..].iter().collect(),
-        trailing_non_ascii: chars[trailing_start..trailing_ascii_start].iter().collect(),
     }
 }
 
@@ -1163,7 +1114,7 @@ fn is_flanked_by_whitespace(el: ElementRef, ctx: &Ctx, right: bool) -> bool {
 fn rule_heading(content: String, tag: &str) -> String {
     let level: usize = tag[1..].parse().unwrap_or(1);
     let prefix = "#".repeat(level);
-    // Project override: unescape "\\." in heading text (src/utils/turndown.ts).
+    // markit override: unescape "\\." in heading text.
     let cleaned = content.replace("\\.", ".").trim().to_string();
     format!("\n\n{prefix} {cleaned}\n\n")
 }
@@ -1339,8 +1290,7 @@ fn rule_blockquote(content: String) -> String {
 
 /// turndown's list rule: '\n' + content when this list is the last element
 /// child of an LI, otherwise a block.
-fn rule_list(content: String, el: ElementRef, ctx: &Ctx) -> String {
-    let _ = ctx;
+fn rule_list(content: String, el: ElementRef) -> String {
     let parent_is_li_last = el
         .parent()
         .and_then(ElementRef::wrap)
@@ -1360,8 +1310,8 @@ fn rule_list(content: String, el: ElementRef, ctx: &Ctx) -> String {
     }
 }
 
-/// Project override of listItem (src/utils/turndown.ts): single space after
-/// the marker, ordered lists respect <ol start>.
+/// markit override of listItem: single space after the marker, ordered
+/// lists respect <ol start>.
 fn rule_li(content: String, el: ElementRef, ctx: &Ctx) -> String {
     let content = {
         // content.replace(/^\n+/, "").replace(/\n+$/, "\n").replace(/\n/gm, "\n  ")
@@ -1411,12 +1361,15 @@ fn rule_li(content: String, el: ElementRef, ctx: &Ctx) -> String {
 // ============================== Table handling ==============================
 // turndown-plugin-gfm's table rules, with every row padded to the table's
 // grid so spanned and short rows keep their columns:
-//   tableCell:  cell(content, node) — no trimming, newlines preserved;
+//   tableCell:  cell(content, node), content escaped by
+//               md_table::escape_cell so a `|` or line break stays in
+//               the cell;
 //               an empty cell per column covered before it or spanned by it
 //   tableRow:   '\n' + content + an empty cell per missing trailing column,
 //               + border cells when heading row
 //   table:      convert only when rows[0] is a heading row, else keep raw HTML
 //   tableSection: passthrough
+
 /// Is this child node "removed" by the collapseWhitespace pre-pass?
 /// (Text nodes absent from the map, comments, doctypes.)
 fn is_removed_node(child: &ego_tree::NodeRef<Node>, ctx: &Ctx) -> bool {
@@ -1465,7 +1418,8 @@ fn filler_cells(filler: &str, columns: usize, opens_row: bool) -> String {
         .collect()
 }
 
-/// gfm's cell(content, node): prefix "| " for the first childNode, " " otherwise.
+/// gfm's cell(content, node): prefix "| " for the first childNode, " "
+/// otherwise, with `content` escaped by md_table::escape_cell.
 /// Columns a `rowspan` from above covers before the cell, and the columns
 /// after its first that its own `colspan` covers, are filled with `filler`,
 /// so every row of the table counts the same columns.
@@ -1841,8 +1795,8 @@ fn strip_p_in_cell(inner: &str) -> String {
 mod tests {
     use super::*;
 
-    /// The scan-based normalize passes must be indistinguishable from the
-    /// regexes they replaced, including the sloppy edges.
+    /// The scan-based normalize passes must be indistinguishable from
+    /// their reference regexes, including the sloppy edges.
     #[test]
     fn normalize_scanner_matches_regex_reference() {
         let re_cell = Regex::new(r"(?is)<(td|th)([\s\S&&[^>]]*)>([\s\S]*?)</(td|th)>").unwrap();
@@ -2098,7 +2052,7 @@ console.log(x);</code></pre>"#;
         let html =
             "<blockquote><p>First level</p><blockquote><p>Nested quote</p></blockquote></blockquote>";
         // turndown prefixes EVERY line with "> " — blank lines keep the
-        // trailing space (verified against the TS CLI).
+        // trailing space.
         assert_eq!(
             html_to_markdown(html),
             "> First level\n> \n> > Nested quote"
@@ -2227,8 +2181,8 @@ Content"
 
     #[test]
     fn test_escape_pipe() {
-        // turndown's escapes list does NOT include '|' — verified against the
-        // TS CLI: createTurndown().turndown("<p>a | b</p>") === "a | b".
+        // turndown's escapes list does not include '|': outside a table
+        // cell a pipe is plain text.
         assert_eq!(html_to_markdown("<p>a | b</p>"), "a | b");
     }
 

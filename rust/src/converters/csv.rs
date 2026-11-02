@@ -34,7 +34,7 @@ impl Converter for CsvConverter {
 }
 
 /// Minimal CSV parser: quoted fields, escaped quotes, CRLF, trimmed cells,
-/// empty rows skipped. Mirrors the TS implementation exactly.
+/// empty rows skipped.
 fn parse_rows(text: &str, delimiter: char) -> Vec<Vec<String>> {
     let chars: Vec<char> = text.chars().collect();
     let mut rows: Vec<Vec<String>> = Vec::new();
