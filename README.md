@@ -32,9 +32,6 @@ markit recording.mp3                      # Audio metadata
 # Text only, skipping image extraction
 markit report.pdf --no-images
 
-# Keep track of where each page ended
-markit report.pdf --page-markers
-
 # Write to file
 markit report.pdf -o report.md
 
@@ -116,25 +113,17 @@ markit onboard                 # Add instructions to CLAUDE.md
 
 ## Page Markers
 
-PDF pages have no boundary in markdown, so `--page-markers` writes one
-before each page's content:
+Every PDF page opens with a marker, so any line can be traced back to
+the page it came from:
 
 ```
-<!-- markit:page 12 -->
+<!-- page 12 -->
 ```
 
 The number is the 1-based **physical** page — page 12 of the file, which
 is not always the number printed on it. Every page gets one, including
 blank and image-only pages, so the markers run 1..N with no gaps. They
-are HTML comments, so they disappear when the markdown is rendered, and
-they are additive: take the marker lines out and you have the same
-markdown the default run produces.
-
-```typescript
-const { markdown } = await markit.convertFile("report.pdf", {
-  pageMarkers: true,
-});
-```
+are HTML comments, so they disappear when the markdown is rendered.
 
 ---
 
@@ -162,7 +151,6 @@ markit <source> --json                   # JSON output
 markit <source> -q                       # Raw markdown only
 markit <source> --no-images              # Skip image extraction
 markit <source> -i ./images              # Extract images to a directory
-markit <source> --page-markers           # Mark page boundaries (PDF)
 cat file.pdf | markit -                  # Read from stdin
 markit formats                           # List supported formats
 markit onboard                           # Add to CLAUDE.md

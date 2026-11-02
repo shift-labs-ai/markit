@@ -25,11 +25,6 @@ export async function convert(
      * documents, so callers who only want text can opt out.
      */
     noImages?: boolean;
-    /**
-     * Emit `<!-- markit:page N -->` before each page's content, so a
-     * reader can map any line back to the page it came from.
-     */
-    pageMarkers?: boolean;
   },
 ): Promise<void> {
   const markit = new Markit();
@@ -55,10 +50,7 @@ export async function convert(
         process.exit(EXIT_ERROR);
       }
       const buffer = await readStdin();
-      result = await markit.convert(buffer, {
-        imageDir,
-        pageMarkers: options.pageMarkers,
-      });
+      result = await markit.convert(buffer, { imageDir });
     } else if (isUrl) {
       // Progress hint for URL fetches (stderr so it doesn't pollute piped output)
       if (!options.json && !options.quiet) {
@@ -66,10 +58,7 @@ export async function convert(
       }
       result = await markit.convertUrl(source);
     } else {
-      result = await markit.convertFile(source, {
-        imageDir,
-        pageMarkers: options.pageMarkers,
-      });
+      result = await markit.convertFile(source, { imageDir });
     }
 
     const label = isStdin ? "stdin" : source;

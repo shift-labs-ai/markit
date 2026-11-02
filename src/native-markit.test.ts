@@ -46,7 +46,7 @@ trailer << /Root 1 0 R >>`);
     expect(result.markdown).toContain("native sdk");
   });
 
-  test("page markers are opt-in and number every physical page", async () => {
+  test("every PDF page opens with its page marker", async () => {
     const pdf = Buffer.from(`%PDF-1.4
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
 2 0 obj << /Type /Pages /Kids [3 0 R 6 0 R] /Count 2 >> endobj
@@ -61,15 +61,9 @@ BT /F1 12 Tf 20 100 Td (second page) Tj ET
 endstream endobj
 trailer << /Root 1 0 R >>`);
 
-    const plain = await new Markit().convert(pdf, { extension: ".pdf" });
-    expect(plain.markdown).not.toContain("markit:page");
-
-    const marked = await new Markit().convert(pdf, {
-      extension: ".pdf",
-      pageMarkers: true,
-    });
-    expect(marked.markdown).toContain("<!-- markit:page 1 -->");
-    expect(marked.markdown).toContain("<!-- markit:page 2 -->");
-    expect(marked.markdown).toContain("second page");
+    const { markdown } = await new Markit().convert(pdf, { extension: ".pdf" });
+    expect(markdown).toBe(
+      "<!-- page 1 -->\n\nfirst page\n\n<!-- page 2 -->\n\nsecond page",
+    );
   });
 });

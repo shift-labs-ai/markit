@@ -27,11 +27,25 @@ use super::types::{Segment, TextBox};
 const EXTENSIONS: &[&str] = &[".pdf"];
 const MIMETYPES: &[&str] = &["application/pdf", "application/x-pdf"];
 
-/// Opening of a page marker, completed by the 1-based physical page
-/// number and ` -->`. An HTML comment so the marker is invisible when
-/// the markdown is rendered, and a fixed prefix so a reader can split
-/// on it: `<!-- markit:page 12 -->`.
-const PAGE_MARKER_PREFIX: &str = "<!-- markit:page ";
+/// The marker that opens each page's content: `<!-- page 12 -->`, with
+/// the 1-based physical page number. An HTML comment, so it is invisible
+/// when the markdown is rendered while a reader can still map any line
+/// back to the page it came from.
+fn page_marker(page_number: u32) -> String {
+    format!("<!-- page {page_number} -->")
+}
+
+/// The page marker `text` opens with, including the block break after
+/// it, or `None`. The inverse of `page_marker`.
+fn leading_page_marker(text: &str) -> Option<&str> {
+    const CLOSE: &str = " -->\n\n";
+    let digits = text.strip_prefix("<!-- page ")?;
+    let digit_count = digits.bytes().take_while(u8::is_ascii_digit).count();
+    if digit_count == 0 || !digits[digit_count..].starts_with(CLOSE) {
+        return None;
+    }
+    Some(&text[..text.len() - digits.len() + digit_count + CLOSE.len()])
+}
 
 /// Process a set of text boxes (one column or full page): run table detection,
 /// separate free text, and render to markdown.
@@ -71,14 +85,21 @@ fn process_column(
 /// `tech-\n\nniques` → `techniques`; a compound (`state-of-the-` +
 /// `art`) keeps its hyphen. Only fires when a letter precedes the
 /// hyphen and a lowercase letter opens the next block.
+///
+/// A page break carries a page marker between the two halves. The word
+/// is completed on the page it began on and the marker follows it:
+/// `tech-\n\n<!-- page 2 -->\n\nniques used` →
+/// `techniques\n\n<!-- page 2 -->\n\nused`.
 fn dehyphenate_across_blocks(markdown: &str) -> String {
     let bytes = markdown.as_bytes();
     let mut out = String::with_capacity(markdown.len());
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'-' && bytes[i + 1..].starts_with(b"\n\n") {
+            let marker = leading_page_marker(&markdown[i + 3..]);
+            let continuation = i + 3 + marker.map_or(0, str::len);
             let before_alpha = out.chars().last().is_some_and(|c| c.is_alphabetic());
-            let next = markdown[i + 3..].chars().next();
+            let next = markdown[continuation..].chars().next();
             let next_lower = next.is_some_and(|c| c.is_lowercase() && c.is_alphabetic());
             if before_alpha && next_lower {
                 let last_word: String = out
@@ -90,7 +111,19 @@ fn dehyphenate_across_blocks(markdown: &str) -> String {
                     // Compound: keep the hyphen, drop the break.
                     out.push('-');
                 }
-                i += 3; // skip "-\n\n"
+                i = continuation;
+                if let Some(marker) = marker {
+                    let rest = &markdown[i..];
+                    let word = &rest[..rest.find(char::is_whitespace).unwrap_or(rest.len())];
+                    out.push_str(word);
+                    out.push_str("\n\n");
+                    out.push_str(marker.trim_end());
+                    i += word.len();
+                    i += markdown[i..].len() - markdown[i..].trim_start_matches(' ').len();
+                    if i < bytes.len() && bytes[i] != b'\n' {
+                        out.push_str("\n\n");
+                    }
+                }
                 continue;
             }
         }
@@ -281,14 +314,10 @@ impl Converter for PdfConverter {
         let mut page_markdowns: Vec<String> = Vec::new();
 
         for page in &pages {
-            // One marker per physical page, ahead of that page's
-            // content, so a caller can map any line back to the page it
-            // came from. Emitted before the empty-content check: a blank
-            // or image-only page still occupies a page number, and a
-            // marker sequence with holes in it would be worse than none.
-            if info.page_markers {
-                page_markdowns.push(format!("{PAGE_MARKER_PREFIX}{} -->", page.page_number));
-            }
+            // Emitted before the empty-content checks: a blank or
+            // image-only page still occupies a page number, so the
+            // markers run 1..N with no holes.
+            page_markdowns.push(page_marker(page.page_number));
 
             // Build image blocks for this page
             let mut positioned_image_blocks: Vec<(f64, ImageBlock)> = Vec::new();
@@ -580,6 +609,36 @@ mod tests {
     }
 
     #[test]
+    fn dehyphenates_across_a_page_marker() {
+        let marker = page_marker(2);
+        // The word completes on the page it began on; the marker follows.
+        assert_eq!(
+            dehyphenate_across_blocks(&format!("applied tech-\n\n{marker}\n\nniques here")),
+            format!("applied techniques\n\n{marker}\n\nhere")
+        );
+        assert_eq!(
+            dehyphenate_across_blocks(&format!("the state-of-the-\n\n{marker}\n\nart")),
+            format!("the state-of-the-art\n\n{marker}")
+        );
+        assert_eq!(
+            dehyphenate_across_blocks(&format!("a long com-\n\n{marker}\n\nputation\n\nNext")),
+            format!("a long computation\n\n{marker}\n\nNext")
+        );
+        // A capital after the marker opens a new block: untouched.
+        let untouched = format!("ends with dash-\n\n{marker}\n\nNew block");
+        assert_eq!(dehyphenate_across_blocks(&untouched), untouched);
+    }
+
+    #[test]
+    fn leading_page_marker_is_the_inverse_of_page_marker() {
+        let text = format!("{}\n\nbody", page_marker(127));
+        assert_eq!(leading_page_marker(&text), Some("<!-- page 127 -->\n\n"));
+        assert_eq!(leading_page_marker("<!-- page -->\n\nbody"), None);
+        assert_eq!(leading_page_marker("<!-- page 3 -->body"), None);
+        assert_eq!(leading_page_marker("body"), None);
+    }
+
+    #[test]
     fn accepts_pdf_extension() {
         let c = PdfConverter;
         assert!(c.accepts(&StreamInfo {
@@ -659,71 +718,30 @@ trailer << /Root 1 0 R >>";
         out.into_bytes()
     }
 
-    fn convert_bytes(input: &[u8], page_markers: bool) -> String {
-        PdfConverter
+    #[test]
+    fn every_physical_page_opens_with_its_marker() {
+        // The middle page is blank: it still holds a page number, so it
+        // still gets a marker.
+        let pdf = multi_page_pdf(&[
+            vec![(700, "First page prose.")],
+            vec![],
+            vec![(700, "Third page prose.")],
+        ]);
+        let markdown = PdfConverter
             .convert(
-                input,
+                &pdf,
                 &StreamInfo {
                     extension: Some(".pdf".into()),
-                    page_markers,
                     ..Default::default()
                 },
             )
             .expect("conversion")
-            .markdown
-    }
-
-    /// Markers are additive: take them out and what is left is exactly
-    /// the default run's markdown.
-    fn without_markers(markdown: &str) -> String {
-        markdown
-            .lines()
-            .filter(|line| !line.starts_with(PAGE_MARKER_PREFIX))
-            .collect::<Vec<_>>()
-            .join("\n")
-            .split("\n\n")
-            .map(str::trim)
-            .filter(|block| !block.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n\n")
-    }
-
-    /// Three pages, the middle one blank: a page with no content still
-    /// holds a page number, so it still gets a marker.
-    fn three_page_pdf() -> Vec<u8> {
-        multi_page_pdf(&[
-            vec![(700, "First page prose.")],
-            vec![],
-            vec![(700, "Third page prose.")],
-        ])
-    }
-
-    #[test]
-    fn page_markers_are_off_by_default() {
-        let markdown = convert_bytes(&three_page_pdf(), false);
-        assert!(!markdown.contains(PAGE_MARKER_PREFIX), "{markdown}");
-        assert!(markdown.contains("First page prose."), "{markdown}");
-        assert_eq!(without_markers(&markdown), markdown);
-    }
-
-    #[test]
-    fn page_markers_number_every_physical_page() {
-        let pdf = three_page_pdf();
-        let marked = convert_bytes(&pdf, true);
-        let markers: Vec<&str> = marked
-            .lines()
-            .filter(|line| line.starts_with(PAGE_MARKER_PREFIX))
-            .collect();
+            .markdown;
         assert_eq!(
-            markers,
-            [
-                "<!-- markit:page 1 -->",
-                "<!-- markit:page 2 -->",
-                "<!-- markit:page 3 -->"
-            ],
-            "{marked}"
+            markdown,
+            "<!-- page 1 -->\n\nFirst page prose.\n\n<!-- page 2 -->\n\n\
+             <!-- page 3 -->\n\nThird page prose."
         );
-        assert_eq!(without_markers(&marked), convert_bytes(&pdf, false));
     }
 
     fn convert_fixture(path: &str) -> String {

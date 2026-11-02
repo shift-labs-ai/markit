@@ -171,7 +171,9 @@ pub fn strip_folio_series(pages: &mut [PageContent]) {
 
     // A series qualifies on three consecutive pages — n, n+1, n+2 at one
     // margin is already a progression — or on a fifth of the document,
-    // which catches numbering that skips plates and inserts.
+    // which catches numbering that skips plates and inserts. Either way it
+    // needs MIN_REPEAT_PAGES members: on a short document a fifth is one
+    // or two pages, and that is a coincidence, not a series.
     let mut strip: HashSet<&str> = HashSet::new();
     for members in series.values() {
         let mut pages_seen: Vec<usize> = members.iter().map(|(idx, _)| *idx).collect();
@@ -183,7 +185,9 @@ pub fn strip_folio_series(pages: &mut [PageContent]) {
             run = if pair[1] == pair[0] + 1 { run + 1 } else { 1 };
             longest_run = longest_run.max(run);
         }
-        if longest_run >= MIN_REPEAT_PAGES || pages_seen.len() * 5 >= pages.len() {
+        let spans_a_fifth =
+            pages_seen.len() >= MIN_REPEAT_PAGES && pages_seen.len() * 5 >= pages.len();
+        if longest_run >= MIN_REPEAT_PAGES || spans_a_fifth {
             strip.extend(members.iter().map(|(_, id)| id.as_str()));
         }
     }
@@ -209,7 +213,7 @@ fn band_page_counts(pages: &[PageContent]) -> HashMap<String, usize> {
         }
         let mut seen: HashSet<String> = HashSet::new();
         for tb in &page.text_boxes {
-            if tb.bounds.bottom < h * (1.0 - SP_BAND_RATIO) && tb.bounds.top > h * SP_BAND_RATIO {
+            if chrome_band(tb, h).is_none() {
                 continue;
             }
             let key = normalize_whitespace(tb.text.trim());
@@ -230,6 +234,20 @@ fn band_page_counts(pages: &[PageContent]) -> HashMap<String, usize> {
 /// paper title).
 const SP_BAND_RATIO: f64 = 0.15;
 
+/// The per-page detector's band a box sits in: `Some(true)` for the
+/// top band, `Some(false)` for the bottom, `None` for the body. The one
+/// definition both the detector and `band_page_counts` read, so the
+/// census always counts the boxes the detector judges.
+fn chrome_band(tb: &TextBox, page_height: f64) -> Option<bool> {
+    if tb.bounds.bottom >= page_height * (1.0 - SP_BAND_RATIO) {
+        Some(true)
+    } else if tb.bounds.top <= page_height * SP_BAND_RATIO {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 /// Minimum gap, in multiples of the page's body font size, between a
 /// chrome candidate and the nearest body-side line. Real chrome is
 /// visually separated from content.
@@ -242,6 +260,20 @@ const SP_MAX_CHARS: usize = 200;
 /// short lines; a larger block is a title/abstract and must survive
 /// even when a stray page number rides along.
 const SP_MAX_GROUP_LINES: usize = 4;
+
+/// Script sentinels (see shared.rs) ride along in extracted text until
+/// render. Every signature test reads through them, so a superscript
+/// number is the same number to all of them.
+fn without_script_sentinels(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.chars().any(super::shared::is_script_sentinel) {
+        text.chars()
+            .filter(|c| !super::shared::is_script_sentinel(*c))
+            .collect::<String>()
+            .into()
+    } else {
+        text.into()
+    }
+}
 
 /// Strip decorative rules and bullets from both ends: banner lines like
 /// `||WWW.EXAMPLE.COM` or `- 8 -` carry ornaments that would defeat
@@ -258,19 +290,8 @@ fn trim_ornaments(text: &str) -> &str {
 /// lines (year + page range, short). False positives on body prose are
 /// the main risk — every branch here must be unambiguous.
 pub(crate) fn matches_chrome_pattern(text: &str) -> bool {
-    // Script sentinels (see shared.rs) ride along in extracted text
-    // until render; they must not defeat the signatures.
-    let owned: String;
-    let text = if text.chars().any(super::shared::is_script_sentinel) {
-        owned = text
-            .chars()
-            .filter(|c| !super::shared::is_script_sentinel(*c))
-            .collect();
-        owned.as_str()
-    } else {
-        text
-    };
-    let t = trim_ornaments(text);
+    let text = without_script_sentinels(text);
+    let t = trim_ornaments(&text);
     if t.is_empty() {
         return false;
     }
@@ -544,7 +565,8 @@ fn is_lone_folio(text: &str) -> bool {
 /// The number a standalone page-number line carries: bare digits (≤4)
 /// or a roman folio. `None` for anything else.
 fn folio_value(text: &str) -> Option<i64> {
-    let t = trim_ornaments(text);
+    let text = without_script_sentinels(text);
+    let t = trim_ornaments(&text);
     if !t.is_empty() && t.len() <= 4 && t.bytes().all(|b| b.is_ascii_digit()) {
         return t.parse().ok();
     }
@@ -629,8 +651,6 @@ pub fn strip_single_page_chrome(pages: &mut [PageContent]) {
         if h <= 0.0 || page.text_boxes.is_empty() {
             continue;
         }
-        let top_band_floor = h * (1.0 - SP_BAND_RATIO);
-        let bottom_band_ceil = h * SP_BAND_RATIO;
         let body_size = body_font_size(page);
         let required_gap = SP_ISOLATION_GAP_RATIO * if body_size > 0.0 { body_size } else { 10.0 };
         let page_lines = count_lines(page.text_boxes.iter());
@@ -645,14 +665,7 @@ pub fn strip_single_page_chrome(pages: &mut [PageContent]) {
             let mut band_boxes: Vec<&TextBox> = page
                 .text_boxes
                 .iter()
-                .filter(|tb| {
-                    !tb.text.trim().is_empty()
-                        && if band_top {
-                            tb.bounds.bottom >= top_band_floor
-                        } else {
-                            tb.bounds.top <= bottom_band_ceil
-                        }
-                })
+                .filter(|tb| !tb.text.trim().is_empty() && chrome_band(tb, h) == Some(band_top))
                 .collect();
             band_boxes.sort_by(|a, b| b.bounds.top.total_cmp(&a.bounds.top));
             if band_boxes.is_empty() {
@@ -1337,10 +1350,56 @@ mod tests {
     }
 
     #[test]
+    fn one_or_two_numbers_are_never_a_series_on_a_short_document() {
+        // On five pages a fifth of the document is a single page; a lone
+        // margin number there is a table cell or a code, not a folio.
+        for count in [5u32, 9, 10] {
+            let mut pages: Vec<PageContent> = (1..=count)
+                .map(|i| {
+                    let mut boxes = vec![ided_box(
+                        &format!("p{i}-body"),
+                        "Body prose line.",
+                        500.0,
+                        i,
+                    )];
+                    if i == 3 || i == 5 {
+                        // Same offset (+39) on both pages: two coincidences.
+                        boxes.push(ided_box(
+                            &format!("p{i}-cell"),
+                            &(i + 39).to_string(),
+                            40.0,
+                            i,
+                        ));
+                    }
+                    make_page(i, boxes)
+                })
+                .collect();
+            strip_folio_series(&mut pages);
+            assert!(texts(&pages[2]).contains(&"42"), "{count} pages");
+            assert!(texts(&pages[4]).contains(&"44"), "{count} pages");
+        }
+    }
+
+    #[test]
+    fn a_superscript_number_is_a_bare_number_to_every_gate() {
+        let footnote_mark = format!(
+            "{}3{}",
+            super::super::shared::SUP_OPEN,
+            super::super::shared::SUP_CLOSE
+        );
+        assert_eq!(folio_value(&footnote_mark), Some(3));
+        assert!(matches_chrome_pattern(&footnote_mark));
+        // Where series evidence exists, neither shape licenses a strip.
+        assert!(!is_chrome_line(&footnote_mark, true));
+        assert!(!is_chrome_line("3", true));
+    }
+
+    #[test]
     fn a_page_opening_under_the_running_header_keeps_its_heading() {
         // The shape that loses content: a folio at the top margin with
-        // the page's own first line one body-height below it. Chained
-        // into one group, a single number once licensed stripping both.
+        // the page's own first line one body-height below it. The two
+        // chain into one group, and the folio alone must not take the
+        // heading with it.
         let mut pages: Vec<PageContent> = (1..=12u32)
             .map(|i| {
                 make_page(
@@ -1437,6 +1496,43 @@ mod tests {
             "{:?}",
             texts(&pages[3])
         );
+    }
+
+    #[test]
+    fn a_line_on_two_pages_is_content_and_on_three_is_a_fixture() {
+        // A URL banner tight above a section title. The title spares the
+        // group while it appears on fewer than MIN_REPEAT_PAGES pages;
+        // from that many on, it recurs like any running head. Three body
+        // lines keep the group a minority of the page, so this gate is
+        // the only one deciding.
+        fn kept_titles(pages_with_title: u32) -> usize {
+            let mut pages: Vec<PageContent> = (1..=10u32)
+                .map(|i| {
+                    let mut boxes = vec![
+                        ided_box(&format!("p{i}-b1"), "Body prose one.", 500.0, i),
+                        ided_box(&format!("p{i}-b2"), "Body prose two.", 480.0, i),
+                        ided_box(&format!("p{i}-b3"), "Body prose three.", 460.0, i),
+                    ];
+                    if i <= pages_with_title {
+                        boxes.push(ided_box(
+                            &format!("p{i}-url"),
+                            "http://example.com/x",
+                            770.0,
+                            i,
+                        ));
+                        boxes.push(ided_box(&format!("p{i}-title"), "Part One", 758.0, i));
+                    }
+                    make_page(i, boxes)
+                })
+                .collect();
+            strip_single_page_chrome(&mut pages);
+            pages
+                .iter()
+                .filter(|page| texts(page).contains(&"Part One"))
+                .count()
+        }
+        assert_eq!(kept_titles(2), 2);
+        assert_eq!(kept_titles(3), 0);
     }
 
     #[test]

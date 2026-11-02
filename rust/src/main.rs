@@ -51,10 +51,6 @@ struct Cli {
     /// Skip image extraction; images become placeholder comments
     #[arg(long = "no-images", global = true, conflicts_with = "image_dir")]
     no_images: bool,
-
-    /// Mark page boundaries with `<!-- markit:page N -->` (PDF only)
-    #[arg(long = "page-markers", global = true)]
-    page_markers: bool,
 }
 
 #[derive(Subcommand)]
@@ -187,7 +183,6 @@ fn main() -> ExitCode {
                     output_file: out_override.or(cli.output),
                     image_dir: cli.image_dir,
                     no_images: cli.no_images,
-                    page_markers: cli.page_markers,
                 },
             );
             ExitCode::from(code)
@@ -204,7 +199,6 @@ fn main() -> ExitCode {
                             output_file: cli.output,
                             image_dir: cli.image_dir,
                             no_images: cli.no_images,
-                            page_markers: cli.page_markers,
                         },
                     );
                     ExitCode::from(code)
