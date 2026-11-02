@@ -9,6 +9,7 @@
 //! Ported from `@oharato/pdf2md-ts`, stripped of CJK/TDnet-specific logic.
 
 use crate::converters::pdf::types::*;
+use crate::utils::md_table;
 
 // ---------------------------------------------------------------------------
 // Utility
@@ -101,12 +102,6 @@ fn escape_free_text(text: &str) -> String {
     escaped
 }
 
-fn escape_pipes(text: &str) -> String {
-    normalize_full_width_ascii(&super::math::strip_script_sentinels(text))
-        .replace('|', "\\|")
-        .replace('\n', "<br>")
-}
-
 fn escape_table_html(text: &str) -> String {
     normalize_full_width_ascii(&super::math::strip_script_sentinels(text))
         .replace('&', "&amp;")
@@ -180,26 +175,11 @@ pub fn render_table_to_markdown(table: &TableGrid) -> String {
 
     for cell in &table.cells {
         if cell.row < table.rows && cell.col < table.cols {
-            matrix[cell.row][cell.col] = escape_pipes(cell.text.trim());
+            matrix[cell.row][cell.col] =
+                normalize_full_width_ascii(&super::math::strip_script_sentinels(&cell.text));
         }
     }
-
-    let promoted = matrix;
-
-    let header = format!("| {} |", promoted[0].join(" | "));
-    let divider = format!("| {} |", vec!["---"; promoted[0].len()].join(" | "));
-    let body: String = promoted[1..]
-        .iter()
-        .map(|row| format!("| {} |", row.join(" | ")))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    [header, divider, body]
-        .iter()
-        .filter(|l| !l.is_empty())
-        .cloned()
-        .collect::<Vec<_>>()
-        .join("\n")
+    md_table::render(&matrix)
 }
 
 // ---------------------------------------------------------------------------

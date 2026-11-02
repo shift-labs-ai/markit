@@ -2,6 +2,7 @@ use anyhow::Result;
 
 use super::decode_text;
 use crate::types::{ConversionResult, Converter, StreamInfo};
+use crate::utils::md_table;
 
 const MIMETYPES: &[&str] = &["text/csv", "text/tab-separated-values"];
 
@@ -28,27 +29,7 @@ impl Converter for CsvConverter {
             ','
         };
         let rows = parse_rows(&text, delimiter);
-
-        if rows.is_empty() {
-            return Ok(ConversionResult::markdown(""));
-        }
-
-        let header = &rows[0];
-        let mut lines: Vec<String> = Vec::with_capacity(rows.len() + 1);
-
-        lines.push(format!("| {} |", header.join(" | ")));
-        lines.push(format!("| {} |", vec!["---"; header.len()].join(" | ")));
-
-        for row in &rows[1..] {
-            let mut row = row.clone();
-            // Pad row to match header length.
-            while row.len() < header.len() {
-                row.push(String::new());
-            }
-            lines.push(format!("| {} |", row.join(" | ")));
-        }
-
-        Ok(ConversionResult::markdown(lines.join("\n")))
+        Ok(ConversionResult::markdown(md_table::render(&rows)))
     }
 }
 
@@ -138,6 +119,17 @@ mod tests {
             .convert(b"a\tb\n1\t2\n", &info(".tsv"))
             .unwrap();
         assert_eq!(result.markdown, "| a | b |\n| --- | --- |\n| 1 | 2 |");
+    }
+
+    #[test]
+    fn pipes_and_line_breaks_stay_inside_their_cell() {
+        let result = CsvConverter
+            .convert(b"op,note\n\"a | b\",\"one\ntwo\"\n", &info(".csv"))
+            .unwrap();
+        assert_eq!(
+            result.markdown,
+            "| op | note |\n| --- | --- |\n| a \\| b | one<br>two |"
+        );
     }
 
     #[test]

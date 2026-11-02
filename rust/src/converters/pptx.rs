@@ -7,6 +7,7 @@ use crate::converters::ooxml::{
     office_document_path, parse_relationships, relationship_part_path, resolve_part_path,
 };
 use crate::types::{ConversionResult, Converter, StreamInfo};
+use crate::utils::md_table;
 
 const MIMETYPES: &[&str] =
     &["application/vnd.openxmlformats-officedocument.presentationml.presentation"];
@@ -364,26 +365,7 @@ fn extract_table(gf: roxmltree::Node) -> Option<String> {
         md_rows.push(cell_texts);
     }
 
-    if md_rows.is_empty() {
-        return None;
-    }
-
-    let column_count = md_rows.iter().map(Vec::len).max()?;
-    for row in &mut md_rows {
-        row.resize(column_count, String::new());
-    }
-    let (header, body) = md_rows.split_first()?;
-    let mut lines: Vec<String> = Vec::new();
-    lines.push(format!("| {} |", header.join(" | ")));
-    lines.push(format!(
-        "| {} |",
-        header.iter().map(|_| "---").collect::<Vec<_>>().join(" | ")
-    ));
-    for row in body {
-        lines.push(format!("| {} |", row.join(" | ")));
-    }
-
-    Some(lines.join("\n"))
+    Some(md_table::render(&md_rows)).filter(|table| !table.is_empty())
 }
 
 // ── Path helpers ─────────────────────────────────────────────────────────────

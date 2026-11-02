@@ -1495,8 +1495,9 @@ fn gfm_cell(content: &str, el: ElementRef, ctx: &Ctx, filler: &str) -> String {
         " "
     };
     format!(
-        "{}{prefix}{content} |{}",
+        "{}{prefix}{} |{}",
         filler_cells(filler, covered, index == 0),
+        super::md_table::escape_cell(content),
         filler_cells(filler, col_span(el) - 1, false)
     )
 }
@@ -2198,6 +2199,17 @@ Block 2"
             "Navigation
 
 Content"
+        );
+    }
+
+    #[test]
+    fn test_table_cell_pipes_and_breaks_stay_in_the_cell() {
+        let html = normalize_tables_html(
+            "<table><tr><th>op</th><th>code</th></tr><tr><td>a | b</td><td><code>x||y</code></td></tr><tr><td>br<br>here</td><td>z</td></tr></table>",
+        );
+        assert_eq!(
+            html_to_markdown(&html),
+            "| op | code |\n| --- | --- |\n| a \\| b | `x\\|\\|y` |\n| br<br>here | z |"
         );
     }
 

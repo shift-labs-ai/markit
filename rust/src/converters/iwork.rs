@@ -3,6 +3,7 @@ use std::io::{Cursor, Read};
 use zip::ZipArchive;
 
 use crate::types::{ConversionResult, Converter, StreamInfo};
+use crate::utils::md_table;
 
 const SF_NS: &str = "http://developer.apple.com/namespaces/sf";
 const SFA_NS: &str = "http://developer.apple.com/namespaces/sfa";
@@ -307,26 +308,7 @@ fn convert_numbers(archive: &mut ZipArchive<Cursor<&[u8]>>) -> Result<Conversion
         if rows.is_empty() {
             continue;
         }
-
-        let max_cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
-        let mut rows = rows;
-        for row in &mut rows {
-            while row.len() < max_cols {
-                row.push(String::new());
-            }
-        }
-
-        let header = &rows[0];
-        let mut lines: Vec<String> = Vec::new();
-        lines.push(format!("| {} |", header.join(" | ")));
-        lines.push(format!(
-            "| {} |",
-            header.iter().map(|_| "---").collect::<Vec<_>>().join(" | ")
-        ));
-        for row in &rows[1..] {
-            lines.push(format!("| {} |", row.join(" | ")));
-        }
-        sections.push(lines.join("\n"));
+        sections.push(md_table::render(&rows));
     }
 
     Ok(ConversionResult::markdown(sections.join("\n\n")))

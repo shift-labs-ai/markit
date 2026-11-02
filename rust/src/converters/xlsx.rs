@@ -4,6 +4,7 @@ use std::io::{Cursor, Read, Seek};
 use zip::ZipArchive;
 
 use crate::types::{ConversionResult, Converter, StreamInfo};
+use crate::utils::md_table;
 
 const EXTENSIONS: &[&str] = &[".xlsx"];
 const MIMETYPES: &[&str] = &["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"];
@@ -79,29 +80,12 @@ impl Converter for XlsxConverter {
                 None => continue,
             };
 
-            let mut table_rows = parse_sheet_rows(&sheet_xml, &shared, &formats)?;
+            let table_rows = parse_sheet_rows(&sheet_xml, &shared, &formats)?;
             if table_rows.is_empty() {
                 continue;
             }
-
-            // Normalize column count — pad all rows to max width
-            let max_cols = table_rows.iter().map(|r| r.len()).max().unwrap_or(0);
-            for row in &mut table_rows {
-                while row.len() < max_cols {
-                    row.push(String::new());
-                }
-            }
-
             sections.push(format!("## {}", sheet_name));
-
-            let header = &table_rows[0];
-            let mut lines: Vec<String> = Vec::new();
-            lines.push(format!("| {} |", header.join(" | ")));
-            lines.push(format!("| {} |", vec!["---"; header.len()].join(" | ")));
-            for row in &table_rows[1..] {
-                lines.push(format!("| {} |", row.join(" | ")));
-            }
-            sections.push(lines.join("\n"));
+            sections.push(md_table::render(&table_rows));
         }
 
         Ok(ConversionResult::markdown(sections.join("\n\n")))
