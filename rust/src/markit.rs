@@ -197,13 +197,6 @@ impl Markit {
             }
         }
 
-        // For root URLs, check if the site has /llms.txt and return it if so
-        if let Some(origin) = extract_origin(url) {
-            if let Some(result) = self.try_llms_txt(&origin) {
-                return Ok(result);
-            }
-        }
-
         // Fetch with content negotiation
         let response = self.http.request(
             "GET",
@@ -276,37 +269,6 @@ impl Markit {
                 ..Default::default()
             },
         )
-    }
-
-    /// For root URLs, check if the site publishes /llms.txt.
-    fn try_llms_txt(&self, origin: &str) -> Option<ConversionResult> {
-        let llms_txt_url = format!("{}/llms.txt", origin);
-        let response = self
-            .http
-            .request("HEAD", &llms_txt_url, &[("User-Agent", USER_AGENT)])
-            .ok()?;
-
-        if !response.ok {
-            return None;
-        }
-
-        let ct = response.content_type.split(';').next().unwrap_or("").trim();
-        if !ct.contains("markdown") && !ct.contains("text/plain") && !ct.contains("text/html") {
-            return None;
-        }
-
-        // HEAD succeeded — now GET the content
-        let get_response = self
-            .http
-            .request("GET", &llms_txt_url, &[("User-Agent", USER_AGENT)])
-            .ok()?;
-
-        if !get_response.ok {
-            return None;
-        }
-
-        let markdown = String::from_utf8_lossy(&get_response.body).to_string();
-        Some(ConversionResult::markdown(markdown))
     }
 
     /// Inspect an HTML response for a discoverable markdown source URL.
@@ -400,31 +362,6 @@ impl Markit {
 }
 
 // ── URL helpers ──────────────────────────────────────────────────────
-
-/// Check if the URL is a root URL (pathname is "/" or empty) and return origin.
-fn extract_origin(url: &str) -> Option<String> {
-    let after_scheme = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))?;
-
-    let scheme = if url.starts_with("https://") {
-        "https"
-    } else {
-        "http"
-    };
-
-    let (host_and_path, _) = after_scheme.split_once('?').unwrap_or((after_scheme, ""));
-    let (host_and_path, _) = host_and_path.split_once('#').unwrap_or((host_and_path, ""));
-
-    let (host, path) = host_and_path.split_once('/').unwrap_or((host_and_path, ""));
-
-    // Only for root URLs
-    if !path.is_empty() && path != "/" {
-        return None;
-    }
-
-    Some(format!("{}://{}", scheme, host))
-}
 
 /// Extract the pathname from a URL.
 fn extract_path(url: &str) -> String {
@@ -600,36 +537,11 @@ Handled by converter hook."
         assert!(result.markdown.contains("Handled by converter hook"));
     }
 
-    // ── Test: llms.txt path ──────────────────────────────────────────
+    // ── Test: root URLs ──────────────────────────────────────────────
 
     #[test]
-    fn convert_url_tries_llms_txt_for_root_urls() {
+    fn convert_url_converts_the_root_page_itself() {
         let mut mock = MockHttp::new();
-        mock.add(
-            "HEAD",
-            "https://example.com/llms.txt",
-            200,
-            "text/plain",
-            "",
-        );
-        mock.add(
-            "GET",
-            "https://example.com/llms.txt",
-            200,
-            "text/plain",
-            "# Example LLM Info\n\nThis site is about examples.",
-        );
-
-        let markit = make_markit(mock);
-        let result = markit.convert_url("https://example.com/").unwrap();
-        assert!(result.markdown.contains("Example LLM Info"));
-    }
-
-    #[test]
-    fn convert_url_skips_llms_txt_when_head_returns_404() {
-        let mut mock = MockHttp::new();
-        mock.add("HEAD", "https://example.com/llms.txt", 404, "", "");
-        // Falls through to fetching the URL itself
         mock.add(
             "GET",
             "https://example.com/",
@@ -637,52 +549,16 @@ Handled by converter hook."
             "text/html",
             "<html><body><h1>Welcome</h1></body></html>",
         );
+        let calls = Arc::clone(&mock.calls);
 
         let markit = make_markit(mock);
         let result = markit.convert_url("https://example.com/").unwrap();
-        // Should have converted the HTML
         assert!(result.markdown.contains("Welcome"));
-    }
-
-    #[test]
-    fn convert_url_skips_llms_txt_when_content_type_is_wrong() {
-        let mut mock = MockHttp::new();
-        mock.add(
-            "HEAD",
-            "https://example.com/llms.txt",
-            200,
-            "application/json",
-            "",
+        // The page is the only request: nothing stands in for it.
+        assert_eq!(
+            *calls.lock().unwrap(),
+            [("GET".to_string(), "https://example.com/".to_string())]
         );
-        // Falls through to fetching the URL itself
-        mock.add(
-            "GET",
-            "https://example.com/",
-            200,
-            "text/html",
-            "<html><body><h1>Hello</h1></body></html>",
-        );
-
-        let markit = make_markit(mock);
-        let result = markit.convert_url("https://example.com/").unwrap();
-        assert!(result.markdown.contains("Hello"));
-    }
-
-    #[test]
-    fn convert_url_does_not_try_llms_txt_for_non_root_urls() {
-        let mut mock = MockHttp::new();
-        // No HEAD/GET for llms.txt — if it tried, the mock would error
-        mock.add(
-            "GET",
-            "https://example.com/about",
-            200,
-            "text/html",
-            "<html><body><h1>About</h1></body></html>",
-        );
-
-        let markit = make_markit(mock);
-        let result = markit.convert_url("https://example.com/about").unwrap();
-        assert!(result.markdown.contains("About"));
     }
 
     // ── Test: content negotiation ────────────────────────────────────
@@ -826,27 +702,6 @@ Handled by converter hook."
     }
 
     // ── URL helper tests ─────────────────────────────────────────────
-
-    #[test]
-    fn extract_origin_root_with_trailing_slash() {
-        assert_eq!(
-            extract_origin("https://example.com/"),
-            Some("https://example.com".to_string())
-        );
-    }
-
-    #[test]
-    fn extract_origin_root_without_trailing_slash() {
-        assert_eq!(
-            extract_origin("https://example.com"),
-            Some("https://example.com".to_string())
-        );
-    }
-
-    #[test]
-    fn extract_origin_non_root_returns_none() {
-        assert_eq!(extract_origin("https://example.com/about"), None);
-    }
 
     #[test]
     fn path_extname_works() {
