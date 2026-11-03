@@ -37,23 +37,18 @@ pub struct HttpResponse {
     pub body: Vec<u8>,
 }
 
-/// Injectable HTTP interface so tests never hit the network.
+/// Injectable HTTP interface so tests never hit the network. URL
+/// conversion only reads, so GET is the one request it makes.
 pub trait HttpFetch: Send + Sync {
-    fn request(&self, method: &str, url: &str, headers: &[(&str, &str)]) -> Result<HttpResponse>;
+    fn get(&self, url: &str, headers: &[(&str, &str)]) -> Result<HttpResponse>;
 }
 
 /// Default ureq-backed fetcher.
 pub struct UreqFetcher;
 
 impl HttpFetch for UreqFetcher {
-    fn request(&self, method: &str, url: &str, headers: &[(&str, &str)]) -> Result<HttpResponse> {
-        // We only need GET and HEAD for URL conversion.
-        // POST has a different type (WithBody) — not needed here.
-        let mut builder = if method == "HEAD" {
-            ureq::head(url)
-        } else {
-            ureq::get(url)
-        };
+    fn get(&self, url: &str, headers: &[(&str, &str)]) -> Result<HttpResponse> {
+        let mut builder = ureq::get(url);
         for (k, v) in headers {
             builder = builder.header(*k, *v);
         }
@@ -198,8 +193,7 @@ impl Markit {
         }
 
         // Fetch with content negotiation
-        let response = self.http.request(
-            "GET",
+        let response = self.http.get(
             url,
             &[
                 (
@@ -287,10 +281,7 @@ impl Markit {
 
     /// Fetch a markdown source URL, validating the response is actually markdown.
     fn fetch_markdown_source(&self, md_url: &str) -> Option<ConversionResult> {
-        let response = self
-            .http
-            .request("GET", md_url, &[("User-Agent", USER_AGENT)])
-            .ok()?;
+        let response = self.http.get(md_url, &[("User-Agent", USER_AGENT)]).ok()?;
 
         if !response.ok {
             return None;
@@ -412,7 +403,7 @@ mod tests {
 
     struct MockHttp {
         responses: HashMap<String, Vec<MockResponse>>,
-        calls: Arc<Mutex<Vec<(String, String)>>>, // (method, url)
+        calls: Arc<Mutex<Vec<String>>>, // requested urls, in order
     }
 
     impl MockHttp {
@@ -423,29 +414,22 @@ mod tests {
             }
         }
 
-        fn add(&mut self, method: &str, url: &str, status: u16, ct: &str, body: &str) {
-            let key = format!("{} {}", method, url);
-            self.responses.entry(key).or_default().push(MockResponse {
-                status,
-                content_type: ct.to_string(),
-                body: body.as_bytes().to_vec(),
-            });
+        fn add(&mut self, url: &str, status: u16, ct: &str, body: &str) {
+            self.responses
+                .entry(url.to_string())
+                .or_default()
+                .push(MockResponse {
+                    status,
+                    content_type: ct.to_string(),
+                    body: body.as_bytes().to_vec(),
+                });
         }
     }
 
     impl HttpFetch for MockHttp {
-        fn request(
-            &self,
-            method: &str,
-            url: &str,
-            _headers: &[(&str, &str)],
-        ) -> Result<HttpResponse> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push((method.to_string(), url.to_string()));
-            let key = format!("{} {}", method, url);
-            if let Some(responses) = self.responses.get(&key) {
+        fn get(&self, url: &str, _headers: &[(&str, &str)]) -> Result<HttpResponse> {
+            self.calls.lock().unwrap().push(url.to_string());
+            if let Some(responses) = self.responses.get(url) {
                 // Use first available, or last if only one
                 let idx = {
                     let count = self
@@ -453,7 +437,7 @@ mod tests {
                         .lock()
                         .unwrap()
                         .iter()
-                        .filter(|(m, u)| *m == method && *u == url)
+                        .filter(|u| *u == url)
                         .count();
                     (count.saturating_sub(1)).min(responses.len() - 1)
                 };
@@ -465,7 +449,7 @@ mod tests {
                     body: r.body.clone(),
                 })
             } else {
-                Err(anyhow!("MockHttp: no response for {} {}", method, url))
+                Err(anyhow!("MockHttp: no response for {}", url))
             }
         }
     }
@@ -543,7 +527,6 @@ Handled by converter hook."
     fn convert_url_converts_the_root_page_itself() {
         let mut mock = MockHttp::new();
         mock.add(
-            "GET",
             "https://example.com/",
             200,
             "text/html",
@@ -555,10 +538,7 @@ Handled by converter hook."
         let result = markit.convert_url("https://example.com/").unwrap();
         assert!(result.markdown.contains("Welcome"));
         // The page is the only request: nothing stands in for it.
-        assert_eq!(
-            *calls.lock().unwrap(),
-            [("GET".to_string(), "https://example.com/".to_string())]
-        );
+        assert_eq!(*calls.lock().unwrap(), ["https://example.com/"]);
     }
 
     // ── Test: content negotiation ────────────────────────────────────
@@ -567,7 +547,6 @@ Handled by converter hook."
     fn convert_url_returns_markdown_directly_when_server_sends_text_markdown() {
         let mut mock = MockHttp::new();
         mock.add(
-            "GET",
             "https://example.com/doc",
             200,
             "text/markdown",
@@ -582,7 +561,7 @@ Handled by converter hook."
     #[test]
     fn convert_url_errors_on_non_ok_response() {
         let mut mock = MockHttp::new();
-        mock.add("GET", "https://example.com/missing", 404, "", "");
+        mock.add("https://example.com/missing", 404, "", "");
 
         let markit = make_markit(mock);
         let err = markit
@@ -601,15 +580,8 @@ Handled by converter hook."
         </head><body><h1>Blog Post</h1></body></html>"#;
 
         let mut mock = MockHttp::new();
+        mock.add("https://blog.example.com/post", 200, "text/html", html);
         mock.add(
-            "GET",
-            "https://blog.example.com/post",
-            200,
-            "text/html",
-            html,
-        );
-        mock.add(
-            "GET",
             "https://blog.example.com/post.md",
             200,
             "text/markdown",
@@ -629,14 +601,12 @@ Handled by converter hook."
 
         let mut mock = MockHttp::new();
         mock.add(
-            "GET",
             "https://docs.example.com/guide/intro",
             200,
             "text/html",
             html,
         );
         mock.add(
-            "GET",
             "https://docs.example.com/guide/intro.md",
             200,
             "text/plain",
@@ -655,7 +625,7 @@ Handled by converter hook."
         let html = r#"<html><body><h1>Regular Page</h1><p>No markdown source.</p></body></html>"#;
 
         let mut mock = MockHttp::new();
-        mock.add("GET", "https://example.com/page", 200, "text/html", html);
+        mock.add("https://example.com/page", 200, "text/html", html);
 
         let markit = make_markit(mock);
         let result = markit.convert_url("https://example.com/page").unwrap();
@@ -669,10 +639,9 @@ Handled by converter hook."
         </head><body><h1>Post</h1></body></html>"#;
 
         let mut mock = MockHttp::new();
-        mock.add("GET", "https://example.com/post", 200, "text/html", html);
+        mock.add("https://example.com/post", 200, "text/html", html);
         // The .md URL returns HTML (wrong content type)
         mock.add(
-            "GET",
             "https://example.com/post.md",
             200,
             "text/html",
@@ -692,8 +661,8 @@ Handled by converter hook."
         </head><body><h1>Page</h1></body></html>"#;
 
         let mut mock = MockHttp::new();
-        mock.add("GET", "https://example.com/page", 200, "text/html", html);
-        mock.add("GET", "https://example.com/missing.md", 404, "", "");
+        mock.add("https://example.com/page", 200, "text/html", html);
+        mock.add("https://example.com/missing.md", 404, "", "");
 
         let markit = make_markit(mock);
         let result = markit.convert_url("https://example.com/page").unwrap();
