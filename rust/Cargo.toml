@@ -38,6 +38,13 @@ hayro-jbig2 = { version = "0.3", default-features = false, features = ["std", "s
 unicode-normalization = "0.1"
 mimalloc = "0.1.52"
 
+# The npm addon is a shared object Node loads with dlopen. musl cannot
+# satisfy initial-exec TLS in a dlopened object (glibc reserves room for
+# it), and mimalloc compiles its thread-locals initial-exec unless asked
+# for local-dynamic, so on musl the addon would fail to load.
+[target.'cfg(target_env = "musl")'.dependencies]
+mimalloc = { version = "0.1.52", features = ["local_dynamic_tls"] }
+
 [features]
 default = ["cli"]
 # The clap CLI binary. Deselected by npm's build:native (napi symbols only

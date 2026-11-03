@@ -106,6 +106,22 @@ jobs:
           --features napi --cargo-flags=--no-default-features
           --cargo-cwd rust
           ${{ matrix.musl && '--zig' || '' }}
+      # A musl addon is cross-linked here but only ever loaded by musl's
+      # dynamic loader, which refuses what glibc accepts (initial-exec TLS
+      # in a dlopened object). Load it on Alpine and convert a file, so a
+      # broken addon fails the release instead of reaching npm.
+      - name: Load the addon on Alpine
+        if: matrix.musl
+        run: |
+          printf 'a,b\n1,2\n' > smoke.csv
+          docker run --rm -v "$PWD:/w" -w /w public.ecr.aws/docker/library/node:22-alpine node -e '
+            const addon = require("fs").readdirSync(".").find((f) => f.endsWith(".node"));
+            const { Markit } = require("./" + addon);
+            Promise.resolve(new Markit().convertFile("/w/smoke.csv", {})).then((r) => {
+              if (!r.markdown.includes("| 1 | 2 |")) throw new Error("unexpected output: " + r.markdown);
+              console.log(addon, "loads and converts on Alpine");
+            });
+          '
       - uses: actions/upload-artifact@v4
         with:
           name: bindings-${{ matrix.target }}
