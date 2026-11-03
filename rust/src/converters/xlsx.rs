@@ -371,31 +371,76 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (y, m, d)
 }
 
-/// Parse a worksheet XML and return rows as Vec<Vec<String>>.
+/// Parse a worksheet XML and return its rows of cell text.
 ///
-/// Cells are appended in document order; cell references (`r="A1"`) are
-/// not consulted, so a skipped column closes up.
+/// A worksheet stores only the cells that exist, so each value goes in
+/// the column its reference (`r="D5"`) names, the omitted ones between
+/// left empty; a cell without a reference follows the one before it. A
+/// merged range stores its value in its first cell, so the cells it
+/// covers stay empty. Cells without text place nothing, rows without
+/// text are dropped, and the empty columns left of the sheet's leftmost
+/// value are trimmed.
 fn parse_sheet_rows(
     xml: &str,
     shared: &[String],
     formats: &CellFormats,
 ) -> Result<Vec<Vec<String>>> {
     let doc = roxmltree::Document::parse(xml)?;
-    let root = doc.root_element();
-    let mut rows = Vec::new();
-    for node in root.descendants() {
-        if node.is_element() && node.tag_name().name() == "row" {
-            let cells: Vec<String> = node
-                .children()
-                .filter(|n| n.is_element() && n.tag_name().name() == "c")
-                .map(|c| get_cell_value(c, shared, formats))
-                .collect();
-            if !cells.is_empty() {
-                rows.push(cells);
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    for row in doc
+        .root_element()
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "row")
+    {
+        let mut cells: Vec<String> = Vec::new();
+        let mut next_column = 0;
+        for c in row
+            .children()
+            .filter(|n| n.is_element() && n.tag_name().name() == "c")
+        {
+            let column = c
+                .attribute("r")
+                .and_then(reference_column)
+                .unwrap_or(next_column);
+            next_column = column + 1;
+            let value = get_cell_value(c, shared, formats);
+            if value.is_empty() {
+                continue;
             }
+            if cells.len() <= column {
+                cells.resize(column + 1, String::new());
+            }
+            cells[column] = value;
+        }
+        if !cells.is_empty() {
+            rows.push(cells);
         }
     }
+    let leading = rows
+        .iter()
+        .filter_map(|cells| cells.iter().position(|v| !v.is_empty()))
+        .min()
+        .unwrap_or(0);
+    for cells in &mut rows {
+        cells.drain(..leading);
+    }
     Ok(rows)
+}
+
+/// The 0-based column of a cell reference: `A1` is 0, `D5` is 3, `XFD9`
+/// (the last column a sheet has) is 16383. `None` for a reference that
+/// names no column within a sheet.
+fn reference_column(reference: &str) -> Option<usize> {
+    let len = reference.bytes().take_while(u8::is_ascii_uppercase).count();
+    if !(1..=3).contains(&len) {
+        return None;
+    }
+    let column = reference
+        .bytes()
+        .take(len)
+        .fold(0, |n, b| n * 26 + usize::from(b - b'A') + 1)
+        - 1;
+    (column < 16_384).then_some(column)
 }
 
 /// The text of a cell's stored value, its `<v>` child.
@@ -651,6 +696,95 @@ mod tests {
         assert_eq!(
             markdown,
             "## Sheet1\n\n| TRUE | FALSE |\n| --- | --- |\n| 42 | 3.14 |"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Cell placement
+    // -----------------------------------------------------------------------
+
+    fn table(rows: &str) -> String {
+        let markdown = Workbook {
+            rows,
+            ..Default::default()
+        }
+        .convert();
+        markdown.strip_prefix("## Sheet1\n\n").unwrap().to_string()
+    }
+
+    #[test]
+    fn reference_column_decodes_letters() {
+        let cases = [
+            ("A1", Some(0)),
+            ("D5", Some(3)),
+            ("Z9", Some(25)),
+            ("AA1", Some(26)),
+            ("XFD1048576", Some(16_383)),
+            ("XFE1", None),
+            ("AAAA1", None),
+            ("1", None),
+            ("", None),
+            ("a1", None),
+        ];
+        for (reference, want) in cases {
+            assert_eq!(reference_column(reference), want, "{reference}");
+        }
+    }
+
+    #[test]
+    fn omitted_cells_keep_values_under_their_columns() {
+        assert_eq!(
+            table(
+                "<row r=\"1\"><c r=\"A1\"><v>1</v></c><c r=\"B1\"><v>2</v></c><c r=\"C1\"><v>3</v></c></row>\
+                 <row r=\"2\"><c r=\"A2\"><v>4</v></c><c r=\"C2\"><v>6</v></c></row>\
+                 <row r=\"3\"><c r=\"B3\"><v>8</v></c></row>"
+            ),
+            "| 1 | 2 | 3 |\n| --- | --- | --- |\n| 4 |  | 6 |\n|  | 8 |  |"
+        );
+    }
+
+    #[test]
+    fn a_merged_range_leaves_its_covered_cells_empty() {
+        // A5:C5 merged: the workbook stores the label in A5 only.
+        assert_eq!(
+            table(
+                "<row r=\"4\"><c r=\"A4\"><v>1</v></c><c r=\"B4\"><v>2</v></c>\
+                 <c r=\"C4\"><v>3</v></c><c r=\"D4\"><v>4</v></c></row>\
+                 <row r=\"5\"><c r=\"A5\" t=\"inlineStr\"><is><t>Combined</t></is></c>\
+                 <c r=\"B5\" s=\"1\"/><c r=\"C5\" s=\"1\"/><c r=\"D5\"><v>700</v></c></row>"
+            ),
+            "| 1 | 2 | 3 | 4 |\n| --- | --- | --- | --- |\n| Combined |  |  | 700 |"
+        );
+    }
+
+    #[test]
+    fn empty_columns_left_of_the_data_are_trimmed() {
+        assert_eq!(
+            table(
+                "<row r=\"2\"><c r=\"C2\"><v>1</v></c><c r=\"D2\"><v>2</v></c></row>\
+                 <row r=\"3\"><c r=\"D3\"><v>3</v></c></row>"
+            ),
+            "| 1 | 2 |\n| --- | --- |\n|  | 3 |"
+        );
+    }
+
+    #[test]
+    fn cells_without_text_neither_widen_nor_add_rows() {
+        // Formatting reaches to XFD and down a row; only A1:B1 hold text.
+        assert_eq!(
+            table(
+                "<row r=\"1\"><c r=\"A1\"><v>1</v></c><c r=\"B1\"><v>2</v></c><c r=\"XFD1\" s=\"1\"/></row>\
+                 <row r=\"2\"><c r=\"A2\" s=\"1\"/><c r=\"B2\" s=\"1\"><v></v></c></row>"
+            ),
+            "| 1 | 2 |\n| --- | --- |"
+        );
+    }
+
+    #[test]
+    fn a_cell_without_a_reference_follows_the_one_before_it() {
+        assert_eq!(
+            table("<row><c r=\"B1\"><v>1</v></c><c><v>2</v></c><c r=\"E1\"><v>3</v></c><c><v>4</v></c></row>"),
+            "| 1 | 2 |  | 3 | 4 |\n| --- | --- | --- | --- | --- |"
         );
     }
 
