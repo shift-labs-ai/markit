@@ -2,6 +2,7 @@ use anyhow::{anyhow, Result};
 use serde_json::Value;
 
 use crate::types::{ConversionResult, Converter, StreamInfo};
+use crate::utils::url::HttpUrl;
 
 const GITHUB_HOSTS: &[&str] = &["github.com", "www.github.com", "gist.github.com"];
 
@@ -252,24 +253,14 @@ impl Converter for GitHubConverter {
 }
 
 fn parse_github_url(url: &str) -> Option<(String, Vec<String>)> {
-    let after_scheme = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))?;
-
-    let (host_part, path_part) = after_scheme.split_once('/').unwrap_or((after_scheme, ""));
-
-    let hostname = host_part.split(':').next()?.to_string();
-
-    let path_clean = path_part.split('?').next().unwrap_or(path_part);
-    let path_clean = path_clean.split('#').next().unwrap_or(path_clean);
-
-    let segments: Vec<String> = path_clean
+    let url = HttpUrl::parse(url)?;
+    let segments = url
+        .path
         .split('/')
         .filter(|s| !s.is_empty())
         .map(String::from)
         .collect();
-
-    Some((hostname, segments))
+    Some((url.host().to_string(), segments))
 }
 
 fn extract_first_heading(markdown: &str) -> Option<String> {

@@ -2,6 +2,7 @@
 //! 1. `<link rel="alternate" type="text/markdown" href="...">` tags
 //! 2. VitePress markers (`__VP_HASH_MAP__`, `VPContent`, `"vitepress"`) — only when ext is empty
 
+use crate::utils::url::HttpUrl;
 use scraper::{Html, Selector};
 use std::sync::OnceLock;
 
@@ -34,57 +35,13 @@ fn markdown_alternate_href(html: &str) -> Option<String> {
         })
 }
 
-/// Minimal URL resolver — no new deps.
-///
-/// Rules (mirrors browser URL resolution):
-/// - Absolute `http(s)://` hrefs pass through unchanged.
-/// - `//host/...` → scheme from base + the href.
-/// - `/path` → origin from base + path.
-/// - Relative (`./path` or `path`) → resolve against the directory of the base path.
-fn resolve_url(href: &str, base: &str) -> Option<String> {
-    if href.starts_with("http://") || href.starts_with("https://") {
-        return Some(href.to_string());
-    }
-
-    // Extract scheme from base URL
-    let (scheme, rest) = if let Some(s) = base.strip_prefix("https://") {
-        ("https", s)
-    } else {
-        let s = base.strip_prefix("http://")?;
-        ("http", s)
-    };
-
-    if href.starts_with("//") {
-        return Some(format!("{}:{}", scheme, href));
-    }
-
-    // Extract origin (scheme + authority/host)
-    let host_end = rest.find('/').unwrap_or(rest.len());
-    let host = &rest[..host_end];
-    let origin = format!("{}://{}", scheme, host);
-
-    if href.starts_with('/') {
-        return Some(format!("{}{}", origin, href));
-    }
-
-    // Relative URL — resolve against the directory part of the base path.
-    // e.g. base path `/docs/page`, dir = `/docs/`, href `./page.md` → `/docs/page.md`
-    let path_part = &rest[host_end..]; // e.g. "/docs/page"
-    let dir = if let Some(idx) = path_part.rfind('/') {
-        &path_part[..=idx]
-    } else {
-        "/"
-    };
-
-    // Strip leading "./" from relative href
-    let href_clean = href.strip_prefix("./").unwrap_or(href);
-
-    Some(format!("{}{}{}", origin, dir, href_clean))
-}
-
-/// Strip trailing slash then append `.md`.
-fn append_md_extension(url: &str) -> String {
-    format!("{}.md", url.strip_suffix('/').unwrap_or(url))
+/// The `.md` file VitePress-style sites publish beside a page: the path
+/// without its trailing slash plus `.md`, the query kept. The site root
+/// maps to `/index.md`.
+fn markdown_twin(page: &HttpUrl) -> String {
+    let stem = page.path.trim_end_matches('/');
+    let stem = if stem.is_empty() { "/index" } else { stem };
+    format!("{}{stem}.md{}", page.origin, page.query)
 }
 
 /// Discover a raw markdown source URL from an HTML page.
@@ -92,8 +49,10 @@ fn append_md_extension(url: &str) -> String {
 /// Returns the resolved absolute URL of the markdown source, or `None` if
 /// no discoverable source is found.
 pub fn discover_markdown_source(html: &str, url: &str, ext: &str) -> Option<String> {
+    let page = HttpUrl::parse(url)?;
+
     // 1. A <link rel="alternate" type="text/markdown" href="..."> names it.
-    if let Some(resolved) = markdown_alternate_href(html).and_then(|h| resolve_url(&h, url)) {
+    if let Some(resolved) = markdown_alternate_href(html).and_then(|h| page.resolve(&h)) {
         return Some(resolved);
     }
 
@@ -104,7 +63,7 @@ pub fn discover_markdown_source(html: &str, url: &str, ext: &str) -> Option<Stri
             || html.contains("VPContent")
             || html.contains("vitepress"))
     {
-        return Some(append_md_extension(url));
+        return Some(markdown_twin(&page));
     }
 
     None
@@ -266,21 +225,50 @@ mod tests {
     // ── Edge cases ────────────────────────────────────────────────────
 
     #[test]
-    fn handles_url_with_query_string_vitepress() {
+    fn vitepress_twin_keeps_the_query_after_the_extension() {
         let html = r#"<div id="VPContent"></div>"#;
         assert_eq!(
             discover_markdown_source(html, "https://docs.example.com/guide/intro?ref=nav", ""),
-            Some("https://docs.example.com/guide/intro?ref=nav.md".to_string())
+            Some("https://docs.example.com/guide/intro.md?ref=nav".to_string())
         );
     }
 
     #[test]
-    fn handles_url_with_hash_fragment_vitepress() {
+    fn vitepress_twin_drops_the_fragment() {
         let html = r#"<div id="VPContent"></div>"#;
-        // extname won't pick up fragment, so ext is ""
         assert_eq!(
-            discover_markdown_source(html, "https://docs.example.com/guide/intro#section", ""),
-            Some("https://docs.example.com/guide/intro#section.md".to_string())
+            discover_markdown_source(html, "https://docs.example.com/guide/intro?a=1#section", ""),
+            Some("https://docs.example.com/guide/intro.md?a=1".to_string())
+        );
+    }
+
+    #[test]
+    fn vitepress_twin_of_the_site_root_stays_on_the_same_host() {
+        let html = r#"<div id="VPContent"></div>"#;
+        for url in ["https://docs.example.com", "https://docs.example.com/"] {
+            assert_eq!(
+                discover_markdown_source(html, url, ""),
+                Some("https://docs.example.com/index.md".to_string()),
+                "{url}"
+            );
+        }
+    }
+
+    #[test]
+    fn link_href_resolves_against_the_page_path_not_its_query() {
+        let html = r#"<link rel="alternate" type="text/markdown" href="../intro.md">"#;
+        assert_eq!(
+            discover_markdown_source(html, "https://example.com/docs/guide/page?from=/a/b", ""),
+            Some("https://example.com/docs/intro.md".to_string())
+        );
+    }
+
+    #[test]
+    fn link_href_with_another_scheme_is_ignored() {
+        let html = r#"<link rel="alternate" type="text/markdown" href="data:text/markdown,hi">"#;
+        assert_eq!(
+            discover_markdown_source(html, "https://example.com/page.html", ".html"),
+            None
         );
     }
 

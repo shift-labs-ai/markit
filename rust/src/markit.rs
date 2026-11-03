@@ -24,6 +24,7 @@ use crate::converters::yaml::YamlConverter;
 use crate::converters::zip::ZipConverter;
 use crate::discover_markdown_source::discover_markdown_source;
 use crate::types::{ConversionResult, Converter, StreamInfo};
+use crate::utils::url::HttpUrl;
 
 const USER_AGENT: &str = concat!("markit/", env!("CARGO_PKG_VERSION"));
 
@@ -216,11 +217,11 @@ impl Markit {
             .trim()
             .to_string();
         let url_path = extract_path(url);
-        let ext = path_extname(&url_path);
+        let ext = path_extname(url_path);
 
         // Content negotiation worked — server returned markdown directly
         if mimetype == "text/markdown" {
-            let filename = path_basename(&url_path);
+            let filename = path_basename(url_path);
             return self.convert(
                 &response.body,
                 &StreamInfo {
@@ -244,7 +245,7 @@ impl Markit {
             }
         }
 
-        let filename = path_basename(&url_path);
+        let filename = path_basename(url_path);
         self.convert(
             &response.body,
             &StreamInfo {
@@ -290,7 +291,7 @@ impl Markit {
             return None;
         }
 
-        let filename = path_basename(&extract_path(md_url));
+        let filename = path_basename(extract_path(md_url));
         self.convert(
             &response.body,
             &StreamInfo {
@@ -352,21 +353,9 @@ impl Markit {
 
 // ── URL helpers ──────────────────────────────────────────────────────
 
-/// Extract the pathname from a URL.
-fn extract_path(url: &str) -> String {
-    let after_scheme = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-        .unwrap_or(url);
-
-    let without_query = after_scheme.split('?').next().unwrap_or(after_scheme);
-    let without_fragment = without_query.split('#').next().unwrap_or(without_query);
-
-    if let Some(slash_pos) = without_fragment.find('/') {
-        without_fragment[slash_pos..].to_string()
-    } else {
-        "/".to_string()
-    }
+/// The path of an http(s) URL, `/` for anything else.
+fn extract_path(url: &str) -> &str {
+    HttpUrl::parse(url).map_or("/", |u| u.path)
 }
 
 /// Get extension from a path (e.g., "/foo/bar.html" -> ".html").
@@ -710,6 +699,7 @@ Handled by converter hook."
         assert_eq!(extract_path("https://example.com/foo/bar"), "/foo/bar");
         assert_eq!(extract_path("https://example.com/foo?q=1"), "/foo");
         assert_eq!(extract_path("https://example.com"), "/");
+        assert_eq!(extract_path("https://example.com?next=/a/b.pdf"), "/");
     }
 
     #[test]
