@@ -272,9 +272,7 @@ impl Markit {
         url: &str,
         ext: &str,
     ) -> Option<ConversionResult> {
-        let len = html_buffer.len().min(50_000);
-        let html = String::from_utf8_lossy(&html_buffer[..len]);
-
+        let html = String::from_utf8_lossy(html_buffer);
         let md_source_url = discover_markdown_source(&html, url, ext)?;
         self.fetch_markdown_source(&md_source_url)
     }
@@ -581,6 +579,28 @@ Handled by converter hook."
 
         let mut mock = MockHttp::new();
         mock.add("https://blog.example.com/post", 200, "text/html", html);
+        mock.add(
+            "https://blog.example.com/post.md",
+            200,
+            "text/markdown",
+            "# Blog Post\n\nOriginal markdown content.",
+        );
+
+        let markit = make_markit(mock);
+        let result = markit.convert_url("https://blog.example.com/post").unwrap();
+        assert!(result.markdown.contains("Original markdown content"));
+    }
+
+    #[test]
+    fn convert_url_finds_link_alternate_after_a_large_head() {
+        let style = format!("<style>{}</style>", ".c{color:red}".repeat(10_000));
+        let html = format!(
+            r#"<html><head>{style}<link href="/post.md" rel="alternate" type="text/markdown"></head><body><h1>Blog Post</h1></body></html>"#
+        );
+        assert!(html.len() > 100_000);
+
+        let mut mock = MockHttp::new();
+        mock.add("https://blog.example.com/post", 200, "text/html", &html);
         mock.add(
             "https://blog.example.com/post.md",
             200,

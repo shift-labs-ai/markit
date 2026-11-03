@@ -2,29 +2,36 @@
 //! 1. `<link rel="alternate" type="text/markdown" href="...">` tags
 //! 2. VitePress markers (`__VP_HASH_MAP__`, `VPContent`, `"vitepress"`) — only when ext is empty
 
-use regex::Regex;
+use scraper::{Html, Selector};
 use std::sync::OnceLock;
 
-// Regex form 1: rel before type
-fn link_regex_1() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(
-            r#"(?i)<link[^>]+rel=["']alternate["'][^>]+type=["']text/markdown["'][^>]+href=["']([^"']+)["']"#,
-        )
-        .unwrap()
-    })
+fn link_selector() -> &'static Selector {
+    static SEL: OnceLock<Selector> = OnceLock::new();
+    SEL.get_or_init(|| Selector::parse("link[href]").unwrap())
 }
 
-// Regex form 2: type before rel
-fn link_regex_2() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(
-            r#"(?i)<link[^>]+type=["']text/markdown["'][^>]+rel=["']alternate["'][^>]+href=["']([^"']+)["']"#,
-        )
-        .unwrap()
-    })
+/// The first `<link>` whose `rel` token list holds `alternate` and whose
+/// `type` is `text/markdown` (parameters ignored), in document order.
+/// HTML attribute order, quoting and case are not significant, so the
+/// page is parsed rather than pattern-matched.
+fn markdown_alternate_href(html: &str) -> Option<String> {
+    Html::parse_document(html)
+        .select(link_selector())
+        .find_map(|link| {
+            let attrs = link.value();
+            let is_alternate = attrs
+                .attr("rel")?
+                .split_ascii_whitespace()
+                .any(|token| token.eq_ignore_ascii_case("alternate"));
+            let is_markdown = attrs
+                .attr("type")?
+                .split(';')
+                .next()?
+                .trim()
+                .eq_ignore_ascii_case("text/markdown");
+            let href = attrs.attr("href")?.trim();
+            (is_alternate && is_markdown && !href.is_empty()).then(|| href.to_string())
+        })
 }
 
 /// Minimal URL resolver — no new deps.
@@ -85,21 +92,9 @@ fn append_md_extension(url: &str) -> String {
 /// Returns the resolved absolute URL of the markdown source, or `None` if
 /// no discoverable source is found.
 pub fn discover_markdown_source(html: &str, url: &str, ext: &str) -> Option<String> {
-    // 1. Look for <link rel="alternate" type="text/markdown" href="...">
-    //    Two regex forms handle attribute order variations.
-    let href = link_regex_1()
-        .captures(html)
-        .and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
-        .or_else(|| {
-            link_regex_2()
-                .captures(html)
-                .and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
-        });
-
-    if let Some(h) = href {
-        if let Some(resolved) = resolve_url(&h, url) {
-            return Some(resolved);
-        }
+    // 1. A <link rel="alternate" type="text/markdown" href="..."> names it.
+    if let Some(resolved) = markdown_alternate_href(html).and_then(|h| resolve_url(&h, url)) {
+        return Some(resolved);
     }
 
     // 2. VitePress detection — serves .md alongside HTML.
@@ -186,7 +181,6 @@ mod tests {
 
     #[test]
     fn ignores_link_alternate_with_empty_href() {
-        // empty href doesn't match — regex requires at least one char
         let html = r#"<link rel="alternate" type="text/markdown" href="">"#;
         assert_eq!(
             discover_markdown_source(html, "https://example.com/page", ""),
@@ -313,6 +307,43 @@ mod tests {
         assert_eq!(
             discover_markdown_source(html, "https://example.com/page", ""),
             Some("https://example.com/first.md".to_string())
+        );
+    }
+
+    #[test]
+    fn finds_link_with_href_before_rel_and_type() {
+        let html = r#"<link href="/p.md" rel="alternate" type="text/markdown">"#;
+        assert_eq!(
+            discover_markdown_source(html, "https://example.com/guide/intro", ""),
+            Some("https://example.com/p.md".to_string())
+        );
+    }
+
+    #[test]
+    fn finds_link_with_unquoted_attributes() {
+        let html = r#"<link type=text/markdown href=/p.md rel=alternate>"#;
+        assert_eq!(
+            discover_markdown_source(html, "https://example.com/page", ""),
+            Some("https://example.com/p.md".to_string())
+        );
+    }
+
+    #[test]
+    fn rel_is_a_token_list_and_type_may_carry_parameters() {
+        let html =
+            r#"<link rel="Alternate nofollow" type="Text/Markdown; charset=utf-8" href="/p.md">"#;
+        assert_eq!(
+            discover_markdown_source(html, "https://example.com/page", ""),
+            Some("https://example.com/p.md".to_string())
+        );
+    }
+
+    #[test]
+    fn rel_token_must_be_exactly_alternate() {
+        let html = r#"<link rel="alternates" type="text/markdown" href="/p.md">"#;
+        assert_eq!(
+            discover_markdown_source(html, "https://example.com/page", ""),
+            None
         );
     }
 
