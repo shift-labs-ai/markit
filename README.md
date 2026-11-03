@@ -64,7 +64,7 @@ markit data.xlsx -q | napkin create "Imported Data"
 | URLs | `http://` `https://` | Rust fetcher with markdown negotiation |
 | Wikipedia | `*.wikipedia.org` | Built-in Rust main-content extraction |
 | Code | `.py` `.ts` `.go` `.rs` ... | Built-in Rust fenced code block |
-| Plain text | `.txt` `.md` `.rst` `.log` | Built-in Rust pass-through |
+| Plain text | `.txt` `.md` `.rst` `.log` `.vtt` `.srt` | Built-in Rust pass-through |
 
 
 ---

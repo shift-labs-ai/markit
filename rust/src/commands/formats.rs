@@ -104,7 +104,7 @@ const BUILTIN_FORMATS: &[Format] = &[
     },
     Format {
         name: "Plain text",
-        extensions: &[".txt", ".md", ".rst", ".log"],
+        extensions: &[".txt", ".md", ".rst", ".log", ".vtt", ".srt"],
         builtin: true,
     },
     Format {

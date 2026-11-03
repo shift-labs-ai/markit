@@ -54,7 +54,7 @@ const BUILTIN_FORMATS: Format[] = [
   { name: "ZIP", extensions: [".zip"], builtin: true },
   {
     name: "Plain text",
-    extensions: [".txt", ".md", ".rst", ".log"],
+    extensions: [".txt", ".md", ".rst", ".log", ".vtt", ".srt"],
     builtin: true,
   },
   {
