@@ -42,15 +42,18 @@ fn is_greek_letter(c: char) -> bool {
 
 /// Greek letters that written Greek uses and mathematical notation
 /// never does: vowels with tonos or dialytika, final sigma, omicron,
-/// and the capitals mathematics writes as Latin letters
-/// (Α Β Ε Ζ Η Ι Κ Μ Ν Ο Ρ Τ Χ).
+/// and the capitals mathematics writes as Latin letters.
 fn is_written_greek(c: char) -> bool {
-    matches!(
-        c,
-        '\u{0386}' | '\u{0388}'..='\u{0390}' | '\u{03AA}'..='\u{03B0}' | '\u{03C2}' | '\u{03CA}'..='\u{03CE}'
-            | '\u{03BF}'
-            | '\u{0391}' | '\u{0392}' | '\u{0395}' | '\u{0396}' | '\u{0397}' | '\u{0399}' | '\u{039A}'
-            | '\u{039C}' | '\u{039D}' | '\u{039F}' | '\u{03A1}' | '\u{03A4}' | '\u{03A7}'
+    // Code points, not literals: a Latin look-alike typed by mistake
+    // would make every Latin capital count as Greek.
+    matches!(c,
+        // Vowels with tonos or dialytika.
+        '\u{0386}' | '\u{0388}'..='\u{0390}' | '\u{03AA}'..='\u{03B0}' | '\u{03CA}'..='\u{03CE}'
+        // Final sigma and omicron.
+        | '\u{03C2}' | '\u{03BF}'
+        // Capitals with a Latin look-alike: Α Β Ε Ζ Η Ι Κ Μ Ν Ο Ρ Τ Χ.
+        | '\u{0391}' | '\u{0392}' | '\u{0395}' | '\u{0396}' | '\u{0397}' | '\u{0399}' | '\u{039A}'
+        | '\u{039C}' | '\u{039D}' | '\u{039F}' | '\u{03A1}' | '\u{03A4}' | '\u{03A7}'
     )
 }
 

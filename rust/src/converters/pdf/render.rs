@@ -978,6 +978,22 @@ mod tests {
     }
 
     #[test]
+    fn a_page_written_in_greek_keeps_its_greek_as_text() {
+        // The short line shows no letter only written Greek uses; the
+        // page's other line decides for it.
+        let boxes = vec![
+            bx_y("σύμφωνα με τα άρθρα 25 έως 39", 600.0),
+            bx_y("39 και 42 και 43,", 500.0),
+        ];
+        let result = render_page_content(&boxes, &[], &[], None);
+        assert!(!result.contains('$'), "{result}");
+        assert!(result.contains("39 και 42 και 43,"), "{result}");
+        // The same short line on a page of notation is math.
+        let result = render_page_content(&[bx_y("39 και 42 και 43,", 500.0)], &[], &[], None);
+        assert!(result.contains('$'), "{result}");
+    }
+
+    #[test]
     fn medium_font_becomes_h2_heading() {
         reset_id();
         let boxes = vec![
