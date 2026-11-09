@@ -14,6 +14,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      # Must match the wasm-bindgen version pinned in rust/Cargo.toml.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@0.2.127
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
@@ -28,15 +33,23 @@ jobs:
         run: bun run check && npm run build
       - name: Check Rust engine
         run: npm run check:rust && cd rust && cargo test
+      # The browser build must keep compiling without C dependencies or
+      # networking, so lint it for wasm32 as well.
+      - name: Check wasm engine
+        run: cd rust && cargo clippy --lib --target wasm32-unknown-unknown --no-default-features --features wasm -- -D warnings
       # Guards the committed benchmark manifest, its 155 blind anchors, and
       # the tool-version provenance. Pure stdlib, so no Python setup step.
       - name: Test benchmark harness
         run: cd benchmark && python3 -m unittest test_benchmark.py
       - name: Build current-platform addon
         run: npm run build:native
+      # src/wasm.test.ts compares this build against the native addon.
+      - name: Build wasm package
+        run: npm run build:wasm
       - name: Test native Node SDK
         run: bun test
       - name: Smoke packed package
         run: |
           npm pack --dry-run
+          npm pack --dry-run ./npm/wasm
           node -e "import('./dist/index.js').then(async ({Markit}) => { const r = await new Markit().convert(Buffer.from('native'), {extension: '.txt'}); if (r.markdown !== 'native') process.exit(1) })"
