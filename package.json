@@ -34,8 +34,9 @@
     "check:rust": "cd rust && cargo fmt --check && cargo clippy --all-targets -- -D warnings",
     "check:all": "npm run check && npm run check:rust",
     "build:native": "napi build --release --strip --platform --features napi --cargo-flags=--no-default-features --cargo-cwd rust",
+    "build:wasm": "cd rust && cargo build --lib --release --target wasm32-unknown-unknown --no-default-features --features wasm && wasm-bindgen --target web --out-dir ../npm/wasm --out-name markit target/wasm32-unknown-unknown/release/markit.wasm",
     "artifacts": "napi artifacts",
-    "verify": "npm run check:all && cd rust && cargo test && cd .. && npm run build:native && bun test && npm run build"
+    "verify": "npm run check:all && cd rust && cargo test && cd .. && npm run build:native && npm run build:wasm && bun test && npm run build"
   },
   "engines": {
     "node": "^20.19.0 || >=22.12.0"

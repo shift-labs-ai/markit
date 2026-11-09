@@ -15,3 +15,6 @@ pub mod utils;
 
 #[cfg(feature = "napi")]
 mod bindings;
+
+#[cfg(feature = "wasm")]
+mod wasm;
