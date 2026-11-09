@@ -143,6 +143,37 @@ const { markdown } = await markit.convert(buffer, { extension: ".docx" });
 
 ---
 
+## Browser (WebAssembly)
+
+`@shiftlabs/markit-wasm` is the same Rust engine compiled to WebAssembly,
+for browsers and other places a native addon cannot load. It converts bytes
+you hand it, with the same output as the native engine:
+
+```typescript
+import init, { convert } from "@shiftlabs/markit-wasm";
+
+await init(); // fetches markit_bg.wasm next to the module
+const bytes = new Uint8Array(await file.arrayBuffer());
+const { markdown, title } = convert(bytes, { extension: ".pdf" });
+```
+
+Every file format works. What needs a network stack or a filesystem does
+not, so:
+
+- **No URL conversion.** `fetch()` the URL yourself and pass the bytes; pass
+  `url` too so URL-matched converters such as Wikipedia still apply.
+- **No image extraction to a directory.** Images stay placeholder comments.
+- **No PDF passwords.** Encrypted PDFs that open without one convert.
+- **ZIP entries compressed with zstd or AES** are not read. Office files and
+  EPUB use deflate, which is.
+
+`convert` is synchronous: run it in a Web Worker to keep the page
+responsive. If your bundler cannot locate the `.wasm` file, import its URL
+and pass it to `init({ module_or_path })`:
+`import wasmUrl from "@shiftlabs/markit-wasm/markit_bg.wasm?url"` in Vite.
+
+---
+
 ## CLI Reference
 
 ```bash
@@ -168,13 +199,19 @@ bun run dev -- report.pdf
 bun test
 bun run check
 cd rust && cargo test
+
+# Browser package, into npm/wasm/. Needs the wasm32-unknown-unknown target
+# and wasm-bindgen-cli at the version rust/Cargo.toml pins.
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.127 --locked
+bun run build:wasm
 ```
 
 ## Distribution
 
 Releases publish `@shiftlabs/markit` plus six scoped native binary packages
-for macOS and Linux (x64/ARM64, glibc/musl). npm selects the matching binary
-through `optionalDependencies`. The former `markit-ai` package is a deprecated
+for macOS and Linux (x64/ARM64, glibc/musl), and `@shiftlabs/markit-wasm` for
+browsers. npm selects the matching binary through `optionalDependencies`. The former `markit-ai` package is a deprecated
 compatibility shim that re-exports this SDK.
 
 ```bash
@@ -183,15 +220,15 @@ compatibility shim that re-exports this SDK.
 # 2. Verify locally.
 bun run verify
 
-# 3. Tag and push. GitHub Actions builds and publishes all seven packages.
+# 3. Tag and push. GitHub Actions builds and publishes all eight packages.
 git tag v0.6.0
 git push origin v0.6.0
 ```
 
 The release workflow requires an npm automation token in the repository secret
 `NPM_TOKEN`. It publishes platform packages first through `napi prepublish`,
-then `@shiftlabs/markit`, then the deprecated `markit-ai` shim, and finally
-creates the GitHub release.
+then `@shiftlabs/markit` and `@shiftlabs/markit-wasm`, then the deprecated
+`markit-ai` shim, and finally creates the GitHub release.
 
 ## License
 
