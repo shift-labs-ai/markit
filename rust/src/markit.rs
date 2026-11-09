@@ -47,6 +47,7 @@ pub trait HttpFetch: Send + Sync {
 /// Default ureq-backed fetcher.
 pub struct UreqFetcher;
 
+#[cfg(not(target_arch = "wasm32"))]
 impl HttpFetch for UreqFetcher {
     fn get(&self, url: &str, headers: &[(&str, &str)]) -> Result<HttpResponse> {
         let mut builder = ureq::get(url);
@@ -77,6 +78,16 @@ impl HttpFetch for UreqFetcher {
             }),
             Err(e) => Err(anyhow!("HTTP error: {}", e)),
         }
+    }
+}
+
+/// wasm32 has no network stack: the caller fetches and converts the bytes.
+#[cfg(target_arch = "wasm32")]
+impl HttpFetch for UreqFetcher {
+    fn get(&self, _url: &str, _headers: &[(&str, &str)]) -> Result<HttpResponse> {
+        Err(anyhow!(
+            "URL fetching is not available in WebAssembly; fetch the URL and convert the bytes"
+        ))
     }
 }
 

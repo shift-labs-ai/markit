@@ -31,12 +31,22 @@ rustc-hash = "2"
 scraper = { version = "0.27.0", features = ["deterministic"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+serde-wasm-bindgen = { version = "0.6.5", optional = true }
 sha2 = "0.10"
-ureq = "3.4.0"
-zip = "8.6.0"
+# Must match the wasm-bindgen-cli version that build:wasm runs (CI pins it).
+wasm-bindgen = { version = "=0.2.127", optional = true }
+# zip's defaults minus zstd (C) and aes-crypto (getrandom), neither of which
+# builds for wasm32. Native targets add the defaults back below.
+zip = { version = "8.6.0", default-features = false, features = ["bzip2", "deflate", "deflate64", "lzma", "ppmd", "time", "xz"] }
 hayro-jbig2 = { version = "0.3", default-features = false, features = ["std", "simd"] }
 unicode-normalization = "0.1"
+
+# Native only: URL fetching (rustls pulls in ring), the C allocator, and
+# zip's full default features. The wasm build gets bytes from its caller.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 mimalloc = "0.1.52"
+ureq = "3.4.0"
+zip = "8.6.0"
 
 # The npm addon is a shared object Node loads with dlopen. musl cannot
 # satisfy initial-exec TLS in a dlopened object (glibc reserves room for
@@ -51,6 +61,8 @@ default = ["cli"]
 # resolve inside a Node process, so the bin cannot link with "napi" active).
 cli = []
 napi = ["dep:napi", "dep:napi-derive", "dep:napi-build"]
+# The wasm-bindgen browser API. Built by npm's build:wasm for wasm32.
+wasm = ["dep:wasm-bindgen", "dep:serde-wasm-bindgen"]
 
 [lints.clippy]
 # The PDF pipeline and HTML→MD engine are line-for-line ports of the TS

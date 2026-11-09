@@ -128,9 +128,33 @@ jobs:
           path: "*.node"
           if-no-files-found: error
 
+  build-wasm:
+    name: build wasm32
+    needs: check-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      # Must match the wasm-bindgen version pinned in rust/Cargo.toml.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@0.2.127
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust -> rust/target
+          key: wasm32-unknown-unknown
+      - run: npm run build:wasm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm
+          path: npm/wasm/markit*
+          if-no-files-found: error
+
   publish:
     name: publish npm packages
-    needs: [verify, build]
+    needs: [verify, build, build-wasm]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -144,7 +168,12 @@ jobs:
       - run: bun install --frozen-lockfile
       - uses: actions/download-artifact@v4
         with:
+          pattern: bindings-*
           path: artifacts
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm
+          path: npm/wasm
       - name: Move binaries into platform packages
         run: bunx napi artifacts -d artifacts
       - name: Determine npm tag
@@ -159,6 +188,10 @@ jobs:
           fi
       - name: Publish platform packages and @shiftlabs/markit
         run: npm publish --tag ${{ steps.npm-tag.outputs.tag }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish @shiftlabs/markit-wasm
+        run: npm publish ./npm/wasm --tag ${{ steps.npm-tag.outputs.tag }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 

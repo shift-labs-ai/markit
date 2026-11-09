@@ -44,6 +44,8 @@ test/fixtures/.DS_Store
 .pi/
 test/fixtures/pdfs/*.pdf
 *.node
+# wasm-bindgen output of build:wasm; npm/wasm/package.json is committed
+/npm/wasm/markit*
 /index.js
 /index.d.ts
 

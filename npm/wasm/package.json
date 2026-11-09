@@ -1,0 +1,29 @@
+{
+  "name": "@shiftlabs/markit-wasm",
+  "version": "0.7.2",
+  "description": "WebAssembly build of the markit engine, for browsers",
+  "type": "module",
+  "main": "markit.js",
+  "types": "markit.d.ts",
+  "exports": {
+    ".": {
+      "types": "./markit.d.ts",
+      "default": "./markit.js"
+    },
+    "./markit_bg.wasm": "./markit_bg.wasm"
+  },
+  "files": [
+    "markit.js",
+    "markit.d.ts",
+    "markit_bg.wasm",
+    "markit_bg.wasm.d.ts"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shift-labs-ai/markit.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
