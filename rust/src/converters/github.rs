@@ -18,6 +18,7 @@ pub trait HttpFetch: Send + Sync {
 
 pub struct UreqFetcher;
 
+#[cfg(not(target_arch = "wasm32"))]
 impl HttpFetch for UreqFetcher {
     fn get(&self, url: &str, accept: Option<&str>) -> Result<HttpResponse> {
         let builder = ureq::get(url);
@@ -43,6 +44,13 @@ impl HttpFetch for UreqFetcher {
             }),
             Err(e) => Err(anyhow!("HTTP error: {}", e)),
         }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl HttpFetch for UreqFetcher {
+    fn get(&self, _url: &str, _accept: Option<&str>) -> Result<HttpResponse> {
+        Err(crate::utils::url::fetch_unavailable())
     }
 }
 
