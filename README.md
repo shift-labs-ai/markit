@@ -227,8 +227,8 @@ git push origin v0.6.0
 ```
 
 The release workflow requires an npm automation token in the repository secret
-`NPM_TOKEN`. It publishes platform packages first through `napi prepublish`,
-then `@shiftlabs/markit` and `@shiftlabs/markit-wasm`, then the deprecated
+`NPM_TOKEN`. It publishes `@shiftlabs/markit-wasm`, then the platform packages
+through `napi prepublish`, then `@shiftlabs/markit`, then the deprecated
 `markit-ai` shim, and finally creates the GitHub release.
 
 ## License

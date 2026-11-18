@@ -186,12 +186,14 @@ jobs:
           else
             echo "tag=latest" >> "$GITHUB_OUTPUT"
           fi
-      - name: Publish platform packages and @shiftlabs/markit
-        run: npm publish --tag ${{ steps.npm-tag.outputs.tag }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # Nothing depends on the wasm package, so it goes first: if npm
+      # refuses it, no other package is published and the job can be rerun.
       - name: Publish @shiftlabs/markit-wasm
         run: npm publish ./npm/wasm --tag ${{ steps.npm-tag.outputs.tag }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish platform packages and @shiftlabs/markit
+        run: npm publish --tag ${{ steps.npm-tag.outputs.tag }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
