@@ -805,7 +805,7 @@ dependencies = [
 
 [[package]]
 name = "markit"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "aes 0.8.4",
  "anyhow",
