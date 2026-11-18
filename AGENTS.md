@@ -18,7 +18,8 @@ cd rust && cargo test                  # Engine tests
 cd rust && cargo run -- <file-or-url>  # Standalone Rust CLI, no Node
 bun run check:rust                     # rustfmt --check + clippy -D warnings
 bun run check:all                      # Both sides
-bun run verify                         # Everything CI runs, before a release
+bun run check:wasm                     # clippy -D warnings on the wasm32 build
+bun run verify                         # Every check, test and build above, before a release
 ```
 
 The sole conversion implementation lives in `rust/`; `src/` is only the typed
@@ -36,8 +37,7 @@ binary, run `npm install --no-save @biomejs/cli-linux-x64` (CI does).
 `wasm-bindgen-cli` at exactly the `wasm-bindgen` version pinned in
 `rust/Cargo.toml` (CI pins the same one). `src/wasm.test.ts` checks the wasm
 build matches native output byte for byte, and skips when `npm/wasm/` has not
-been built. Lint the wasm-only code with
-`cd rust && cargo clippy --lib --target wasm32-unknown-unknown --no-default-features --features wasm -- -D warnings`.
+been built. `check:wasm` lints the code only wasm32 compiles.
 
 ## Architecture
 
@@ -50,7 +50,7 @@ been built. Lint the wasm-only code with
 - `src/main.ts` / `src/commands/` — npm CLI shell
 - `src/types.ts` — public Node SDK interfaces
 - `native.cjs` — platform-native addon loader
-- `npm/<platform>/` — the six native binary packages; `npm/wasm/` — `@shiftlabs/markit-wasm` (only its `package.json` is committed)
+- `npm/<platform>/` — the six native binary packages; `npm/wasm/` — `@shiftlabs/markit-wasm` (its `package.json` and `README.md` are committed; `build:wasm` writes the rest)
 - `legacy/markit-ai/` — deprecated shim re-exporting the SDK under the old name
 - `benchmark/` — PDF benchmark harness; `skills/markit/` — the agent skill
 

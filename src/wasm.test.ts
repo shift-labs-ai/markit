@@ -10,8 +10,9 @@ import type { StreamInfo } from "./types.js";
 const pkg = new URL("../npm/wasm/", import.meta.url);
 const built = existsSync(new URL("markit_bg.wasm", pkg));
 
-/** A deflate ZIP, the container behind docx/xlsx/pptx/epub. */
+/** A deflate ZIP, the container behind docx/xlsx/pptx/epub/iWork. */
 function zip(entries: Record<string, string>): Buffer {
+  const count = Object.keys(entries).length;
   const local: Buffer[] = [];
   const central: Buffer[] = [];
   let offset = 0;
@@ -46,8 +47,8 @@ function zip(entries: Record<string, string>): Buffer {
   const dir = Buffer.concat(central);
   const end = Buffer.alloc(22);
   end.write("PK\x05\x06", "latin1");
-  end.writeUInt16LE(central.length / 5, 8);
-  end.writeUInt16LE(central.length / 5, 10);
+  end.writeUInt16LE(count, 8);
+  end.writeUInt16LE(count, 10);
   end.writeUInt32LE(dir.length, 12);
   end.writeUInt32LE(offset, 16);
   return Buffer.concat([...local, dir, end]);
@@ -58,6 +59,9 @@ const OFFICE =
   "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 const SHEET = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 const WORD = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+const SLIDES = "http://schemas.openxmlformats.org/presentationml/2006/main";
+const DRAWING = "http://schemas.openxmlformats.org/drawingml/2006/main";
+const APPLE = "http://developer.apple.com/namespaces";
 
 const docx = zip({
   "_rels/.rels": `<Relationships xmlns="${REL}"><Relationship Id="rId1" Type="${OFFICE}/officeDocument" Target="word/document.xml"/></Relationships>`,
@@ -72,11 +76,72 @@ const xlsx = zip({
   "xl/worksheets/sheet1.xml": `<worksheet xmlns="${SHEET}"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1"><v>1</v></c></row><row r="2"><c r="A2" t="s"><v>1</v></c><c r="B2"><v>2.5</v></c></row></sheetData></worksheet>`,
 });
 
+const pptx = zip({
+  "ppt/presentation.xml": `<p:presentation xmlns:p="${SLIDES}" xmlns:r="${OFFICE}"><p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst></p:presentation>`,
+  "ppt/_rels/presentation.xml.rels": `<Relationships xmlns="${REL}"><Relationship Id="rId1" Type="${OFFICE}/slide" Target="slides/slide1.xml"/></Relationships>`,
+  "ppt/slides/slide1.xml": `<p:sld xmlns:p="${SLIDES}" xmlns:a="${DRAWING}"><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="Title 1"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:p><a:r><a:t>Hello World</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>`,
+});
+
+const epub = zip({
+  "META-INF/container.xml": `<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>`,
+  "content.opf": `<package xmlns="http://www.idpf.org/2007/opf" xmlns:dc="http://purl.org/dc/elements/1.1/"><metadata><dc:title>Book</dc:title><dc:creator>Ann</dc:creator></metadata><manifest><item id="ch0" href="ch0.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="ch0"/></spine></package>`,
+  "ch0.xhtml": "<html><body><h1>One</h1><p>First chapter.</p></body></html>",
+});
+
+const pages = zip({
+  "index.xml": `<sl:document xmlns:sf="${APPLE}/sf" xmlns:sl="${APPLE}/sl"><sf:section><sf:layout><sf:p sf:style="text-20-paragraphstyle-Body 1">Hello from Pages</sf:p></sf:layout></sf:section></sl:document>`,
+});
+
+/** A JPEG that is only an EXIF block naming the camera make. */
+function jpeg(make: string): Buffer {
+  const tiff = Buffer.alloc(26 + make.length + 1);
+  tiff.write("II*\0", "latin1"); // little-endian TIFF
+  tiff.writeUInt32LE(8, 4); // IFD0 offset
+  tiff.writeUInt16LE(1, 8); // one entry: Make, ASCII, length, value offset
+  tiff.writeUInt16LE(0x010f, 10);
+  tiff.writeUInt16LE(2, 12);
+  tiff.writeUInt32LE(make.length + 1, 14);
+  tiff.writeUInt32LE(26, 18);
+  tiff.write(make, 26, "latin1");
+  const exif = Buffer.concat([Buffer.from("Exif\0\0", "latin1"), tiff]);
+  const app1 = Buffer.from([0xff, 0xe1, 0, 0]);
+  app1.writeUInt16BE(exif.length + 2, 2);
+  return Buffer.concat([
+    Buffer.from([0xff, 0xd8]),
+    app1,
+    exif,
+    Buffer.from([0xff, 0xd9]),
+  ]);
+}
+
+/** Ten samples of 8-bit mono PCM silence at 44.1 kHz. */
+function wav(): Buffer {
+  const out = Buffer.alloc(54, 0x80);
+  out.write("RIFF", 0, "latin1");
+  out.writeUInt32LE(46, 4);
+  out.write("WAVEfmt ", 8, "latin1");
+  out.writeUInt32LE(16, 16); // fmt chunk size
+  out.writeUInt16LE(1, 20); // PCM
+  out.writeUInt16LE(1, 22); // channels
+  out.writeUInt32LE(44100, 24); // sample rate
+  out.writeUInt32LE(44100, 28); // byte rate
+  out.writeUInt16LE(1, 32); // block align
+  out.writeUInt16LE(8, 34); // bits per sample
+  out.write("data", 36, "latin1");
+  out.writeUInt32LE(10, 40);
+  return out;
+}
+
 const text = (s: string) => Buffer.from(s);
 
 const samples: [string, Buffer, StreamInfo][] = [
   ["docx", docx, { extension: ".docx" }],
   ["xlsx", xlsx, { extension: ".xlsx" }],
+  ["pptx", pptx, { extension: ".pptx" }],
+  ["epub", epub, { extension: ".epub" }],
+  ["pages", pages, { extension: ".pages" }],
+  ["jpeg", jpeg("Canon"), { extension: ".jpg", filename: "photo.jpg" }],
+  ["wav", wav(), { extension: ".wav", filename: "clip.wav" }],
   [
     "zip",
     zip({ "a.csv": "x,y\n1,2\n", "b.md": "# B\n" }),

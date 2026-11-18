@@ -18,10 +18,15 @@
     "markit_bg.wasm",
     "markit_bg.wasm.d.ts"
   ],
+  "sideEffects": false,
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/shift-labs-ai/markit.git"
+  },
+  "homepage": "https://github.com/shift-labs-ai/markit#browser-webassembly",
+  "bugs": {
+    "url": "https://github.com/shift-labs-ai/markit/issues"
   },
   "publishConfig": {
     "access": "public"

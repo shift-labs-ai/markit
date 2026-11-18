@@ -81,13 +81,10 @@ impl HttpFetch for UreqFetcher {
     }
 }
 
-/// wasm32 has no network stack: the caller fetches and converts the bytes.
 #[cfg(target_arch = "wasm32")]
 impl HttpFetch for UreqFetcher {
     fn get(&self, _url: &str, _headers: &[(&str, &str)]) -> Result<HttpResponse> {
-        Err(anyhow!(
-            "URL fetching is not available in WebAssembly; fetch the URL and convert the bytes"
-        ))
+        Err(crate::utils::url::fetch_unavailable())
     }
 }
 

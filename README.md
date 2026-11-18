@@ -211,8 +211,9 @@ bun run build:wasm
 
 Releases publish `@shiftlabs/markit` plus six scoped native binary packages
 for macOS and Linux (x64/ARM64, glibc/musl), and `@shiftlabs/markit-wasm` for
-browsers. npm selects the matching binary through `optionalDependencies`. The former `markit-ai` package is a deprecated
-compatibility shim that re-exports this SDK.
+browsers. npm selects the matching binary through `optionalDependencies`. The
+former `markit-ai` package is a deprecated compatibility shim that re-exports
+this SDK.
 
 ```bash
 # 1. Update the same version in package.json, rust/Cargo.toml,

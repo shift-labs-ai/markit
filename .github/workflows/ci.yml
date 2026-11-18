@@ -36,7 +36,7 @@ jobs:
       # The browser build must keep compiling without C dependencies or
       # networking, so lint it for wasm32 as well.
       - name: Check wasm engine
-        run: cd rust && cargo clippy --lib --target wasm32-unknown-unknown --no-default-features --features wasm -- -D warnings
+        run: npm run check:wasm
       # Guards the committed benchmark manifest, its 155 blind anchors, and
       # the tool-version provenance. Pure stdlib, so no Python setup step.
       - name: Test benchmark harness

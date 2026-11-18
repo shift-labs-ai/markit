@@ -3,6 +3,15 @@
 //! A fragment never reaches the server, so it is dropped on parse and
 //! never appears in a URL built here.
 
+/// What every fetcher answers on wasm32, which has no network stack: the
+/// caller fetches the URL and converts the bytes.
+#[cfg(target_arch = "wasm32")]
+pub fn fetch_unavailable() -> anyhow::Error {
+    anyhow::anyhow!(
+        "URL fetching is not available in WebAssembly; fetch the URL and convert the bytes"
+    )
+}
+
 /// An `http://` or `https://` URL split into the parts URL conversion uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HttpUrl<'a> {
